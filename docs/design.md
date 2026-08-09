@@ -136,24 +136,66 @@ Sizes for the 21-state configuration with `f64`:
 |---|---|
 | `Matrix<21, 21>` (covariance, transition) | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 |
-| `Eskf` (covariance + error state) | 3 696 |
-| `GinsEngine` total | 4 936 |
-| peak stack in `predict` (≈3 live temporaries) | ~11 000 |
+| `Eskf` (covariance + error state + NIS) | 3 704 |
+| `GinsEngine` total | 4 944 |
 
-These are asserted by `state::size_tests::types_have_their_documented_footprint`,
-so the table and the code cannot drift apart silently. The stack figure is an
-estimate and is not yet measured — that is M8.
+Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
+table and the code cannot drift apart silently.
 
-The peak stack figure is the binding constraint on small targets: a part with an
-8 KiB main stack cannot run `predict` without either raising the stack or
-dropping to a reduced state vector. Measuring and then shrinking this is
-milestone M8; the intended fix is an in-place `P ← ΦPΦᵀ + Q` that reuses one
-scratch buffer instead of allocating temporaries per expression.
+### Stack, measured on Cortex-M4
 
-`f64` is not negotiable for the position and attitude states: a geodetic
-latitude carries about 1e-9 rad of meaningful resolution (~6 mm), which `f32`
-cannot represent. On a Cortex-M4F, `f64` is emulated in software; at 100–200 Hz
-that is acceptable, and M8 covers benchmarking it.
+Peak stack, from `cortex-m-harness` running under QEMU on `mps2-an386`. These
+are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 8".
+
+| operation | bytes |
+|---|---|
+| `add_imu` (mechanize + predict) | 16 488 |
+| `apply_zupt` (3-dim update) | 13 780 |
+| `apply_height` (1-dim update) | 11 548 |
+| **peak** | **16 488** |
+
+Firmware for the whole harness — filter, semihosting and panic handler —
+links to about 48 KiB of `.text` and 1.7 KiB of `.rodata`, with 8 bytes of
+`.bss`.
+
+### What measuring changed
+
+This table previously carried an **estimate of ~11 000 bytes**, reasoned from
+"about three live temporaries". The first measurement on real Cortex-M came back
+at **35 328 bytes** — over three times the estimate — because the expression-chained
+form of `predict` keeps about a dozen 21×21 temporaries alive at once, not
+three. The estimate was wrong in the direction that matters: it said the filter
+fit in a 16 KiB stack when it needed 35 KiB.
+
+Three changes brought it to 16 488:
+
+1. **`Q = G Qc Gᵀ` is built as 3×3 blocks.** `Qc` is diagonal by construction
+   and `G` is block structured, so the product is block diagonal. Forming the
+   21×18 mapping and multiplying it out allocated two 21×18 matrices and did
+   roughly 15 000 multiplies, nearly all against zeros. `eskf::process_noise`
+   now writes the six non-zero blocks directly, and
+   `block_form_matches_the_reference_product` pins it against the explicit
+   `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
+2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
+   into a caller-supplied buffer, so `predict` and the Joseph update hold four
+   and three live 21×21 matrices respectively instead of a dozen.
+3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
+   copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
+   on the hot path alone was worth 2.2 KiB.
+
+The dataset regression produces **bit-identical** results before and after, which
+is what makes this a restructuring rather than a change to the filter.
+
+### Remaining headroom
+
+16.5 KiB fits a 32 KiB task stack comfortably and a 16 KiB one not at all. The
+floor for this formulation is four live 21×21 matrices in `predict` — 14 112
+bytes — so further reduction needs a different algorithm rather than tidier
+code. Options, in rough order of effort: keep `Q` as its six 3×3 blocks and
+multiply through them; sequential scalar measurement updates, which remove the
+21×21 Joseph temporaries entirely; or a UD-factorised filter, which halves the
+covariance storage and is better conditioned. A 15-state configuration without
+the scale factors would cut every matrix by roughly half.
 
 ## Auxiliary sensors ("+ other")
 

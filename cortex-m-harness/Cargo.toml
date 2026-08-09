@@ -1,0 +1,25 @@
+[package]
+name = "cortex-m-harness"
+description = "Bare-metal measurement harness for drifters on Cortex-M, run under QEMU"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Excluded from the main workspace: it targets bare metal, needs its own linker
+# configuration, and `cargo test --workspace` must not try to build it.
+[workspace]
+
+[dependencies]
+drifters-core = { path = "../crates/drifters-core" }
+drifters-filter = { path = "../crates/drifters-filter" }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+panic-semihosting = "0.6"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true
+overflow-checks = false

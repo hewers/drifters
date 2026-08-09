@@ -127,3 +127,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p drifters-interop --features nav-types-interop
+
+  # Boots the filter on an emulated Cortex-M4 and checks its stack high-water
+  # mark against a documented ceiling. Stack painting measures memory writes,
+  # which QEMU emulates exactly, so this number is trustworthy — unlike any
+  # timing measurement from an emulator, which is why none is taken.
+  cortex_m:
+    name: bare-metal stack budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: run harness under QEMU
+        working-directory: cortex-m-harness
+        run: |
+          set -o pipefail
+          cargo run --release | tee report.txt
+          peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
+          echo "peak stack: $peak bytes"
+          # Ceiling, not a target. 20 KiB leaves headroom over the measured
+          # 16.5 KiB while still failing if a change reintroduces the
+          # expression-chained form that cost 35.3 KiB.
+          test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }

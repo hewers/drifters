@@ -204,25 +204,55 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 
 ## M8 — Embedded hardening
 
-- [ ] Bare-metal build and run on Cortex-M4F / M7
-- [ ] Stack-usage measurement; in-place covariance propagation to cut the ~11 KiB
-      peak
-- [ ] Cycle-count benchmarks for predict and update
+- [x] Bare-metal build and run on Cortex-M4F / M7 (`cortex-m-harness`, QEMU)
+- [x] Stack-usage measurement, and the reduction it showed was needed
+- [x] In-place covariance propagation
+- [ ] Cycle-count benchmarks for predict and update — **needs real silicon**
 - [ ] Evaluate a generic scalar type (`f32` for the non-position states)
 - [ ] Reduced state configurations (15-state without scale factors)
 - [ ] `#[no_panic]` verification on the data path
 
-**Exit criterion:** a documented cycle and stack budget on a named part, with a
-CI job that fails on regression.
+**Partially met.** The filter runs on emulated Cortex-M4 and Cortex-M7 and its
+stack is measured and bounded in CI. Timing is not done and cannot be done here.
 
----
+### Measured
 
-## Deferred
+| operation | peak stack |
+|---|---|
+| `add_imu` (mechanize + predict) | 16 488 B |
+| `apply_zupt` (3-dim update) | 13 780 B |
+| `apply_height` (1-dim update) | 11 548 B |
 
-- **Tightly-coupled GNSS** — per-satellite pseudorange and carrier-phase
-  observables. The generic measurement interface is designed not to preclude it,
-  but it is a substantial piece of work: satellite ephemeris, clock states,
-  ambiguity handling.
-- **RTS smoothing** — useful for post-processing, orthogonal to the causal
-  filter.
-- **Multi-IMU / redundant sensor voting.**
+Firmware links to ~48 KiB `.text`, 1.7 KiB `.rodata`, 8 B `.bss`.
+
+### The estimate was wrong, and wrong in the bad direction
+
+The budget in [design.md](design.md) had carried **~11 KiB**, reasoned from
+"about three live temporaries". The first measurement came back at **35 328
+bytes**. Restructuring `predict` and the Joseph update — block-diagonal `Q`,
+in-place products, borrowing accumulation — brought it to **16 488**, a 2.1×
+reduction, with **bit-identical** results on the KF-GINS regression.
+
+The general lesson is in [testing.md](testing.md), "Layer 8": how many
+temporaries survive in fixed-size matrix arithmetic is a question about the
+optimiser, not about the source, so it cannot be reasoned out.
+
+### Why there are no cycle counts
+
+QEMU models no pipeline, no cache, no flash wait states and no FPU latency, so
+any timing it reports is meaningless. Worse for this project specifically:
+Cortex-M4F's FPU is **single precision** and `drifters` uses `f64` throughout,
+so every float operation on that target is software-emulated — the dominant real
+cost, and entirely invisible under emulation.
+
+Stack and size are exact under QEMU and are reported. Timing needs hardware, and
+until it exists this repository claims nothing about it.
+
+### Remaining headroom
+
+16.5 KiB fits a 32 KiB task stack and not a 16 KiB one. The floor for this
+formulation is four live 21×21 matrices in `predict` (14 112 B), so going lower
+needs a different algorithm rather than tidier code: multiplying through `Q`'s
+six 3×3 blocks, sequential scalar updates that remove the Joseph temporaries
+entirely, or a UD-factorised filter. A 15-state configuration would roughly
+halve every matrix.

@@ -153,6 +153,57 @@ pub fn process_noise_density(noise: &ImuNoise) -> NoiseCovariance {
     q
 }
 
+#[cfg(test)]
+mod tests_support {
+    use drifters_core::frames::{Lla, Ned};
+    use drifters_core::types::{Attitude, Pva};
+
+    /// A state with a non-trivial attitude, so that the `C·diag·Cᵀ` blocks are
+    /// genuinely exercised rather than collapsing to a diagonal.
+    pub fn sample_state() -> Pva {
+        Pva {
+            position: Lla::from_degrees(30.5, 114.4, 25.0),
+            velocity: Ned::new(5.0, -2.0, 0.5),
+            attitude: Attitude::from_euler(0.15, -0.08, 1.2),
+        }
+    }
+}
+
+/// The discrete process noise `Q = G Qc Gᵀ`, built directly as 3×3 blocks.
+///
+/// `Qc` is diagonal by construction and `G` is block structured — see
+/// [`noise_mapping`] — so the product is **block diagonal**, with only the six
+/// aided blocks non-zero and the position block exactly zero. Forming the
+/// 21×18 mapping and multiplying it out would allocate two 21×18 matrices on
+/// the stack and perform ~15 000 multiplies, almost all against zeros.
+///
+/// [`noise_mapping`] and [`process_noise_density`] remain the readable
+/// statement of the model, and `block_form_matches_the_reference_product`
+/// checks this against them.
+pub fn process_noise(state: &Pva, noise: &ImuNoise) -> StateMatrix {
+    let mut q = StateMatrix::zeros();
+    let c = &state.attitude.dcm;
+
+    // The random walks are sensed in the body frame, so their densities rotate
+    // into the navigation frame: C·diag(σ²)·Cᵀ.
+    let rotated = |density: Vec3| -> Mat3 { c.matmul(&density.to_diag()).mul_transpose(c) };
+    q.set_block(V_ID, V_ID, &rotated(noise.accel_vrw.squared()));
+    q.set_block(PHI_ID, PHI_ID, &rotated(noise.gyro_arw.squared()));
+
+    // The Gauss-Markov states are driven in their own axes, so their blocks stay
+    // diagonal. `2σ²/τ` is the density sustaining a steady-state variance σ².
+    let gm = 2.0 / noise.correlation_time;
+    for (id, density) in [
+        (BG_ID, noise.gyro_bias_std),
+        (BA_ID, noise.accel_bias_std),
+        (SG_ID, noise.gyro_scale_std),
+        (SA_ID, noise.accel_scale_std),
+    ] {
+        q.set_block(id, id, &(density.squared() * gm).to_diag());
+    }
+    q
+}
+
 /// `νᵀ S⁻¹ ν`, given the Cholesky factorisation of `S`.
 #[inline]
 fn nis<const M: usize>(chol: &Cholesky<M>, innovation: &Matrix<M, 1>) -> F {
@@ -248,21 +299,38 @@ impl Eskf {
     /// running at 50 Hz or above.
     pub fn predict(&mut self, state: &Pva, imu: &ImuSample, noise: &ImuNoise) {
         let dt = imu.dt;
-        let f = transition_matrix(state, imu, noise);
-        let g = noise_mapping(state);
-        let qc = process_noise_density(noise);
 
-        let mut phi = StateMatrix::identity();
-        phi += f.scaled(dt);
+        // Written to hold exactly four 21x21 matrices live at once. The
+        // obvious expression-chained form keeps about a dozen, which measured
+        // at 35.3 KiB of stack on Cortex-M4 — see docs/design.md.
+        let mut phi = transition_matrix(state, imu, noise);
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                phi.data[i][j] *= dt;
+            }
+            phi.data[i][i] += 1.0;
+        }
 
-        // Q = G Qc Gᵀ, then trapezoidal integration across the interval.
-        let gq = g.matmul(&qc);
-        let q = gq.mul_transpose(&g);
-        let phi_q = phi.matmul(&q).mul_transpose(&phi);
-        let qd = (phi_q + q).scaled(0.5 * dt);
+        let q = process_noise(state, noise);
+        let mut scratch = StateMatrix::zeros();
+        let mut qd = StateMatrix::zeros();
 
-        self.covariance = phi.matmul(&self.covariance).mul_transpose(&phi) + qd;
+        // Qd = 0.5·dt·(Φ Q Φᵀ + Q), the trapezoidal rule across the interval.
+        phi.matmul_into(&q, &mut scratch);
+        scratch.mul_transpose_into(&phi, &mut qd);
+        let half_dt = 0.5 * dt;
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                qd.data[i][j] = half_dt * (qd.data[i][j] + q.data[i][j]);
+            }
+        }
+
+        // P = Φ P Φᵀ + Qd, reusing the same scratch buffer.
+        phi.matmul_into(&self.covariance, &mut scratch);
+        scratch.mul_transpose_into(&phi, &mut self.covariance);
+        self.covariance += &qd;
         self.covariance.symmetrize();
+
         self.dx = phi.matmul(&self.dx);
     }
 
@@ -357,10 +425,23 @@ impl Eskf {
         let residual = *innovation - h.matmul(&self.dx);
         self.dx += k.matmul(&residual);
 
-        // Joseph: P = (I − KH) P (I − KH)ᵀ + K R Kᵀ
-        let i_kh = StateMatrix::identity() - k.matmul(h);
-        self.covariance =
-            i_kh.matmul(&self.covariance).mul_transpose(&i_kh) + k.matmul(r).mul_transpose(&k);
+        // Joseph: P = (I − KH) P (I − KH)ᵀ + K R Kᵀ.
+        //
+        // Written with explicit scratch for the same reason as `predict`: the
+        // chained form holds seven 21x21 temporaries, which measured at 17.3 KiB
+        // of stack on Cortex-M4 against 10.6 KiB here. `K` and `K R` are only
+        // 21xM, so they stay cheap however this is written.
+        let mut scratch = StateMatrix::zeros();
+        k.matmul_into(h, &mut scratch);
+        let mut i_kh = StateMatrix::identity();
+        i_kh -= &scratch;
+
+        let mut krkt = StateMatrix::zeros();
+        k.matmul(r).mul_transpose_into(&k, &mut krkt);
+
+        i_kh.matmul_into(&self.covariance, &mut scratch);
+        scratch.mul_transpose_into(&i_kh, &mut self.covariance);
+        self.covariance += &krkt;
         self.covariance.symmetrize();
         Ok(true)
     }
@@ -429,6 +510,57 @@ impl Eskf {
 
 #[cfg(test)]
 mod tests {
+    // --- process noise: optimised form against the readable one -----------
+
+    #[test]
+    fn block_form_matches_the_reference_product() {
+        // `process_noise` builds Q as six 3x3 blocks; `noise_mapping` and
+        // `process_noise_density` state the model as G and Qc. This pins the
+        // two together, so the fast path cannot drift away from the
+        // specification it was derived from.
+        use super::*;
+        use approx::assert_relative_eq;
+
+        let state = super::tests_support::sample_state();
+        let noise = ImuNoise::default();
+
+        let fast = process_noise(&state, &noise);
+        let g = noise_mapping(&state);
+        let qc = process_noise_density(&noise);
+        let reference = g.matmul(&qc).mul_transpose(&g);
+
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                assert_relative_eq!(
+                    fast[(i, j)],
+                    reference[(i, j)],
+                    epsilon = 1e-24,
+                    max_relative = 1e-12
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn process_noise_leaves_the_position_block_empty() {
+        // Position is not directly driven by any IMU noise channel: it picks up
+        // uncertainty only through velocity. A non-zero block here would be a
+        // modelling error.
+        use super::*;
+        let q = process_noise(&super::tests_support::sample_state(), &ImuNoise::default());
+        assert_eq!(q.block::<3, 3>(P_ID, P_ID), Mat3::zeros());
+    }
+
+    #[test]
+    fn process_noise_is_symmetric_positive_semidefinite() {
+        use super::*;
+        let q = process_noise(&super::tests_support::sample_state(), &ImuNoise::default());
+        assert!(q.asymmetry() < 1e-12);
+        for i in 0..N_STATE {
+            assert!(q[(i, i)] >= 0.0, "negative variance at {i}");
+        }
+    }
+
     use super::*;
     use approx::assert_relative_eq;
     use drifters_core::frames::{Lla, Ned};

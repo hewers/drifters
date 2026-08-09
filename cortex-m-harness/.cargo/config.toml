@@ -1,0 +1,11 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "link-arg=-Tlink.x"]
+# `cargo run --release` boots the firmware under QEMU. AN386 is the Cortex-M4
+# FPGA image; swap to `mps2-an500 -cpu cortex-m7` for Cortex-M7.
+runner = """qemu-system-arm \
+  -machine mps2-an386 -cpu cortex-m4 -nographic \
+  -semihosting-config enable=on,target=native \
+  -kernel"""

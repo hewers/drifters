@@ -108,6 +108,50 @@ impl<const R: usize, const C: usize> Matrix<R, C> {
         out
     }
 
+    /// `self * rhs`, written into `out` instead of returned.
+    ///
+    /// A `Matrix<21, 21>` is 3 528 bytes, and a chain of value-returning
+    /// products puts every intermediate on the stack at once. On Cortex-M that
+    /// is the difference between a filter that fits in a task stack and one
+    /// that does not — see `docs/design.md`, "Resource budget".
+    ///
+    /// `out` is fully overwritten, so its previous contents do not matter.
+    #[inline]
+    pub fn matmul_into<const C2: usize>(&self, rhs: &Matrix<C, C2>, out: &mut Matrix<R, C2>) {
+        for i in 0..R {
+            out.data[i] = [0.0; C2];
+            for k in 0..C {
+                let a = self.data[i][k];
+                if a == 0.0 {
+                    continue;
+                }
+                for j in 0..C2 {
+                    out.data[i][j] += a * rhs.data[k][j];
+                }
+            }
+        }
+    }
+
+    /// `self * rhsᵀ`, written into `out` instead of returned.
+    ///
+    /// See [`Matrix::matmul_into`] for why this exists.
+    #[inline]
+    pub fn mul_transpose_into<const R2: usize>(
+        &self,
+        rhs: &Matrix<R2, C>,
+        out: &mut Matrix<R, R2>,
+    ) {
+        for i in 0..R {
+            for j in 0..R2 {
+                let mut acc = 0.0;
+                for k in 0..C {
+                    acc += self.data[i][k] * rhs.data[j][k];
+                }
+                out.data[i][j] = acc;
+            }
+        }
+    }
+
     /// `self * rhsᵀ`, without materialising the transpose.
     #[inline]
     pub fn mul_transpose<const R2: usize>(&self, rhs: &Matrix<R2, C>) -> Matrix<R, R2> {
@@ -388,6 +432,34 @@ impl<const R: usize, const C: usize> AddAssign for Matrix<R, C> {
         for i in 0..R {
             for j in 0..C {
                 self.data[i][j] += rhs.data[i][j];
+            }
+        }
+    }
+}
+
+/// `+=` against a borrowed matrix.
+///
+/// The by-value [`AddAssign`] copies its operand, which for a `Matrix<21, 21>`
+/// is 3 528 bytes of stack per use. On a microcontroller that is worth
+/// avoiding, so accumulation on the filter's hot path borrows instead.
+impl<const R: usize, const C: usize> AddAssign<&Matrix<R, C>> for Matrix<R, C> {
+    #[inline]
+    fn add_assign(&mut self, rhs: &Matrix<R, C>) {
+        for i in 0..R {
+            for j in 0..C {
+                self.data[i][j] += rhs.data[i][j];
+            }
+        }
+    }
+}
+
+/// `-=` against a borrowed matrix. See [`AddAssign<&Matrix>`].
+impl<const R: usize, const C: usize> SubAssign<&Matrix<R, C>> for Matrix<R, C> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: &Matrix<R, C>) {
+        for i in 0..R {
+            for j in 0..C {
+                self.data[i][j] -= rhs.data[i][j];
             }
         }
     }

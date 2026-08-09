@@ -262,3 +262,58 @@ for bit-exact golden vectors, so tests needing bit-exactness call
   radians of latitude.
 - Prefer asserting *convergence order* or an *analytic bound* over a captured
   number. A captured number only says the code still does what it did.
+
+## Layer 8 — bare-metal stack budget
+
+`cortex-m-harness/` boots the filter on an emulated Cortex-M4 and measures its
+peak stack use. Run it with:
+
+```bash
+cd cortex-m-harness && cargo run --release
+```
+
+Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
+CI runs it on every push and fails if the peak exceeds 20 KiB.
+
+### How the measurement works
+
+Stack painting. At the start of each measured operation the unused stack — from
+the end of `.bss` up to just below the current stack pointer — is filled with a
+recognisable word. After the operation, scanning up from the bottom for the
+first word that is no longer that pattern gives the deepest address the stack
+reached.
+
+This is **exact**, and it is the reason to use an emulator at all here: it
+measures memory writes, which QEMU emulates faithfully. The result is the same
+number real silicon would give.
+
+### What QEMU cannot measure
+
+| measurement | verdict |
+|---|---|
+| runs bare-metal at all | exact |
+| stack high-water mark | exact |
+| code and data size | exact (from the linker) |
+| **cycle counts, wall-clock timing** | **worthless** |
+
+QEMU models no pipeline, no cache, no flash wait states and no FPU latency. The
+harness therefore reports stack and size and takes **no** timing measurement,
+rather than publishing a number that cannot be supported.
+
+The trap specific to this project: Cortex-M4F's FPU is **single precision**, and
+`drifters` uses `f64` throughout. Every float operation on that target is
+software-emulated, which is the dominant cost on real hardware and completely
+invisible under emulation. Timing claims need real silicon — that work is not
+done, and nothing in this repository claims otherwise.
+
+### Why this layer exists
+
+The `docs/design.md` budget previously carried an estimate of ~11 KiB, reasoned
+from "about three live temporaries". The first real measurement was 35.3 KiB.
+The estimate was not merely imprecise, it was wrong in the direction that
+matters: it said the filter fit in a 16 KiB stack when it needed 35 KiB.
+
+That is the general case for stack budgets on this kind of code. Fixed-size
+matrix arithmetic written as expressions creates a temporary per subexpression,
+and how many survive is a question about the optimiser, not about the source.
+It has to be measured.
