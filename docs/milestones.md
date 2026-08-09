@@ -84,7 +84,8 @@ truth; an injected accelerometer bias is recovered. ✅
       `Covariance`
 - [ ] `micropb` code generation, output checked in
 - [ ] `drifters-proto` conversions to and from the core types, round-trip tested
-- [ ] `xtask proto` regeneration command
+- [ ] `xtask proto` regeneration command, via `protox` — pure Rust, no `protoc`
+      binary required (see [adr/0002](adr/0002-protobuf.md))
 - [ ] Decode fuzz target
 
 **Exit criterion:** every core type round-trips through protobuf without loss;

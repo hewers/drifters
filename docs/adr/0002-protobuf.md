@@ -30,17 +30,47 @@ container types so a field can be a `heapless::Vec` on device and a
 **Generated code is checked into the repository.** `build.rs` does *not* run the
 generator.
 
+**Schema parsing uses `protox`, not `protoc`.** The toolchain is pure Rust; no
+system binary is required at any point.
+
+## Why not `protoc`
+
+Protobuf's *runtime* in Rust is entirely native — `micropb` encodes and decodes
+the wire format with no C++ involved. `protoc` enters only as a **parser front
+end**: it turns `.proto` text into a `FileDescriptorSet` (itself a protobuf
+message), which the Rust generator then reads to emit code. Most of the
+ecosystem delegates schema parsing to it rather than reimplementing it.
+
+That delegation is avoidable here:
+
+- [`protox`](https://crates.io/crates/protox) is a pure-Rust protobuf compiler
+  (MIT OR Apache-2.0) that produces a `FileDescriptorSet` directly.
+- `micropb_gen::Generator::compile_fdset_file` consumes exactly that, and
+  documents that it "does not invoke `protoc`".
+
+So `cargo xtask proto` runs `protox::compile()` and hands the descriptor set to
+micropb-gen. A contributor needs `cargo` and nothing else — no package manager
+step, no PATH surprises, no version skew between machines.
+
+`protox` pulls in `prost`, `miette` and `thiserror`, which is a lot of
+dependency for a project whose thesis is minimal ones. It costs nothing that
+matters: `xtask` is host-only and build-time, so none of it is reachable from
+`drifters-core` or `drifters-filter`, and none of it can appear in a firmware
+image. The dependency budget that the rest of this project defends applies to
+what ships, not to what generates code.
+
 ## Why check in the generated code
 
-- Building `drifters` must not require `protoc`. It is not present on this
-  development machine, it is not present in most minimal CI images, and
-  requiring it turns a `cargo build` into an environment problem.
-- Builds stay deterministic and hermetic. A `build.rs` that shells out to a tool
-  whose version varies by machine produces different bytes on different
-  machines — unacceptable for firmware.
+Independent of the parser choice:
+
+- Builds stay deterministic and hermetic. A `build.rs` that runs a generator
+  produces bytes that depend on the generator's version — unacceptable for
+  firmware, where the artefact should be reproducible from the tree.
 - Wire-format changes become **reviewable**. A schema edit shows up in the diff
   as a change to the generated types, which is exactly when someone should be
   asking whether it is backwards compatible.
+- Consumers building `drifters` never run codegen at all, so a broken or
+  slow generator cannot break a downstream build.
 
 Regeneration is an explicit command (`cargo xtask proto`), and CI verifies that
 re-running it produces no diff — so the checked-in code cannot silently drift
