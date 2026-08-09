@@ -195,8 +195,21 @@ impl GinsEngine {
         self.previous_pva = previous;
     }
 
-    /// The GNSS antenna position implied by the current INS solution.
-    fn antenna_position(&self) -> (drifters_core::frames::Lla, Vec3) {
+    /// Where the INS solution puts the **GNSS antenna phase centre**.
+    ///
+    /// This, not [`GinsEngine::nav_state`], is what a raw GNSS fix should be
+    /// compared against. `nav_state` reports the IMU reference point, and the
+    /// two differ by the lever arm — for a typical vehicle installation that is
+    /// tens of centimetres, which is far larger than the residuals a healthy
+    /// filter produces. Comparing the wrong one shows up as a constant offset
+    /// exactly equal to the lever arm, and is easy to mistake for a bias.
+    pub fn antenna_position(&self) -> drifters_core::frames::Lla {
+        self.antenna_position_and_lever().0
+    }
+
+    /// The GNSS antenna position implied by the current INS solution, with the
+    /// lever arm resolved into the navigation frame.
+    fn antenna_position_and_lever(&self) -> (drifters_core::frames::Lla, Vec3) {
         let lever_n = self.state.pva.attitude.dcm * self.options.antenna_lever_arm;
         let antenna = self
             .state
@@ -210,7 +223,7 @@ impl GinsEngine {
         let Some(fix) = self.pending_gnss.take() else {
             return Ok(());
         };
-        let (antenna, lever_n) = self.antenna_position();
+        let (antenna, lever_n) = self.antenna_position_and_lever();
 
         // Innovation: where the INS thinks the antenna is, minus where GNSS
         // says it is, in local NED metres.
@@ -279,6 +292,15 @@ impl GinsEngine {
             }
         }
         Ok(accepted)
+    }
+
+    /// Normalised innovation squared of the most recent applied measurement.
+    ///
+    /// See [`Eskf::last_nis`]. Sampling this at every GNSS epoch is how a run's
+    /// filter consistency is assessed.
+    #[inline]
+    pub fn last_nis(&self) -> Option<F> {
+        self.filter.last_nis()
     }
 
     /// How many gated measurements have been rejected since the last accepted
@@ -573,7 +595,7 @@ mod tests {
             e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
                 .unwrap();
         }
-        let (antenna, lever_n) = e.antenna_position();
+        let (antenna, lever_n) = e.antenna_position_and_lever();
         assert_relative_eq!(lever_n.x, 2.0, epsilon = 1e-6);
         let offset = antenna.ned_from(e.nav_state().position());
         assert_relative_eq!(offset.n, 2.0, epsilon = 1e-3);
@@ -588,7 +610,7 @@ mod tests {
         );
         o.antenna_lever_arm = Vec3::new(2.0, 0.0, 0.0);
         let e = GinsEngine::new(o).unwrap();
-        let (_, lever_n) = e.antenna_position();
+        let (_, lever_n) = e.antenna_position_and_lever();
         // Yawed 90°: the forward lever arm now points east.
         assert_relative_eq!(lever_n.x, 0.0, epsilon = 1e-9);
         assert_relative_eq!(lever_n.y, 2.0, epsilon = 1e-9);

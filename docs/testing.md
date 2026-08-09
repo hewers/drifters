@@ -98,39 +98,131 @@ Properties a correct Kalman filter has regardless of the data.
   future are each handled distinctly.
 - Lever arm: a forward lever arm rotates to point east when the body yaws 90°.
 
-## Layer 6 — golden-dataset regression (M7, planned)
+## Layer 6 — golden-dataset regression
 
-The KF-GINS demo dataset is the reference. The plan:
+Replays the KF-GINS demo dataset — 683k IMU samples at 200 Hz and 3413 RTK
+fixes, about 57 minutes of real vehicle driving — through the filter and checks
+the result. Implemented in `crates/drifters-cli/tests/kf_gins_regression.rs`.
 
-1. Fetch the dataset from the upstream repository into `datasets/` (git-ignored;
-   it is not redistributed here, so its licence stays with upstream).
-2. Replay it through `drifters-cli` with the configuration translated from
-   `kf-gins.yaml`.
-3. Compare against the published reference solution.
+### Getting the data
 
-Tolerances will be **documented and justified** rather than tuned until green.
-The two implementations differ in ways that legitimately produce small
-divergence — `libm` versus the host libm, and a different geodetic conversion —
-so bit-exact agreement is not the goal. Expected bands, to be confirmed:
+It is **not committed**: 67 MB, and it belongs to the KF-GINS authors, so its
+licence stays with upstream. `datasets/` is git-ignored. To fetch it:
 
-| quantity | tolerance |
+```bash
+mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done
+```
+
+The test **skips and passes** when the dataset is absent, so a fresh clone is
+not broken by not having it. CI does not fetch it; run it locally with:
+
+```bash
+cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
+```
+
+Release mode matters — the debug build takes minutes rather than seconds.
+
+### What is measured
+
+For each fix, the filter's predicted **antenna** position immediately *before*
+that fix is applied, against the fix itself. Between fixes the solution is pure
+inertial dead reckoning, so this measures one second of mechanization plus
+whatever error the filter had not yet corrected. It is an open-loop check, not a
+self-fulfilling one.
+
+Comparing at the antenna rather than at the IMU reference point is essential.
+They differ by the lever arm, which is 0.18 m vertically in this dataset —
+around eight times the residual being measured. Comparing the wrong one reports
+that offset as a bias and looks exactly like a real defect. Use
+`GinsEngine::antenna_position()`, not `nav_state().position()`.
+
+### Observed values
+
+Measured on the demo dataset, commit `070bd00`, x86-64 Linux:
+
+| quantity | observed | tolerance | rationale |
+|---|---|---|---|
+| north residual RMS | 0.022 m | — | |
+| east residual RMS | 0.025 m | — | |
+| horizontal residual RMS | 0.033 m | 0.10 m | ~3x observed |
+| vertical residual RMS | 0.018 m | 0.06 m | ~3x observed |
+| per-axis bias | < 0.001 m | 0.01 m | a bias is a defect, not noise |
+| fixes applied | 3362 of 3363 | > 3000 | |
+| covariance inflations | 0 | 0 | clean data must not need rescuing |
+
+Tolerances are ~3x the observed values: loose enough that ordinary numerical
+drift across platforms does not fail CI, tight enough that a real regression
+does. The **bias** bound is much tighter than the RMS bound on purpose — a
+systematic offset is what a lever-arm sign error, a frame mix-up or a geodetic
+conversion bug produces, and none of those should be within tolerance.
+
+### What this does not prove
+
+It is not a comparison against KF-GINS's own output. That needs their C++
+implementation built and run, which this test cannot do; the upstream repository
+ships no reference solution file. What the test does establish is that the
+mechanization, the transition matrix and the GNSS update are mutually consistent
+to centimetres over an hour of real data — an implementation error in any of the
+three would be orders of magnitude larger than these tolerances.
+
+Adding a true cross-implementation comparison remains worthwhile and is tracked
+in `docs/milestones.md`.
+
+## Layer 7 — statistical consistency
+
+A filter can look healthy — no NaNs, a smooth trajectory, a covariance that
+stays positive definite — while being badly wrong about its own uncertainty.
+`crates/drifters-cli/src/stats.rs` measures that.
+
+### NIS
+
+For each measurement, `ν S⁻¹ ν` where `S = H P Hᵀ + R`. If the model is right
+this is chi-squared with `m` degrees of freedom, so its **mean over a long run
+should equal the measurement dimension**. `Eskf::last_nis` records it on every
+update, gated or not.
+
+- mean ≫ m — **overconfident**. The covariance is smaller than the errors being
+  made, so measurements are under-weighted and, with gating on, eventually all
+  rejected. This is the failure mode M6 hit with ZUPT-only aiding.
+- mean ≪ m — **underconfident**, discarding information. Valid but noisier than
+  necessary.
+
+NIS needs no ground truth, which is what makes it usable on a real dataset
+rather than only in simulation.
+
+### Strict versus practical thresholds
+
+`stats::assess` implements the correct statistical test: the mean of `n`
+chi-squared(`m`) samples has variance `2m/n`, giving the interval
+`m ± 3·sqrt(2m/n)`. Over thousands of measurements that interval is very tight —
+`[2.87, 3.13]` for `m = 3, n = 3362` — and **any real filter falls outside it**,
+because tuning is never perfect. It is the right test for a synthetic
+ideal-filter check and is unit-tested as such.
+
+For real data what matters is the order of magnitude, so the report also gives
+the ratio `mean NIS / m` and interprets it via `practical_verdict`:
+
+| ratio | reading |
 |---|---|
-| horizontal position | 5 cm RMS |
-| height | 10 cm RMS |
-| velocity | 1 cm/s RMS |
-| attitude (roll, pitch) | 0.01° RMS |
-| attitude (yaw) | 0.05° RMS |
+| > 4 | far too confident — treat as a defect |
+| 2–4 | optimistic; measurements under-weighted |
+| 0.5–2 | acceptable in practice |
+| 0.25–0.5 | conservative; some information discarded |
+| < 0.25 | far too conservative — GNSS barely correcting drift |
 
-## Layer 7 — statistical consistency (M7, planned)
+### Observed on the demo dataset
 
-Everything above checks that the *estimate* is right. These check that the
-*uncertainty* is right — a filter can track truth beautifully while reporting a
-covariance that is wildly optimistic, and only a consistency test catches it.
+Mean NIS **1.459** against an expected 3.0, a ratio of **0.486** — conservative
+by roughly 1.4x in sigma. The filter believes its position uncertainty is about
+3.5 cm while the residuals it actually makes are about 2.5 cm.
 
-- **NEES** (normalised estimation error squared) over Monte Carlo runs with
-  known truth, checked against its chi-squared confidence bounds.
-- **NIS** (normalised innovation squared) on the measurement stream, which
-  works on real data where truth is unavailable.
+That is a real, if mild, finding rather than a defect: it means the process
+noise from `kf-gins.yaml` is a little generous for this IMU, and being
+conservative is the safe direction — an overconfident filter rejects the
+measurements that would correct it, whereas an underconfident one merely
+converges more slowly. The regression test bounds the ratio to `[0.25, 2.0]`
+rather than to the strict interval for exactly this reason.
+
 
 ## Layer 8 — portability and robustness
 

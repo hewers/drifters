@@ -4,6 +4,8 @@ members = [
     "crates/drifters-core",
     "crates/drifters-filter",
     "crates/drifters-proto",
+    "crates/drifters-interop",
+    "crates/drifters-cli",
     "xtask",
 ]
 

@@ -190,6 +190,9 @@ pub struct Eskf {
     pub dx: StateVector,
     /// Error-state covariance.
     pub covariance: StateMatrix,
+    /// Normalised innovation squared of the most recent update, `NaN` before
+    /// the first one. Read through [`Eskf::last_nis`].
+    last_nis: F,
 }
 
 /// Why a filter operation could not complete.
@@ -234,6 +237,7 @@ impl Eskf {
         Self {
             dx: StateVector::zeros(),
             covariance: StateMatrix::from_diagonal(&variances),
+            last_nis: F::NAN,
         }
     }
 
@@ -334,8 +338,13 @@ impl Eskf {
         let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
 
         // The gate reuses this factorisation rather than forming S twice.
+        // Recorded whether or not a gate is in use: it is the primary filter
+        // consistency statistic, and averaging it over a run is how an over- or
+        // under-confident covariance gets detected. See docs/testing.md.
+        let statistic = nis(&chol, innovation);
+        self.last_nis = statistic;
         if let Some(threshold) = gate {
-            if nis(&chol, innovation) > threshold {
+            if statistic > threshold {
                 return Ok(false);
             }
         }
@@ -365,6 +374,22 @@ impl Eskf {
         let dx = self.dx;
         self.dx = StateVector::zeros();
         dx
+    }
+
+    /// The normalised innovation squared of the most recent update.
+    ///
+    /// `None` before any update has been applied. Over a long run this should
+    /// average the measurement dimension: persistently larger means the filter
+    /// is overconfident, persistently smaller means it is discarding
+    /// information. It is the cheapest available evidence that a filter is
+    /// actually consistent rather than merely not obviously broken.
+    #[inline]
+    pub fn last_nis(&self) -> Option<F> {
+        if self.last_nis.is_nan() {
+            None
+        } else {
+            Some(self.last_nis)
+        }
     }
 
     /// Scale the whole covariance by `factor`, widening the filter's own

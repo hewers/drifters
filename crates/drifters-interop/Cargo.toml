@@ -1,0 +1,39 @@
+[package]
+name = "drifters-interop"
+description = "Optional adapters between drifters types and third-party navigation crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+categories = ["science", "api-bindings"]
+keywords = ["navigation", "gnss", "nav-types", "interop"]
+
+[dependencies]
+drifters-core = { workspace = true, features = ["std"] }
+
+# Both adapters are OPTIONAL and OFF BY DEFAULT. See docs/adr/0003.
+#
+# nav-types: MIT. No licensing concern; it is `std`-only, which is the sole
+# reason it is not used in the core.
+nav-types = { version = "0.5", optional = true }
+
+# gnss-rtk: AGPL-3.0. Enabling the `gnss-rtk` feature places the AGPL's
+# obligations on the combined work. This is deliberately not a default.
+gnss-rtk = { version = "0.8", optional = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+
+[features]
+default = []
+## `nav-types` coordinate conversions. MIT, `std` only.
+nav-types-interop = ["dep:nav-types"]
+## `gnss-rtk` PVT solution adapter. **AGPL-3.0** — read the crate docs before
+## enabling.
+gnss-rtk-interop = ["dep:gnss-rtk"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

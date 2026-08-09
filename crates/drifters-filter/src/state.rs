@@ -106,12 +106,12 @@ mod size_tests {
         assert_eq!(size_of::<NoiseMatrix>(), 3_024, "21x18 f64 noise mapping");
         assert_eq!(
             size_of::<crate::eskf::Eskf>(),
-            3_696,
-            "covariance + error state"
+            3_704,
+            "covariance + error state, plus the recorded NIS"
         );
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            4_936,
+            4_944,
             "whole engine"
         );
     }

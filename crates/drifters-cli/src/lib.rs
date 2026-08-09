@@ -1,0 +1,283 @@
+//! Replay engine for the drifters GNSS/INS filter over the KF-GINS dataset
+//! formats.
+//!
+//! Exposed as a library so the regression test can drive a replay directly
+//! rather than shelling out to the binary and parsing its output.
+
+pub mod kfgins;
+pub mod stats;
+
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::Path;
+
+use drifters_core::math::RAD_TO_DEG;
+use drifters_filter::GinsEngine;
+
+use stats::{assess, Consistency, Running};
+
+/// What a replay produced, beyond the output files.
+#[derive(Clone, Copy, Debug)]
+pub struct Report {
+    /// See [`Report`].
+    pub processed: u64,
+    /// See [`Report`].
+    pub applied_fixes: u64,
+    /// See [`Report`].
+    pub rejected_fixes: u64,
+    /// See [`Report`].
+    pub inflations: u32,
+    /// See [`Report`].
+    pub nis: Running,
+    /// See [`Report`].
+    pub residual_north: Running,
+    /// See [`Report`].
+    pub residual_east: Running,
+    /// See [`Report`].
+    pub residual_down: Running,
+    /// See [`Report`].
+    pub horizontal: Running,
+}
+
+impl Report {
+    /// Print a human-readable summary.
+    pub fn print(&self) {
+        println!("\n--- replay summary ---");
+        println!("IMU samples processed : {}", self.processed);
+        println!(
+            "GNSS fixes applied    : {} ({} rejected by the gate)",
+            self.applied_fixes, self.rejected_fixes
+        );
+        if self.inflations > 0 {
+            println!(
+                "covariance inflations : {} — the filter was confident and wrong",
+                self.inflations
+            );
+        }
+
+        println!("\n--- position residual against GNSS (metres) ---");
+        println!("            rms       mean      sigma     max");
+        for (name, r) in [
+            ("north ", &self.residual_north),
+            ("east  ", &self.residual_east),
+            ("down  ", &self.residual_down),
+        ] {
+            println!(
+                "{name}  {:9.4} {:9.4} {:9.4} {:9.4}",
+                r.rms(),
+                r.mean(),
+                r.std_dev(),
+                r.max().abs().max(r.min().abs())
+            );
+        }
+        println!(
+            "horizontal  {:9.4} {:9.4} {:9.4} {:9.4}",
+            self.horizontal.rms(),
+            self.horizontal.mean(),
+            self.horizontal.std_dev(),
+            self.horizontal.max()
+        );
+
+        println!("\n--- filter consistency ---");
+        let verdict = assess(&self.nis, 3);
+        let ratio = self.nis.mean() / 3.0;
+        println!(
+            "NIS over {} fixes: mean {:.3}, sigma {:.3} (expected mean 3.0)",
+            self.nis.count(),
+            self.nis.mean(),
+            self.nis.std_dev()
+        );
+        let (low, high) = stats::nis_interval(3, self.nis.count());
+        println!("strict interval    : [{low:.3}, {high:.3}]");
+        println!("strict verdict     : {verdict}");
+        println!(
+            "ratio to expected  : {ratio:.3}x  ({})",
+            practical_verdict(ratio)
+        );
+        // The strict interval is the correct statistical test for an *ideal*
+        // filter, and with thousands of samples it is so tight that any real
+        // filter falls outside it. What matters in practice is the order of
+        // magnitude, which is what the ratio reports.
+        if verdict == Consistency::Overconfident {
+            println!(
+                "  the covariance is smaller than the errors actually being made;\n\
+                 \x20 see \"Observability notes\" in docs/state-model.md"
+            );
+        }
+    }
+}
+
+/// Interpret a NIS ratio the way a practitioner would.
+///
+/// The strict chi-squared interval narrows as `1/sqrt(n)`, so over thousands of
+/// measurements it flags any filter that is not perfectly tuned. Tuning is
+/// never perfect, and being somewhat conservative is the safe direction, so the
+/// band that actually matters is roughly a factor of two either way.
+pub fn practical_verdict(ratio: f64) -> &'static str {
+    match ratio {
+        r if r > 4.0 => "far too confident — treat as a defect",
+        r if r > 2.0 => "optimistic; measurements are under-weighted",
+        r if r >= 0.5 => "acceptable in practice",
+        r if r >= 0.25 => "conservative; some information is being discarded",
+        _ => "far too conservative — GNSS is barely correcting drift",
+    }
+}
+
+/// Replay a dataset through the filter, writing output files and returning the
+/// statistics.
+pub fn replay(
+    config: &kfgins::Config,
+    imu: &[drifters_core::types::ImuSample],
+    gnss: &[drifters_core::types::GnssFix],
+    out_dir: &Path,
+    quiet: bool,
+) -> Result<Report, Box<dyn std::error::Error>> {
+    let mut engine = GinsEngine::new(config.options)?;
+
+    std::fs::create_dir_all(out_dir)?;
+    let mut nav = BufWriter::new(File::create(out_dir.join("drifters_nav.txt"))?);
+    let mut err = BufWriter::new(File::create(out_dir.join("drifters_imuerr.txt"))?);
+    let mut std_out = BufWriter::new(File::create(out_dir.join("drifters_std.txt"))?);
+
+    let mut report = Report {
+        processed: 0,
+        applied_fixes: 0,
+        rejected_fixes: 0,
+        inflations: 0,
+        nis: Running::new(),
+        residual_north: Running::new(),
+        residual_east: Running::new(),
+        residual_down: Running::new(),
+        horizontal: Running::new(),
+    };
+
+    let mut next_fix = 0usize;
+    // Skip fixes that precede the processing window; they can never be used.
+    while next_fix < gnss.len() && gnss[next_fix].time.tow < config.start_time {
+        next_fix += 1;
+    }
+
+    let end = config.end_time.unwrap_or(f64::INFINITY);
+    let mut last_nis_seen: Option<f64> = None;
+
+    for sample in imu {
+        let tow = sample.time.tow;
+        if tow < config.start_time {
+            continue;
+        }
+        if tow > end {
+            break;
+        }
+
+        // Queue the fix that falls in this interval, if any.
+        if next_fix < gnss.len() && gnss[next_fix].time.tow <= tow {
+            let fix = gnss[next_fix];
+            next_fix += 1;
+
+            // Residual against the INS solution *before* the update: the
+            // honest measure of how well the filter predicts, since afterwards
+            // the solution has been pulled towards the fix.
+            //
+            // Compared at the ANTENNA, not the IMU reference point. The two
+            // differ by the lever arm, which for this dataset is 0.18 m
+            // vertically — using `nav_state().position()` here reports that as
+            // a systematic bias that has nothing to do with filter quality.
+            let predicted = engine.antenna_position();
+            let residual = predicted.ned_from(fix.position);
+            report.residual_north.push(residual.n);
+            report.residual_east.push(residual.e);
+            report.residual_down.push(residual.d);
+            report.horizontal.push(residual.horizontal_norm());
+
+            let before = engine.inflation_count();
+            engine.add_gnss(fix);
+            engine.add_imu(*sample)?;
+            report.processed += 1;
+
+            // `last_nis` changes only when an update was actually applied.
+            match engine.last_nis() {
+                Some(value) if Some(value) != last_nis_seen => {
+                    report.nis.push(value);
+                    last_nis_seen = Some(value);
+                    report.applied_fixes += 1;
+                }
+                _ => report.rejected_fixes += 1,
+            }
+            report.inflations += engine.inflation_count() - before;
+        } else {
+            engine.add_imu(*sample)?;
+            report.processed += 1;
+        }
+
+        // One row per second keeps the output readable; the filter still runs
+        // at the full IMU rate.
+        if report.processed % 200 == 0 {
+            write_row(&mut nav, &mut err, &mut std_out, &engine)?;
+            if !quiet && report.processed % 200_000 == 0 {
+                eprintln!("  {:.0} s processed", tow - config.start_time);
+            }
+        }
+    }
+
+    nav.flush()?;
+    err.flush()?;
+    std_out.flush()?;
+    Ok(report)
+}
+
+/// Write one row to each output file, in KF-GINS's column layout.
+pub(crate) fn write_row(
+    nav: &mut impl Write,
+    err: &mut impl Write,
+    std_out: &mut impl Write,
+    engine: &GinsEngine,
+) -> std::io::Result<()> {
+    let state = engine.nav_state();
+    let p = state.position();
+    let v = state.velocity();
+    let e = state.euler();
+
+    // week, tow, lat, lon, height, vn, ve, vd, roll, pitch, yaw
+    writeln!(
+        nav,
+        "{} {:.9} {:.12} {:.12} {:.6} {:.6} {:.6} {:.6} {:.9} {:.9} {:.9}",
+        state.time.week,
+        state.time.tow,
+        p.lat * RAD_TO_DEG,
+        p.lon * RAD_TO_DEG,
+        p.height,
+        v.n,
+        v.e,
+        v.d,
+        e.roll * RAD_TO_DEG,
+        e.pitch * RAD_TO_DEG,
+        e.yaw * RAD_TO_DEG
+    )?;
+
+    let ie = state.imu_error;
+    writeln!(
+        err,
+        "{:.9} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e}",
+        state.time.tow,
+        ie.gyro_bias.x,
+        ie.gyro_bias.y,
+        ie.gyro_bias.z,
+        ie.accel_bias.x,
+        ie.accel_bias.y,
+        ie.accel_bias.z,
+        ie.gyro_scale.x,
+        ie.gyro_scale.y,
+        ie.gyro_scale.z,
+        ie.accel_scale.x,
+        ie.accel_scale.y,
+        ie.accel_scale.z,
+    )?;
+
+    let sigmas = engine.std_deviations();
+    write!(std_out, "{:.9}", state.time.tow)?;
+    for s in sigmas {
+        write!(std_out, " {s:.9e}")?;
+    }
+    writeln!(std_out)?;
+    Ok(())
+}
