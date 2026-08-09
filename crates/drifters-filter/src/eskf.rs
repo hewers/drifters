@@ -153,6 +153,36 @@ pub fn process_noise_density(noise: &ImuNoise) -> NoiseCovariance {
     q
 }
 
+/// `νᵀ S⁻¹ ν`, given the Cholesky factorisation of `S`.
+#[inline]
+fn nis<const M: usize>(chol: &Cholesky<M>, innovation: &Matrix<M, 1>) -> F {
+    let solved = chol.solve(innovation);
+    let mut acc = 0.0;
+    for i in 0..M {
+        acc += innovation.data[i][0] * solved.data[i][0];
+    }
+    acc
+}
+
+/// Chi-squared critical values, indexed by measurement dimension.
+///
+/// A gate rejects a measurement whose normalised innovation squared exceeds the
+/// critical value for its dimension. Prefer the loose thresholds: a filter that
+/// rejects good data because its own covariance is optimistic diverges *faster*
+/// than one that accepts a little bad data, because rejection removes the very
+/// information that would have corrected the overconfidence.
+pub mod chi_squared {
+    use drifters_core::F;
+
+    /// 95th percentile — tight. Rejects 5 % of *valid* measurements.
+    pub const P95: [F; 7] = [0.0, 3.841, 5.991, 7.815, 9.488, 11.070, 12.592];
+    /// 99th percentile.
+    pub const P99: [F; 7] = [0.0, 6.635, 9.210, 11.345, 13.277, 15.086, 16.812];
+    /// 99.9th percentile — the recommended default. Catches gross outliers
+    /// while almost never rejecting a good measurement.
+    pub const P999: [F; 7] = [0.0, 10.828, 13.816, 16.266, 18.467, 20.515, 22.458];
+}
+
 /// The running filter state: the error-state estimate and its covariance.
 #[derive(Clone, Copy, Debug)]
 pub struct Eskf {
@@ -244,6 +274,57 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
     ) -> Result<(), FilterError> {
+        self.update_inner(innovation, h, r, None).map(|_| ())
+    }
+
+    /// Apply a measurement update, rejecting it if it fails a chi-squared gate.
+    ///
+    /// The gate is the normalised innovation squared, `νᵀ S⁻¹ ν`, compared
+    /// against `threshold`. Returns `Ok(false)` when the measurement was
+    /// rejected and the filter left untouched.
+    ///
+    /// Gating matters most for the sensors that are *assumptions* rather than
+    /// observations — a zero-velocity update applied while the vehicle is
+    /// actually moving injects a large, confident, wrong measurement. The gate
+    /// is the last line of defence when the stationarity detector is fooled.
+    ///
+    /// Thresholds come from [`chi_squared`].
+    pub fn update_gated<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        threshold: F,
+    ) -> Result<bool, FilterError> {
+        self.update_inner(innovation, h, r, Some(threshold))
+    }
+
+    /// The normalised innovation squared `νᵀ S⁻¹ ν` a measurement would
+    /// produce, without applying it.
+    ///
+    /// Useful for logging filter consistency: over a long run this statistic
+    /// should average the measurement dimension. Persistently larger means the
+    /// filter is overconfident; persistently smaller means it is throwing
+    /// information away.
+    pub fn normalised_innovation_squared<const M: usize>(
+        &self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+    ) -> Result<F, FilterError> {
+        let hp = h.matmul(&self.covariance);
+        let s = hp.mul_transpose(h) + *r;
+        let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
+        Ok(nis(&chol, innovation))
+    }
+
+    fn update_inner<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        gate: Option<F>,
+    ) -> Result<bool, FilterError> {
         if !self.covariance.is_finite() {
             return Err(FilterError::Diverged);
         }
@@ -251,6 +332,13 @@ impl Eskf {
         let hp = h.matmul(&self.covariance);
         let s = hp.mul_transpose(h) + *r;
         let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
+
+        // The gate reuses this factorisation rather than forming S twice.
+        if let Some(threshold) = gate {
+            if nis(&chol, innovation) > threshold {
+                return Ok(false);
+            }
+        }
 
         // K = P Hᵀ S⁻¹, obtained as (S⁻¹ H P)ᵀ so the solve replaces an
         // explicit inverse.
@@ -265,7 +353,7 @@ impl Eskf {
         self.covariance =
             i_kh.matmul(&self.covariance).mul_transpose(&i_kh) + k.matmul(r).mul_transpose(&k);
         self.covariance.symmetrize();
-        Ok(())
+        Ok(true)
     }
 
     /// Take the accumulated error state and reset it to zero.
@@ -277,6 +365,23 @@ impl Eskf {
         let dx = self.dx;
         self.dx = StateVector::zeros();
         dx
+    }
+
+    /// Scale the whole covariance by `factor`, widening the filter's own
+    /// confidence.
+    ///
+    /// This is a recovery mechanism, not a tuning knob. Persistent gate
+    /// rejections mean the covariance disagrees with reality: the filter is
+    /// confident and wrong, so it rejects the very measurements that would
+    /// correct it, and stays wrong forever. Inflating breaks that deadlock.
+    ///
+    /// Scaling preserves symmetry, positive definiteness and every correlation
+    /// — it re-scales the whole uncertainty ellipsoid rather than reshaping it,
+    /// which is the conservative choice when the *direction* of the error is
+    /// exactly what is unknown.
+    pub fn inflate(&mut self, factor: F) {
+        debug_assert!(factor >= 1.0, "inflation must not shrink the covariance");
+        self.covariance = self.covariance.scaled(factor);
     }
 
     /// Per-state one-sigma uncertainties, in state order.

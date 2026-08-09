@@ -137,7 +137,7 @@ Sizes for the 21-state configuration with `f64`:
 | `Matrix<21, 21>` (covariance, transition) | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 |
 | `Eskf` (covariance + error state) | 3 696 |
-| `GinsEngine` total | 4 912 |
+| `GinsEngine` total | 4 936 |
 | peak stack in `predict` (≈3 live temporaries) | ~11 000 |
 
 These are asserted by `state::size_tests::types_have_their_documented_footprint`,
@@ -168,20 +168,41 @@ fn update<const M: usize>(
 ) -> Result<(), FilterError>
 ```
 
-so any sensor reduces to producing `(innovation, H, R)`. Planned models, in M6:
+so any sensor reduces to producing `(innovation, H, R)`. All of these are
+implemented, in `drifters-filter::measurement`:
 
 | sensor | dim | observes | note |
 |---|---|---|---|
-| GNSS position | 3 | δr, φ (via lever arm) | **implemented** |
-| GNSS velocity | 3 | δv | needs receiver Doppler |
+| GNSS position | 3 | δr, φ (via lever arm) | the primary aid |
+| GNSS velocity | 3 | δv, φ (via lever arm) | applied when the fix carries it |
 | Zero-velocity (ZUPT) | 3 | δv | detected during stops; strongly observes gyro bias |
 | Non-holonomic (NHC) | 2 | δv, φ | wheeled vehicles: no sideways or vertical motion |
-| Odometer / wheel speed | 1 | δv | bounds drift through GNSS outages |
+| Odometer / wheel speed | 1 | δv, φ | bounds drift through GNSS outages |
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
 | Magnetometer heading | 1 | φ_d | coarse yaw when stationary |
 
 ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
-low-cost MEMS system usable through a GNSS outage.
+low-cost MEMS system usable through a GNSS outage. Measured on a stationary
+30 s outage with a 0.02 m/s² accelerometer bias, ZUPT holds drift to 0.012 m
+against 9.0 m for dead reckoning.
+
+Every model is gated by a chi-squared test on the normalised innovation squared,
+sharing the single Cholesky factorisation the update already needs. Gating is
+most important for the models that are *assumptions* rather than observations —
+a ZUPT applied while the vehicle is moving injects a large, confident, wrong
+measurement, and the gate is the last defence when the stationarity detector is
+fooled.
+
+Gating alone has a failure mode of its own: a filter whose covariance has become
+confident and wrong rejects the very measurements that would correct it, and
+freezes there. `max_consecutive_rejections` bounds how long that can persist,
+inflating the covariance to re-admit measurements. Scaling preserves symmetry,
+positive definiteness and every correlation — the conservative choice when the
+*direction* of the error is exactly what is unknown.
+
+Read [state-model.md](state-model.md) on accelerometer bias and tilt before
+relying on ZUPT for long stationary periods: they are mutually unobservable, and
+no amount of gating or inflation changes that.
 
 ## Serialization
 

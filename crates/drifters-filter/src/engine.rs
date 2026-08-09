@@ -15,6 +15,7 @@ use drifters_core::F;
 
 use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
+use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
 use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, SA_ID, SG_ID, V_ID};
 
@@ -45,6 +46,8 @@ pub struct GinsEngine {
     /// Half the IMU interval; a fix closer than this to a boundary is treated
     /// as coincident with it rather than split.
     epoch_tolerance: F,
+    consecutive_rejections: u32,
+    inflations: u32,
 }
 
 impl GinsEngine {
@@ -66,6 +69,8 @@ impl GinsEngine {
             pending_gnss: None,
             initialised: false,
             epoch_tolerance: 1.0e-4,
+            consecutive_rejections: 0,
+            inflations: 0,
             options,
         })
     }
@@ -220,7 +225,121 @@ impl GinsEngine {
         let r = fix.position_std.squared().to_diag();
         self.filter.update(&z, &h, &r)?;
         self.feedback();
+
+        // A fix carrying velocity gives a second, independent measurement.
+        // Applied after the position feedback so its Jacobian is evaluated at
+        // the corrected state.
+        // A zero sigma here would be an infinitely confident measurement, which
+        // collapses the velocity covariance and effectively freezes the state.
+        // Treat an unset sigma as "velocity not usable" rather than "perfect".
+        let velocity_usable = fix.velocity_std.is_finite()
+            && fix.velocity_std.x > 0.0
+            && fix.velocity_std.y > 0.0
+            && fix.velocity_std.z > 0.0;
+        if let Some(velocity) = fix.velocity.filter(|_| velocity_usable) {
+            let m = measurement::gnss_velocity(
+                &self.state.pva,
+                &self.previous_imu,
+                self.options.antenna_lever_arm,
+                velocity,
+                fix.velocity_std,
+            );
+            self.apply(&m)?;
+        }
         Ok(())
+    }
+
+    /// Apply an auxiliary measurement and feed the correction back.
+    ///
+    /// Returns `false` when the measurement failed its chi-squared gate and was
+    /// discarded, leaving the filter untouched. Constructors for the supported
+    /// sensors are in [`crate::measurement`].
+    pub fn apply<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+        let accepted = match m.gate {
+            Some(threshold) => {
+                self.filter
+                    .update_gated(&m.innovation, &m.jacobian, &m.noise, threshold)?
+            }
+            None => {
+                self.filter.update(&m.innovation, &m.jacobian, &m.noise)?;
+                true
+            }
+        };
+        if accepted {
+            self.consecutive_rejections = 0;
+            self.feedback();
+        } else {
+            self.consecutive_rejections += 1;
+            let limit = self.options.max_consecutive_rejections;
+            if limit > 0 && self.consecutive_rejections >= limit {
+                // The measurements are not the problem; the covariance is.
+                self.filter.inflate(self.options.rejection_inflation);
+                self.consecutive_rejections = 0;
+                self.inflations = self.inflations.saturating_add(1);
+            }
+        }
+        Ok(accepted)
+    }
+
+    /// How many gated measurements have been rejected since the last accepted
+    /// one.
+    #[inline]
+    pub fn consecutive_rejections(&self) -> u32 {
+        self.consecutive_rejections
+    }
+
+    /// How many times the covariance has been inflated to recover from
+    /// persistent rejection.
+    ///
+    /// Non-zero means the filter has been confident and wrong at least once.
+    /// It is a health metric worth logging: a system that inflates repeatedly
+    /// has a modelling problem — usually process noise that is too small for
+    /// the errors actually present.
+    #[inline]
+    pub fn inflation_count(&self) -> u32 {
+        self.inflations
+    }
+
+    /// Apply a zero-velocity update at the current state.
+    ///
+    /// See [`measurement::zero_velocity`]; the caller decides *when*, usually
+    /// from a [`measurement::StationarityDetector`].
+    pub fn apply_zupt(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
+        let m = measurement::zero_velocity(&self.state.pva, sigma);
+        self.apply(&m)
+    }
+
+    /// Apply non-holonomic constraints at the current state.
+    ///
+    /// Only meaningful for a wheeled vehicle, and only while moving — the
+    /// constraint carries no information at rest but the Jacobian still claims
+    /// it does, so this returns `Ok(false)` below `min_speed` rather than
+    /// applying a measurement that would over-tighten the covariance.
+    pub fn apply_nonholonomic(&mut self, sigma: (F, F), min_speed: F) -> Result<bool, FilterError> {
+        if self.state.speed() < min_speed {
+            return Ok(false);
+        }
+        let m = measurement::nonholonomic(&self.state.pva, sigma);
+        self.apply(&m)
+    }
+
+    /// Apply an odometer / wheel-speed update, m/s along the body forward axis.
+    pub fn apply_wheel_speed(&mut self, speed: F, sigma: F) -> Result<bool, FilterError> {
+        let m = measurement::wheel_speed(&self.state.pva, speed, sigma);
+        self.apply(&m)
+    }
+
+    /// Apply a height update. `height` is above the WGS-84 **ellipsoid**.
+    pub fn apply_height(&mut self, height: F, sigma: F) -> Result<bool, FilterError> {
+        let m = measurement::height(&self.state.pva, height, sigma);
+        self.apply(&m)
+    }
+
+    /// Apply a heading update. `heading` is **true** heading in radians,
+    /// declination already removed.
+    pub fn apply_heading(&mut self, heading: F, sigma: F) -> Result<bool, FilterError> {
+        let m = measurement::magnetic_heading(&self.state.pva, heading, sigma);
+        self.apply(&m)
     }
 
     /// Apply the estimated error state to the navigation state and reset it.
@@ -253,6 +372,7 @@ impl GinsEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::measurement::{self, StationarityDetector};
     use approx::assert_relative_eq;
     use drifters_core::earth::Wgs84;
     use drifters_core::frames::Lla;
@@ -491,6 +611,435 @@ mod tests {
         for v in e.filter.dx.to_column() {
             assert_eq!(v, 0.0, "error state must be zero after feedback");
         }
+    }
+
+    // --- auxiliary measurements (M6) ------------------------------------
+
+    fn options_with(velocity: Ned, euler: Euler) -> GinsOptions {
+        GinsOptions::default().with_initial_state(origin(), velocity, euler)
+    }
+
+    #[test]
+    fn zupt_drives_velocity_to_zero() {
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(0.3, -0.2, 0.1), Euler::default())).unwrap();
+        assert!(e.apply_zupt(Vec3::splat(0.02)).unwrap());
+        assert!(
+            e.nav_state().speed() < 0.02,
+            "speed left at {} m/s",
+            e.nav_state().speed()
+        );
+    }
+
+    #[test]
+    fn zupt_shrinks_the_velocity_uncertainty() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let before = e.std_deviations()[V_ID];
+        e.apply_zupt(Vec3::splat(0.02)).unwrap();
+        let after = e.std_deviations()[V_ID];
+        assert!(after < before / 5.0, "sigma went {before} -> {after}");
+    }
+
+    #[test]
+    fn a_height_update_moves_the_solution_towards_the_measurement() {
+        // Validates the sign of the down-vs-height convention end to end: the
+        // error state's third position component is DOWN, height is UP.
+        let mut e = GinsEngine::new(options()).unwrap();
+        let start = e.nav_state().position().height;
+        assert_relative_eq!(start, 25.0, epsilon = 1e-9);
+        assert!(e.apply_height(20.0, 0.5).unwrap());
+        let after = e.nav_state().position().height;
+        assert!(
+            (after - 20.0).abs() < 0.5,
+            "height went {start} -> {after}, expected to approach 20"
+        );
+    }
+
+    #[test]
+    fn a_height_update_in_the_other_direction_also_tracks() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        e.apply_height(30.0, 0.5).unwrap();
+        let after = e.nav_state().position().height;
+        assert!((after - 30.0).abs() < 0.5, "height ended at {after}");
+    }
+
+    #[test]
+    fn a_heading_update_moves_yaw_towards_the_measurement() {
+        // Validates the sign of the attitude error's down component.
+        let mut e = GinsEngine::new(options_with(Ned::ZERO, Euler::new(0.0, 0.0, 0.1))).unwrap();
+        assert!(e.apply_heading(0.0, 0.01).unwrap());
+        let yaw = e.nav_state().euler().yaw;
+        assert!(yaw.abs() < 0.02, "yaw left at {yaw} rad");
+    }
+
+    #[test]
+    fn a_heading_update_tracks_a_negative_correction_too() {
+        let mut e = GinsEngine::new(options_with(Ned::ZERO, Euler::new(0.0, 0.0, -0.1))).unwrap();
+        e.apply_heading(0.0, 0.01).unwrap();
+        assert!(e.nav_state().euler().yaw.abs() < 0.02);
+    }
+
+    #[test]
+    fn a_wheel_speed_update_corrects_forward_velocity() {
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(10.0, 0.0, 0.0), Euler::default())).unwrap();
+        assert!(e.apply_wheel_speed(9.0, 0.05).unwrap());
+        assert!(
+            (e.nav_state().velocity().n - 9.0).abs() < 0.2,
+            "north velocity left at {}",
+            e.nav_state().velocity().n
+        );
+    }
+
+    #[test]
+    fn nonholonomic_constraints_reduce_lateral_slip() {
+        // Driving north-ish but pointing due north: the 2 m/s of east velocity
+        // is sideways slip the constraint should mostly remove.
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(10.0, 2.0, 0.0), Euler::default())).unwrap();
+        let lateral = |e: &GinsEngine| {
+            e.nav_state()
+                .pva
+                .attitude
+                .quat
+                .rotate_inverse(e.nav_state().velocity().to_vec3())
+                .y
+        };
+        let before = lateral(&e);
+        assert_relative_eq!(before, 2.0, epsilon = 1e-9);
+        assert!(e.apply_nonholonomic((0.05, 0.05), 1.0).unwrap());
+        let after = lateral(&e);
+        assert!(
+            after.abs() < before.abs() / 4.0,
+            "slip went {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn nonholonomic_constraints_are_skipped_at_rest() {
+        // At rest the constraint carries no information, but its linearised
+        // Jacobian still claims it does; applying it would falsely tighten the
+        // covariance.
+        let mut e = GinsEngine::new(options()).unwrap();
+        let before = e.std_deviations();
+        assert!(!e.apply_nonholonomic((0.05, 0.05), 1.0).unwrap());
+        assert_eq!(e.std_deviations()[PHI_ID + 2], before[PHI_ID + 2]);
+    }
+
+    #[test]
+    fn the_gate_rejects_a_gross_outlier_and_leaves_the_state_alone() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let before = e.nav_state().position().height;
+        let sigmas = e.std_deviations();
+        // 5 km of height error against a 0.5 m sigma is not a measurement.
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_eq!(e.nav_state().position().height, before);
+        assert_eq!(e.std_deviations()[P_ID + 2], sigmas[P_ID + 2]);
+    }
+
+    #[test]
+    fn an_ungated_measurement_is_applied_regardless() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let m = measurement::height(&e.nav_state().pva, 5_000.0, 0.5).with_gate(None);
+        assert!(e.apply(&m).unwrap());
+        assert!(e.nav_state().position().height > 1_000.0);
+    }
+
+    #[test]
+    fn gnss_velocity_is_applied_when_the_fix_carries_it() {
+        // The discrepancy has to be consistent with the covariance, or the
+        // gate correctly rejects it: 0.5 m/s against a 0.5 m/s prior is a
+        // one-sigma disagreement, 5 m/s would not be a measurement at all.
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(0.5, 0.0, 0.0), Euler::default())).unwrap();
+        for i in 1..=100 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        let mut fix = GnssFix::position_only(
+            GpsTime::from_tow(1.005),
+            e.nav_state().position(),
+            Vec3::splat(0.5),
+        );
+        fix.velocity = Some(Ned::ZERO);
+        fix.velocity_std = Vec3::splat(0.05);
+        e.add_gnss(fix);
+        e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
+        assert!(
+            e.nav_state().speed() < 0.1,
+            "velocity fix ignored; speed still {}",
+            e.nav_state().speed()
+        );
+    }
+
+    #[test]
+    fn a_wildly_inconsistent_velocity_fix_is_gated_out() {
+        // The mirror of the test above: the same machinery must refuse a fix
+        // that disagrees with the state far beyond what the covariance allows.
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(5.0, 0.0, 0.0), Euler::default())).unwrap();
+        for i in 1..=100 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        let mut fix = GnssFix::position_only(
+            GpsTime::from_tow(1.005),
+            e.nav_state().position(),
+            Vec3::splat(0.5),
+        );
+        fix.velocity = Some(Ned::ZERO);
+        fix.velocity_std = Vec3::splat(0.05);
+        e.add_gnss(fix);
+        e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
+        assert!(
+            e.nav_state().speed() > 4.9,
+            "a 10-sigma outlier was accepted"
+        );
+        assert_eq!(e.consecutive_rejections(), 1);
+    }
+
+    #[test]
+    fn a_velocity_fix_without_a_sigma_is_ignored_rather_than_trusted_absolutely() {
+        let mut e =
+            GinsEngine::new(options_with(Ned::new(5.0, 0.0, 0.0), Euler::default())).unwrap();
+        for i in 1..=100 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        // Compared against an otherwise identical run whose fix carries no
+        // velocity at all: the two must be indistinguishable. (The position
+        // part of the fix is still applied in both, so comparing against the
+        // pre-update sigma would be wrong.)
+        let mut reference =
+            GinsEngine::new(options_with(Ned::new(5.0, 0.0, 0.0), Euler::default())).unwrap();
+        for i in 1..=100 {
+            reference
+                .add_imu(stationary_sample(&reference, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+
+        let base = GnssFix::position_only(
+            GpsTime::from_tow(1.005),
+            e.nav_state().position(),
+            Vec3::splat(0.5),
+        );
+        let mut with_velocity = base;
+        with_velocity.velocity = Some(Ned::ZERO);
+        // velocity_std left at zero — an "infinitely certain" measurement.
+        e.add_gnss(with_velocity);
+        e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
+
+        reference.add_gnss(base);
+        reference
+            .add_imu(stationary_sample(&reference, 0.01, 1.01))
+            .unwrap();
+
+        assert_relative_eq!(
+            e.std_deviations()[V_ID],
+            reference.std_deviations()[V_ID],
+            epsilon = 1e-12
+        );
+        assert_relative_eq!(
+            e.nav_state().speed(),
+            reference.nav_state().speed(),
+            epsilon = 1e-12
+        );
+    }
+
+    /// Run a stationary vehicle with an injected accelerometer bias and no
+    /// GNSS, optionally applying a ZUPT every second. Returns the final
+    /// horizontal position drift in metres.
+    fn outage_drift(with_zupt: bool, seconds: F) -> (F, F) {
+        let bias = 0.02;
+        let mut e = GinsEngine::new(options()).unwrap();
+        let steps = (seconds / 0.01) as usize;
+        for i in 1..=steps {
+            let t = i as F * 0.01;
+            let mut s = stationary_sample(&e, 0.01, t);
+            s.dvel.x += bias * s.dt;
+            e.add_imu(s).unwrap();
+            if with_zupt && i % 100 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+            }
+        }
+        (
+            e.nav_state()
+                .position()
+                .ned_from(origin())
+                .horizontal_norm(),
+            e.nav_state().imu_error.accel_bias.x,
+        )
+    }
+
+    #[test]
+    fn zupt_bounds_drift_through_a_gnss_outage() {
+        // The headline result for M6, over a realistic stop: a vehicle waiting
+        // at a light for half a minute. A 0.02 m/s^2 accelerometer bias with no
+        // aiding integrates twice, 0.5*a*t^2, to about 9 m in 30 s.
+        let (free, _) = outage_drift(false, 30.0);
+        assert!(
+            free > 5.0,
+            "dead reckoning drifted only {free} m; check the setup"
+        );
+
+        let (aided, estimated_bias) = outage_drift(true, 30.0);
+        assert!(
+            aided < free / 50.0,
+            "ZUPT left {aided} m of drift against {free} m unaided"
+        );
+        // Holding velocity at zero is what makes the bias observable at all:
+        // stationary, with no GNSS, nothing else can see it.
+        assert!(
+            estimated_bias > 0.5 * 0.02,
+            "bias estimate {estimated_bias} did not converge towards 0.02"
+        );
+    }
+
+    #[test]
+    fn stationary_zupt_cannot_separate_accelerometer_bias_from_tilt() {
+        // A limitation, pinned as a test so it stays a known property rather
+        // than becoming a surprise.
+        //
+        // Stationary, the velocity-error dynamics are
+        //     d(dv_N)/dt = db_a,N + g * phi_E
+        // so an accelerometer bias and a platform tilt produce *identical*
+        // signatures. ZUPT observes only their sum. With both states free the
+        // pair drifts apart along that unobservable direction, and past a few
+        // tens of seconds the tilt's gravity mis-projection (g * phi, i.e.
+        // 0.04 m/s^2 at only 4 mrad) grows to dominate the bias it was meant to
+        // absorb.
+        //
+        // Freezing either state removes the ambiguity and the run stays stable
+        // — which is what demonstrates the cause is observability, not a sign
+        // error in the model. Real systems break the tie with motion, GNSS, or
+        // a tilt aid rather than running ZUPT alone for minutes. Tracked as an
+        // M6 follow-up in docs/milestones.md.
+        let long = 120.0;
+        let (free_pair, _) = outage_drift(true, long);
+
+        let frozen_tilt = {
+            let mut o = options();
+            o.initial_attitude_std = Vec3::splat(1e-12);
+            run_stationary_with_zupt(o, long)
+        };
+        assert!(
+            frozen_tilt < free_pair / 10.0,
+            "freezing tilt gave {frozen_tilt} m vs {free_pair} m with both states free; \
+             if these were comparable the divergence would not be an observability effect"
+        );
+    }
+
+    /// Same scenario as [`outage_drift`] with ZUPT, but with caller-supplied
+    /// options. Returns the final horizontal drift in metres.
+    fn run_stationary_with_zupt(options: GinsOptions, seconds: F) -> F {
+        let bias = 0.02;
+        let mut e = GinsEngine::new(options).unwrap();
+        let steps = (seconds / 0.01) as usize;
+        for i in 1..=steps {
+            let t = i as F * 0.01;
+            let mut s = stationary_sample(&e, 0.01, t);
+            s.dvel.x += bias * s.dt;
+            e.add_imu(s).unwrap();
+            if i % 100 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+            }
+        }
+        e.nav_state()
+            .position()
+            .ned_from(origin())
+            .horizontal_norm()
+    }
+
+    #[test]
+    fn a_locked_out_filter_inflates_its_covariance_to_recover() {
+        // Persistent rejection means the covariance is wrong, not the
+        // measurements. Without recovery the filter would reject every
+        // subsequent update forever and freeze at a wrong state.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for _ in 0..9 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections(), 9);
+        assert_eq!(e.inflation_count(), 0);
+
+        let sigma_before = e.std_deviations()[P_ID + 2];
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_eq!(
+            e.inflation_count(),
+            1,
+            "tenth rejection must trigger inflation"
+        );
+        assert_eq!(
+            e.consecutive_rejections(),
+            0,
+            "counter restarts after inflating"
+        );
+        assert_relative_eq!(
+            e.std_deviations()[P_ID + 2],
+            sigma_before * 2.0,
+            epsilon = 1e-9
+        );
+    }
+
+    #[test]
+    fn inflation_can_be_disabled() {
+        let mut o = options();
+        o.max_consecutive_rejections = 0;
+        let mut e = GinsEngine::new(o).unwrap();
+        let sigma = e.std_deviations()[P_ID + 2];
+        for _ in 0..50 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        }
+        assert_eq!(e.inflation_count(), 0);
+        assert_relative_eq!(e.std_deviations()[P_ID + 2], sigma, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn an_accepted_measurement_clears_the_rejection_counter() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_eq!(e.consecutive_rejections(), 1);
+        assert!(e.apply_height(25.5, 0.5).unwrap());
+        assert_eq!(e.consecutive_rejections(), 0);
+    }
+
+    #[test]
+    fn zupt_keeps_the_filter_healthy_over_a_long_run() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=20_000 {
+            let t = i as F * 0.01;
+            e.add_imu(stationary_sample(&e, 0.01, t)).unwrap();
+            if i % 100 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+            }
+        }
+        assert!(e.filter.is_healthy());
+        assert_relative_eq!(e.covariance().asymmetry(), 0.0, epsilon = 1e-10);
+        assert!(
+            drifters_core::math::Cholesky::new(e.covariance()).is_some(),
+            "covariance lost positive definiteness over 200 s of ZUPTs"
+        );
+    }
+
+    #[test]
+    fn the_stationarity_detector_drives_zupt_end_to_end() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let mut detector = StationarityDetector::<50>::default();
+        let mut zupts = 0;
+        for i in 1..=2_000 {
+            let t = i as F * 0.01;
+            let s = stationary_sample(&e, 0.01, t);
+            e.add_imu(s).unwrap();
+            if detector.update(&s) {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+                zupts += 1;
+            }
+        }
+        assert!(
+            zupts > 1_000,
+            "detector only fired {zupts} times on still data"
+        );
+        assert!(e.nav_state().position().ned_from(origin()).norm() < 0.1);
     }
 
     #[test]

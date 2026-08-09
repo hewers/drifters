@@ -35,6 +35,7 @@
 //! # Crate layout
 //!
 //! - [`mechanization`] — the strapdown INS integration.
+//! - [`measurement`] — auxiliary sensor models (ZUPT, NHC, odometer, …).
 //! - [`eskf`] — transition matrix, predict and Joseph-form update.
 //! - [`engine`] — the orchestration, including GNSS epoch alignment.
 //! - [`state`] — the error-state index map.
@@ -50,10 +51,12 @@ extern crate std;
 pub mod config;
 pub mod engine;
 pub mod eskf;
+pub mod measurement;
 pub mod mechanization;
 pub mod state;
 
 pub use config::{ConfigError, GinsOptions};
 pub use engine::GinsEngine;
 pub use eskf::{Eskf, FilterError};
+pub use measurement::{Measurement, StationarityConfig, StationarityDetector};
 pub use mechanization::mechanize;

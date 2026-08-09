@@ -38,6 +38,19 @@ pub struct GinsOptions {
     /// down from the IMU reference point). This is the lever arm; getting its
     /// sign wrong shows up as a heading-dependent position bias.
     pub antenna_lever_arm: Vec3,
+    /// Consecutive gate rejections tolerated before the covariance is inflated.
+    ///
+    /// A filter that rejects every measurement is not being robust, it is
+    /// broken: its covariance has become confident and wrong, so it discards
+    /// exactly the information that would fix it. This bounds how long that can
+    /// go on. Zero disables the recovery entirely.
+    pub max_consecutive_rejections: u32,
+    /// Covariance scale factor applied when that limit is reached.
+    ///
+    /// 4.0 doubles every standard deviation, which is aggressive enough to
+    /// re-admit measurements within a few cycles without discarding what the
+    /// filter has learned about correlations.
+    pub rejection_inflation: F,
 }
 
 impl Default for GinsOptions {
@@ -55,6 +68,8 @@ impl Default for GinsOptions {
             initial_accel_scale_std: Vec3::splat(1000.0 * PPM),
             imu_noise: ImuNoise::default(),
             antenna_lever_arm: Vec3::ZERO,
+            max_consecutive_rejections: 10,
+            rejection_inflation: 4.0,
         }
     }
 }
@@ -126,6 +141,10 @@ impl GinsOptions {
         if !self.antenna_lever_arm.is_finite() {
             return Some(ConfigError::InvalidLeverArm);
         }
+        // `is_finite` carries the NaN case, so the comparison can stay direct.
+        if !self.rejection_inflation.is_finite() || self.rejection_inflation < 1.0 {
+            return Some(ConfigError::InvalidInflation);
+        }
         None
     }
 }
@@ -145,6 +164,10 @@ pub enum ConfigError {
     NegativeProcessNoise,
     /// The lever arm contains a non-finite component.
     InvalidLeverArm,
+    /// Covariance inflation must be finite and at least 1.0 — a factor below
+    /// one would shrink the covariance, making the deadlock it exists to break
+    /// permanent.
+    InvalidInflation,
 }
 
 impl ConfigError {
@@ -156,6 +179,7 @@ impl ConfigError {
             Self::NonPositiveInitialStd => "initial standard deviations must be > 0",
             Self::NegativeProcessNoise => "process noise densities must be >= 0",
             Self::InvalidLeverArm => "antenna lever arm is not finite",
+            Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
         }
     }
 }

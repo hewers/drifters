@@ -231,3 +231,48 @@ Worth knowing when a state refuses to converge:
   needs rotation. A vehicle driving in a straight line at constant speed
   observes neither.
 - **The vertical channel** needs an external height aid, always.
+
+### Horizontal accelerometer bias and tilt are the same measurement
+
+The sharpest case, and the one most likely to be mistaken for a bug. Stationary
+and level, the horizontal velocity-error dynamics reduce to
+
+```text
+d(δv_N)/dt = δb_a,N + g·φ_E
+d(δv_E)/dt = δb_a,E − g·φ_N
+```
+
+An accelerometer bias and a platform tilt produce **identical** signatures: a
+4 mrad tilt mis-projects gravity by 0.04 m/s², already twice a typical MEMS bias.
+Nothing that observes velocity alone — ZUPT above all — can separate them. Only
+the sums `δb_a,N + g·φ_E` and `δb_a,E − g·φ_N` are observable.
+
+The practical consequence is a real limit on ZUPT-only aiding. With both states
+free, the pair drifts apart along the unobservable direction while their sum
+stays correct; past a few tens of seconds the tilt error grows large enough that
+its gravity mis-projection dominates, and the solution degrades even though
+every individual update was applied correctly. Measured with the defaults in
+`GinsOptions` and a 0.02 m/s² bias, a stationary run with ZUPT every second is
+excellent for ~30 s (12 mm of drift against 9 m unaided) and unusable by ~60 s.
+
+Freezing *either* state makes the run stable, which is what identifies the cause
+as observability rather than a sign error — `stationary_zupt_cannot_separate_
+accel_bias_from_tilt` in `engine.rs` pins exactly that. With a perfect IMU the
+filter is exact indefinitely.
+
+What actually fixes it is more information, not more tuning:
+
+- **Motion.** Acceleration and turning break the ambiguity directly.
+- **A height aid,** which anchors the vertical channel that the tilt states feed.
+- **Periodic GNSS.** Position updates observe the tilt through the `[f^n×]φ`
+  coupling in a way velocity alone cannot.
+- **Constraining the unobservable direction** — holding tilt fixed during long
+  stationary periods, or estimating only the observable combination. Tracked as
+  an M6 follow-up in `docs/milestones.md`.
+
+The chi-squared gate does *not* rescue this, and makes it worse if left alone:
+once the estimate has drifted, every ZUPT looks like an outlier and is rejected,
+so the filter freezes at a wrong state. That specific failure — persistent
+rejection — is what [`GinsOptions::max_consecutive_rejections`] and covariance
+inflation exist to break. Inflation restores the filter's ability to accept
+measurements; it does not manufacture the observability that was missing.

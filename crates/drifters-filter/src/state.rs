@@ -111,7 +111,7 @@ mod size_tests {
         );
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            4_912,
+            4_936,
             "whole engine"
         );
     }

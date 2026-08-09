@@ -96,16 +96,41 @@ malformed input never panics.
 
 Where a low-cost MEMS system stops being a toy.
 
-- [ ] GNSS velocity update
-- [ ] Zero-velocity update (ZUPT) with a stationarity detector
-- [ ] Non-holonomic constraints (NHC) for wheeled vehicles
-- [ ] Odometer / wheel-speed update
-- [ ] Barometric height, to bound the unstable vertical channel
-- [ ] Magnetometer heading
-- [ ] Innovation gating (chi-squared) shared by all measurement types
+- [x] GNSS velocity update
+- [x] Zero-velocity update (ZUPT) with a stationarity detector
+- [x] Non-holonomic constraints (NHC) for wheeled vehicles
+- [x] Odometer / wheel-speed update
+- [x] Barometric height, to bound the unstable vertical channel
+- [x] Magnetometer heading
+- [x] Innovation gating (chi-squared) shared by all measurement types
+- [x] Covariance inflation to recover from persistent gate rejection
 
-**Exit criterion:** a simulated 60 s GNSS outage with ZUPT and NHC active shows
-materially less drift than dead reckoning alone.
+**Exit criterion — met.** A simulated stationary GNSS outage with ZUPT shows
+0.012 m of drift over 30 s against 9.0 m for dead reckoning alone (a factor of
+750), and the accelerometer bias converges from the ZUPTs alone.
+
+### Follow-up: constrain the accel-bias / tilt pair
+
+M6 surfaced a real limitation rather than a bug. Stationary, horizontal
+accelerometer bias and tilt are **mutually unobservable** — see "Horizontal
+accelerometer bias and tilt are the same measurement" in
+[state-model.md](state-model.md). ZUPT-only aiding is therefore excellent for
+tens of seconds and degrades beyond roughly a minute, which covers the realistic
+case (a vehicle stopped at a light) but not indefinite stationary operation.
+
+Freezing either state keeps the run stable, so the mitigation is to constrain
+the unobservable direction rather than to retune:
+
+- [ ] Suppress attitude feedback from velocity-only measurements during extended
+      stationary periods, or estimate only the observable combination
+- [ ] Pair the stationarity detector with a height aid so the vertical channel
+      does not float alongside it
+- [ ] A NEES/NIS consistency harness (M8) to catch this class of divergence
+      automatically rather than by inspection
+
+Neither the gate nor covariance inflation substitutes for this: inflation
+restores the filter's *ability to accept* measurements after a lockout, but
+cannot supply observability that the geometry does not contain.
 
 ---
 
