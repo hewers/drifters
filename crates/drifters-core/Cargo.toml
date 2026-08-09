@@ -1,0 +1,32 @@
+[package]
+name = "drifters-core"
+description = "no_std core types for GNSS/INS navigation: fixed-size linear algebra, quaternions, WGS-84 earth model and frame transforms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+categories = ["no-std", "science", "embedded"]
+keywords = ["navigation", "gnss", "ins", "kalman", "imu"]
+
+[dependencies]
+libm = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+default = []
+## Adds `std`-only conveniences (`std::error::Error` impls, `Display` helpers).
+## Does **not** change any arithmetic: scalar math always goes through `libm`
+## so results are bit-identical on host and target. See docs/adr/0004.
+std = []
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

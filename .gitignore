@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# Local validation datasets (see docs/testing.md for how to fetch them).
+/datasets/

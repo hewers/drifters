@@ -1,0 +1,101 @@
+// The filter's output, and the configuration that produced it.
+
+syntax = "proto3";
+
+package drifters.v1;
+
+import "drifters/v1/types.proto";
+
+// Estimated IMU deterministic errors. The mechanization removes these from
+// every raw sample: corrected = (raw - bias*dt) / (1 + scale).
+message ImuError {
+  // Gyroscope bias, rad/s.
+  Vec3 gyro_bias_rps = 1;
+  // Accelerometer bias, m/s^2.
+  Vec3 accel_bias_mps2 = 2;
+  // Gyroscope scale-factor error, dimensionless (1e-6 is 1 ppm).
+  Vec3 gyro_scale = 3;
+  // Accelerometer scale-factor error, dimensionless.
+  Vec3 accel_scale = 4;
+}
+
+// A navigation solution at one epoch.
+message NavSolution {
+  GpsTime time = 1;
+  // Position of the IMU reference point, not the GNSS antenna.
+  Lla position = 2;
+  // Ground velocity in the NED navigation frame, m/s.
+  Ned velocity_mps = 3;
+  // Attitude q_nb. Authoritative.
+  Quaternion attitude = 4;
+  // Attitude as Euler angles. Derived from `attitude`, carried for the
+  // convenience of consumers that only plot; never round-trip through it.
+  Euler euler = 5;
+  // Estimated IMU errors at this epoch.
+  ImuError imu_error = 6;
+  // Per-state one-sigma uncertainties, 21 elements in the order given by
+  // drifters_filter::state: position, velocity, attitude, gyro bias, accel
+  // bias, gyro scale, accel scale.
+  repeated double state_std = 7 [packed = true];
+}
+
+// The full 21x21 error-state covariance, row-major, 441 elements.
+//
+// Separate from NavSolution because it is large and usually only wanted for
+// diagnostics — logging it at IMU rate is rarely what anyone means to do.
+message Covariance {
+  GpsTime time = 1;
+  repeated double row_major = 2 [packed = true];
+}
+
+// Continuous-time IMU stochastic error parameters.
+//
+// Biases and scale factors are first-order Gauss-Markov with correlation time
+// `correlation_time_s`; the random walks are white noise on rate and specific
+// force.
+message ImuNoise {
+  // Angle random walk, rad/sqrt(s). Datasheets usually quote deg/sqrt(hour):
+  // multiply by pi/180/60.
+  Vec3 gyro_arw = 1;
+  // Velocity random walk, (m/s)/sqrt(s). Datasheets usually quote
+  // m/s/sqrt(hour): divide by 60.
+  Vec3 accel_vrw = 2;
+  // Gyro bias process standard deviation, rad/s.
+  Vec3 gyro_bias_std_rps = 3;
+  // Accelerometer bias process standard deviation, m/s^2.
+  Vec3 accel_bias_std_mps2 = 4;
+  // Gyro scale-factor process standard deviation, dimensionless.
+  Vec3 gyro_scale_std = 5;
+  // Accelerometer scale-factor process standard deviation, dimensionless.
+  Vec3 accel_scale_std = 6;
+  // Gauss-Markov correlation time, seconds. Must be > 0.
+  double correlation_time_s = 7;
+}
+
+// Everything the engine needs to start.
+//
+// The initial standard deviations matter as much as the initial state: they set
+// the diagonal of P and therefore how hard the first fixes are allowed to pull
+// the solution. All must be strictly positive.
+message GinsOptions {
+  Lla initial_position = 1;
+  Ned initial_velocity_mps = 2;
+  Euler initial_attitude = 3;
+  ImuError initial_imu_error = 4;
+
+  Vec3 initial_position_std_m = 5;
+  Vec3 initial_velocity_std_mps = 6;
+  // One-sigma initial attitude uncertainty, radians (roll, pitch, yaw).
+  Vec3 initial_attitude_std_rad = 7;
+  Vec3 initial_gyro_bias_std_rps = 8;
+  Vec3 initial_accel_bias_std_mps2 = 9;
+  Vec3 initial_gyro_scale_std = 10;
+  Vec3 initial_accel_scale_std = 11;
+
+  ImuNoise imu_noise = 12;
+
+  // GNSS antenna phase centre in the BODY frame, metres (forward, right, down
+  // from the IMU reference point). A sign error here appears as a
+  // heading-dependent position bias.
+  Vec3 antenna_lever_arm_m = 13;
+}

@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/drifters-core",
+    "crates/drifters-filter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hewers/drifters"
+authors = ["drifters contributors"]
+
+[workspace.dependencies]
+drifters-core = { version = "0.1.0", path = "crates/drifters-core", default-features = false }
+drifters-filter = { version = "0.1.0", path = "crates/drifters-filter", default-features = false }
+drifters-proto = { version = "0.1.0", path = "crates/drifters-proto", default-features = false }
+
+# The only non-dev dependency permitted in the no_std core stack.
+libm = "0.2"
+
+# dev / host-only
+approx = "0.5"
+proptest = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+# Embedded profile: optimise for size, keep overflow checks on so a filter
+# divergence traps instead of silently wrapping.
+[profile.embedded]
+inherits = "release"
+opt-level = "s"
+overflow-checks = true
+debug-assertions = false

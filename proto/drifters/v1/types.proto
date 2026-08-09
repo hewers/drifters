@@ -1,0 +1,68 @@
+// Common value types shared across the drifters schemas.
+//
+// Conventions, matching the in-memory types exactly so that serialization is
+// never a place where a unit conversion can hide:
+//
+//   * angles are RADIANS
+//   * lengths are METRES
+//   * `double` throughout for anything positional — a geodetic latitude needs
+//     more resolution than `float` can carry
+//   * every field name carries its unit where there is any doubt
+//
+// See docs/frames.md for the frame definitions.
+
+syntax = "proto3";
+
+package drifters.v1;
+
+// An instant in GPS time. Differences within a run stay exact; the week number
+// is not modulo-1024.
+message GpsTime {
+  uint32 week = 1;
+  // Time of week, seconds in [0, 604800).
+  double tow_s = 2;
+}
+
+// A generic 3-vector. What the components mean depends on the field that
+// carries it.
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Geodetic position on the WGS-84 ellipsoid.
+message Lla {
+  // Geodetic latitude, radians, positive north.
+  double lat_rad = 1;
+  // Longitude, radians, positive east.
+  double lon_rad = 2;
+  // Height above the WGS-84 ELLIPSOID, metres. Not orthometric height —
+  // a receiver reporting height above mean sea level must have the geoid
+  // undulation added back before it reaches this field.
+  double height_m = 3;
+}
+
+// A local tangent-plane displacement, north-east-down, metres.
+message Ned {
+  double north_m = 1;
+  double east_m = 2;
+  double down_m = 3;
+}
+
+// Attitude as a Hamilton quaternion q_nb, rotating body vectors into the
+// navigation frame. Scalar first, normally unit length.
+message Quaternion {
+  double w = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+}
+
+// Roll, pitch, yaw in radians, Z-Y-X aerospace sequence. Output only —
+// the filter never uses Euler angles internally.
+message Euler {
+  double roll_rad = 1;
+  double pitch_rad = 2;
+  double yaw_rad = 3;
+}
