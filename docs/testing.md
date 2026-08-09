@@ -120,7 +120,10 @@ not broken by not having it. CI does not fetch it; run it locally with:
 cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 ```
 
-Release mode matters — the debug build takes minutes rather than seconds.
+Release mode is not optional here: the same run takes **503 s in debug against
+11 s in release**. The test therefore skips in a debug build unless
+`DRIFTERS_REGRESSION_DEBUG=1` is set, so that a plain `cargo test --workspace`
+does not quietly spend eight minutes inside one test.
 
 ### What is measured
 

@@ -57,6 +57,19 @@ fn the_demo_dataset_replays_within_tolerance() {
         return;
     };
 
+    // Measured: 503 s in a debug build against 11 s in release, for identical
+    // results. Silently spending eight minutes inside a plain
+    // `cargo test --workspace` is not a reasonable default, so skip unless the
+    // build is optimised or the caller has explicitly asked for it.
+    if cfg!(debug_assertions) && std::env::var_os("DRIFTERS_REGRESSION_DEBUG").is_none() {
+        eprintln!(
+            "skipping: debug build takes ~500 s against ~11 s in release.\n\
+             Run `cargo test -p drifters-cli --release --test kf_gins_regression`,\n\
+             or set DRIFTERS_REGRESSION_DEBUG=1 to run it here anyway."
+        );
+        return;
+    }
+
     let config = kfgins::Config::read(&dir.join("kf-gins.yaml")).expect("config parses");
     let imu = kfgins::read_imu(&dir.join("Leador-A15.txt"), 2119).expect("imu parses");
     let gnss = kfgins::read_gnss(&dir.join("GNSS-RTK.txt"), 2119).expect("gnss parses");
