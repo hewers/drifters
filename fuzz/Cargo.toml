@@ -1,0 +1,31 @@
+[package]
+name = "drifters-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Excluded from the workspace: cargo-fuzz builds with its own flags and a
+# nightly toolchain, and `cargo test --workspace` must not try to build it.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+drifters-core = { path = "../crates/drifters-core" }
+drifters-filter = { path = "../crates/drifters-filter" }
+drifters-proto = { path = "../crates/drifters-proto" }
+micropb = { version = "0.6", default-features = false, features = [
+    "encode",
+    "decode",
+    "enable-64bit",
+    "container-heapless-0-9",
+] }
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false

@@ -78,18 +78,41 @@ truth; an injected accelerometer bias is recovered. ✅
 
 ---
 
-## M5 — Protobuf serialization 🔨 in progress
+## M5 — Protobuf serialization
 
 - [x] Schemas for `ImuSample`, `GnssFix`, `NavSolution`, `GinsOptions`,
       `Covariance`
-- [ ] `micropb` code generation, output checked in
-- [ ] `drifters-proto` conversions to and from the core types, round-trip tested
-- [ ] `xtask proto` regeneration command, via `protox` — pure Rust, no `protoc`
+- [x] `micropb` code generation, output checked in
+- [x] `drifters-proto` conversions to and from the core types, round-trip tested
+- [x] `xtask proto` regeneration command, via `protox` — pure Rust, no `protoc`
       binary required (see [adr/0002](adr/0002-protobuf.md))
-- [ ] Decode fuzz target
+- [x] Decode fuzz target
+- [x] Schemas extended to cover the M6 sensors and the rejection-recovery
+      configuration
 
-**Exit criterion:** every core type round-trips through protobuf without loss;
-malformed input never panics.
+**Exit criterion — met.** Every core type round-trips through the real wire
+format without loss, verified bit-exactly for position and velocity; malformed
+input is rejected with a named error rather than panicking.
+
+### Notes
+
+`double` is a fixed64 on the wire, so positional values round-trip **bit
+exactly** — the tests assert equality, not approximate equality, because a
+geodetic latitude carries about 1e-9 rad of meaning and anything looser would
+be millimetres of silent error.
+
+Decoding is treated as a trust boundary. Proto3 has no required fields, so an
+absent message decodes to zeros; a zero `dt` divides by zero in the
+mechanization, a zero position sigma makes the innovation covariance singular,
+and a zero quaternion is not a rotation. Every `TryFrom` therefore validates and
+returns `ConvertError` rather than letting the value reach the filter, where it
+would surface later as a `NaN` covariance with nothing left to point at the
+cause.
+
+The "malformed input never panics" property is checked two ways: the `cargo
+fuzz` target for depth, and a deterministic proptest sweep plus a hostile-input
+corpus in the ordinary test suite, so the property still holds in CI without a
+nightly toolchain.
 
 ---
 

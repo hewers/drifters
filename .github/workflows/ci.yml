@@ -58,6 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p drifters-core --target ${{ matrix.target }}
       - run: cargo build -p drifters-filter --target ${{ matrix.target }}
+      - run: cargo build -p drifters-proto --target ${{ matrix.target }}
 
   msrv:
     name: minimum supported Rust
@@ -85,3 +86,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # The checked-in protobuf bindings must match the schemas that produced them.
+  # `cargo xtask proto` needs no `protoc` — the whole toolchain is pure Rust,
+  # so this job installs nothing beyond the Rust toolchain itself.
+  proto:
+    name: generated bindings are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask proto --check
+
+  # The fuzz target needs nightly, so it cannot run in the main test job. A
+  # short run on every push catches a target that stopped compiling; depth comes
+  # from running it out of band.
+  fuzz:
+    name: fuzz decode (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run decode -- -max_total_time=60
+        working-directory: fuzz

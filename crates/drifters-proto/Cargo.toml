@@ -1,0 +1,44 @@
+[package]
+name = "drifters-proto"
+description = "no_std protobuf serialization for drifters GNSS/INS types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+categories = ["no-std", "encoding", "embedded"]
+keywords = ["navigation", "protobuf", "gnss", "ins", "no-std"]
+
+[dependencies]
+drifters-core = { workspace = true }
+drifters-filter = { workspace = true }
+# Allocation-free protobuf runtime. `container-heapless` supplies the
+# fixed-capacity vectors the generated repeated fields use.
+micropb = { version = "0.6", default-features = false, features = [
+    "encode",
+    "decode",
+    "enable-64bit",
+    "container-heapless-0-9",
+] }
+heapless = "0.9"
+
+[dev-dependencies]
+approx = { workspace = true }
+proptest = { workspace = true }
+# Doctests link dev-dependencies, not the crate's own dependencies, so these
+# are repeated here to keep the usage example compiling.
+micropb = { version = "0.6", default-features = false, features = [
+    "encode",
+    "decode",
+    "enable-64bit",
+    "container-heapless-0-9",
+] }
+heapless = "0.9"
+
+[features]
+default = []
+std = ["drifters-core/std", "drifters-filter/std"]
+
+[lints.rust]
+unsafe_code = "forbid"

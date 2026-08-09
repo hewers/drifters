@@ -98,4 +98,12 @@ message GinsOptions {
   // from the IMU reference point). A sign error here appears as a
   // heading-dependent position bias.
   Vec3 antenna_lever_arm_m = 13;
+
+  // Consecutive chi-squared gate rejections tolerated before the covariance is
+  // inflated. A filter that rejects every measurement has a covariance that is
+  // confident and wrong, and discards exactly the information that would fix
+  // it. Zero disables the recovery.
+  uint32 max_consecutive_rejections = 14;
+  // Covariance scale factor applied when that limit is reached. Must be >= 1.
+  double rejection_inflation = 15;
 }

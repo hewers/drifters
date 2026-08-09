@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+description = "Repository automation. Not published, and never a dependency of any shipped crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# Pure-Rust protobuf compiler: parses .proto into a FileDescriptorSet with no
+# `protoc` binary anywhere. See docs/adr/0002-protobuf.md for why the weight of
+# this dependency tree is acceptable here and nowhere else.
+protox = "0.9"
+prost = "0.14"
+micropb-gen = "0.6"

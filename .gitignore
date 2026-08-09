@@ -4,3 +4,6 @@
 
 # Local validation datasets (see docs/testing.md for how to fetch them).
 /datasets/
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts

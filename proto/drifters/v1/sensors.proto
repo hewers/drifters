@@ -43,8 +43,8 @@ message GnssFix {
   Vec3 velocity_std_mps = 5;
 }
 
-// Auxiliary measurements. Reserved for milestone M6; the field numbers are
-// claimed now so that adding them later cannot collide.
+// Auxiliary measurements — the aiding sources that keep a low-cost system
+// usable through a GNSS outage.
 message AuxMeasurement {
   GpsTime time = 1;
 
@@ -55,6 +55,10 @@ message AuxMeasurement {
     BarometricHeight barometric_height = 3;
     // Odometer / wheel speed along the body forward axis.
     WheelSpeed wheel_speed = 4;
+    // Non-holonomic constraints for a wheeled vehicle.
+    NonHolonomic non_holonomic = 5;
+    // Magnetometer heading.
+    MagneticHeading magnetic_heading = 6;
   }
 }
 
@@ -73,4 +77,24 @@ message WheelSpeed {
   // Speed along the body forward axis, m/s.
   double speed_mps = 1;
   double speed_std_mps = 2;
+}
+
+// A wheeled vehicle does not slip sideways and does not leave the ground, so
+// the body-frame lateral and vertical velocities are zero.
+message NonHolonomic {
+  // One-sigma slip allowance, lateral (body y), m/s.
+  double lateral_std_mps = 1;
+  // One-sigma allowance, vertical (body z), m/s.
+  double vertical_std_mps = 2;
+  // Minimum speed below which the constraint carries no information and must
+  // not be applied, m/s.
+  double min_speed_mps = 3;
+}
+
+message MagneticHeading {
+  // TRUE heading, radians clockwise from north. Magnetic declination must
+  // already have been applied — feeding magnetic heading here produces a bias
+  // equal to the local declination, which reaches tens of degrees.
+  double heading_rad = 1;
+  double heading_std_rad = 2;
 }
