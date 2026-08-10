@@ -35,8 +35,20 @@ use drifters_filter::state::{StateMatrix, N_STATE};
 
 use crate::pb;
 
-/// The number of elements in a serialized covariance.
+/// The number of elements this build serializes into a covariance message.
+///
+/// `N_STATE²` — 441 for the default 21-state filter, 225 under
+/// `reduced-state`.
 pub const COVARIANCE_LEN: usize = N_STATE * N_STATE;
+
+/// Capacity of the covariance field on the wire, fixed at 21 states.
+///
+/// The **schema does not change with a build feature**. A 15-state build writes
+/// 225 elements into a container sized for 441; a reader then rejects anything
+/// whose length does not match its own `N_STATE`. Sizing the wire field by the
+/// local build would instead make two peers silently incompatible depending on
+/// how each was compiled.
+const WIRE_COVARIANCE_CAPACITY: usize = 21 * 21;
 
 /// Why a decoded message could not become an in-memory value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,7 +439,7 @@ pub fn state_std(msg: &pb::NavSolution) -> Result<Option<[F; N_STATE]>, ConvertE
 pub fn covariance(time: GpsTime, p: &StateMatrix) -> pb::Covariance {
     let mut msg = pb::Covariance::default();
     msg.set_time((&time).into());
-    let mut flat = heapless::Vec::<f64, COVARIANCE_LEN>::new();
+    let mut flat = heapless::Vec::<f64, WIRE_COVARIANCE_CAPACITY>::new();
     for row in &p.data {
         // Capacity matches N_STATE * N_STATE exactly.
         let _ = flat.extend_from_slice(row);
@@ -437,6 +449,10 @@ pub fn covariance(time: GpsTime, p: &StateMatrix) -> pb::Covariance {
 }
 
 /// Rebuild a covariance matrix from its row-major form.
+///
+/// Rejects a message whose element count does not match this build's state
+/// dimension — which is how a 21-state peer talking to a 15-state one is caught
+/// rather than silently misread.
 pub fn state_matrix(msg: &pb::Covariance) -> Result<StateMatrix, ConvertError> {
     let flat = msg.r#row_major.as_slice();
     if flat.len() != COVARIANCE_LEN {
@@ -730,10 +746,13 @@ mod tests {
     #[test]
     fn covariance_round_trips_through_the_wire() {
         let mut p = StateMatrix::identity().scaled(2.5);
+        // Indexed relative to N_STATE so the test follows the build
+        // configuration rather than assuming 21 states.
+        let last = N_STATE - 1;
         p[(0, 3)] = 0.125;
         p[(3, 0)] = 0.125;
-        p[(20, 19)] = -1.5;
-        p[(19, 20)] = -1.5;
+        p[(last, last - 1)] = -1.5;
+        p[(last - 1, last)] = -1.5;
 
         let msg = covariance(sample_time(), &p);
         let bytes = to_bytes(&msg);

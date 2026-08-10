@@ -15,8 +15,10 @@ use drifters_core::F;
 
 use crate::state::{
     NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID, BA_ID, BGSTD_ID,
-    BG_ID, N_STATE, PHI_ID, P_ID, SASTD_ID, SA_ID, SGSTD_ID, SG_ID, VRW_ID, V_ID,
+    BG_ID, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
 };
+#[cfg(not(feature = "reduced-state"))]
+use crate::state::{SASTD_ID, SA_ID, SGSTD_ID, SG_ID};
 
 /// Continuous-time error-state dynamics `F` for the phi-angle model.
 ///
@@ -78,6 +80,7 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
 
     // Accelerometer bias and scale factor enter through the body-to-nav DCM.
     f.set_block(V_ID, BA_ID, &state.attitude.dcm);
+    #[cfg(not(feature = "reduced-state"))]
     f.set_block(
         V_ID,
         SA_ID,
@@ -101,6 +104,7 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
 
     f.set_block(PHI_ID, PHI_ID, &(-(w_ie + w_en).skew()));
     f.set_block(PHI_ID, BG_ID, &(-state.attitude.dcm));
+    #[cfg(not(feature = "reduced-state"))]
     f.set_block(
         PHI_ID,
         SG_ID,
@@ -118,8 +122,11 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
     // "Layer 9".
     f.set_block(BG_ID, BG_ID, &decay_block);
     f.set_block(BA_ID, BA_ID, &decay_block);
-    f.set_block(SG_ID, SG_ID, &decay_block);
-    f.set_block(SA_ID, SA_ID, &decay_block);
+    #[cfg(not(feature = "reduced-state"))]
+    {
+        f.set_block(SG_ID, SG_ID, &decay_block);
+        f.set_block(SA_ID, SA_ID, &decay_block);
+    }
 
     f
 }
@@ -131,8 +138,11 @@ pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
     g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm);
     g.set_block(BG_ID, BGSTD_ID, &Mat3::identity());
     g.set_block(BA_ID, BASTD_ID, &Mat3::identity());
-    g.set_block(SG_ID, SGSTD_ID, &Mat3::identity());
-    g.set_block(SA_ID, SASTD_ID, &Mat3::identity());
+    #[cfg(not(feature = "reduced-state"))]
+    {
+        g.set_block(SG_ID, SGSTD_ID, &Mat3::identity());
+        g.set_block(SA_ID, SASTD_ID, &Mat3::identity());
+    }
     g
 }
 
@@ -144,6 +154,7 @@ pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
 pub fn process_noise_density(noise: &ImuNoise) -> NoiseCovariance {
     let mut q = NoiseCovariance::zeros();
     let gm = 2.0 / noise.correlation_time;
+    #[cfg(not(feature = "reduced-state"))]
     let blocks: [(usize, Vec3, F); 6] = [
         (VRW_ID, noise.accel_vrw.squared(), 1.0),
         (ARW_ID, noise.gyro_arw.squared(), 1.0),
@@ -151,6 +162,13 @@ pub fn process_noise_density(noise: &ImuNoise) -> NoiseCovariance {
         (BASTD_ID, noise.accel_bias_std.squared(), gm),
         (SGSTD_ID, noise.gyro_scale_std.squared(), gm),
         (SASTD_ID, noise.accel_scale_std.squared(), gm),
+    ];
+    #[cfg(feature = "reduced-state")]
+    let blocks: [(usize, Vec3, F); 4] = [
+        (VRW_ID, noise.accel_vrw.squared(), 1.0),
+        (ARW_ID, noise.gyro_arw.squared(), 1.0),
+        (BGSTD_ID, noise.gyro_bias_std.squared(), gm),
+        (BASTD_ID, noise.accel_bias_std.squared(), gm),
     ];
     for (id, variance, scale) in blocks {
         q[(id, id)] = variance.x * scale;
@@ -259,16 +277,19 @@ pub fn process_noise(state: &Pva, noise: &ImuNoise) -> StateMatrix {
         BA_ID,
         &(noise.accel_bias_std.squared() * gm).to_diag(),
     );
-    q.set_block(
-        SG_ID,
-        SG_ID,
-        &(noise.gyro_scale_std.squared() * gm).to_diag(),
-    );
-    q.set_block(
-        SA_ID,
-        SA_ID,
-        &(noise.accel_scale_std.squared() * gm).to_diag(),
-    );
+    #[cfg(not(feature = "reduced-state"))]
+    {
+        q.set_block(
+            SG_ID,
+            SG_ID,
+            &(noise.gyro_scale_std.squared() * gm).to_diag(),
+        );
+        q.set_block(
+            SA_ID,
+            SA_ID,
+            &(noise.accel_scale_std.squared() * gm).to_diag(),
+        );
+    }
     q
 }
 
@@ -813,7 +834,11 @@ mod tests {
     fn gauss_markov_blocks_decay_at_one_over_tau() {
         let noise = ImuNoise::default();
         let f = transition_matrix(&test_state(), &test_imu(), &noise);
-        for id in [BG_ID, BA_ID, SG_ID, SA_ID] {
+        #[cfg(feature = "reduced-state")]
+        let ids = [BG_ID, BA_ID];
+        #[cfg(not(feature = "reduced-state"))]
+        let ids = [BG_ID, BA_ID, SG_ID, SA_ID];
+        for id in ids {
             for i in 0..3 {
                 assert_relative_eq!(
                     f[(id + i, id + i)],
@@ -994,7 +1019,11 @@ mod tests {
     #[test]
     fn unobserved_states_keep_their_uncertainty_through_a_position_update() {
         let mut f = Eskf::new(&std_vector());
-        let before = f.covariance.diagonal()[SG_ID];
+        #[cfg(feature = "reduced-state")]
+        let probe = BG_ID;
+        #[cfg(not(feature = "reduced-state"))]
+        let probe = SG_ID;
+        let before = f.covariance.diagonal()[probe];
         let r = Mat3::identity().scaled(0.01);
         f.update(
             &Matrix::<3, 1>::from_column([1.0, 0.0, 0.0]),
@@ -1004,6 +1033,6 @@ mod tests {
         .unwrap();
         // With a diagonal prior, a position-only measurement carries no
         // information about gyro scale factor.
-        assert_relative_eq!(f.covariance.diagonal()[SG_ID], before, epsilon = 1e-12);
+        assert_relative_eq!(f.covariance.diagonal()[probe], before, epsilon = 1e-12);
     }
 }

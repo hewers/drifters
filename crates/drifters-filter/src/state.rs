@@ -25,9 +25,28 @@
 use drifters_core::math::Matrix;
 
 /// Number of error states.
+///
+/// 21 by default, or 15 with the `reduced-state` feature, which drops the six
+/// scale-factor states. Every matrix in the filter is sized from this, so the
+/// reduced configuration takes the covariance from 3 528 to 1 800 bytes.
+#[cfg(not(feature = "reduced-state"))]
 pub const N_STATE: usize = 21;
+/// See the 21-state definition.
+#[cfg(feature = "reduced-state")]
+pub const N_STATE: usize = 15;
+
 /// Number of driving process-noise channels.
+#[cfg(not(feature = "reduced-state"))]
 pub const N_NOISE: usize = 18;
+/// See the 18-channel definition.
+#[cfg(feature = "reduced-state")]
+pub const N_NOISE: usize = 12;
+
+/// Whether the scale-factor states are estimated.
+///
+/// Reading this is preferable to `cfg!(feature = ...)` at call sites: it keeps
+/// the *reason* — "are there scale-factor states?" — rather than the mechanism.
+pub const ESTIMATES_SCALE_FACTORS: bool = cfg!(not(feature = "reduced-state"));
 
 /// Index of the position error block.
 pub const P_ID: usize = 0;
@@ -40,8 +59,14 @@ pub const BG_ID: usize = 9;
 /// Index of the accelerometer bias block.
 pub const BA_ID: usize = 12;
 /// Index of the gyroscope scale-factor block.
+///
+/// Absent under `reduced-state`.
+#[cfg(not(feature = "reduced-state"))]
 pub const SG_ID: usize = 15;
 /// Index of the accelerometer scale-factor block.
+///
+/// Absent under `reduced-state`.
+#[cfg(not(feature = "reduced-state"))]
 pub const SA_ID: usize = 18;
 
 /// Index of the velocity random walk noise channel.
@@ -53,8 +78,14 @@ pub const BGSTD_ID: usize = 6;
 /// Index of the accelerometer bias driving-noise channel.
 pub const BASTD_ID: usize = 9;
 /// Index of the gyroscope scale-factor driving-noise channel.
+///
+/// Absent under `reduced-state`.
+#[cfg(not(feature = "reduced-state"))]
 pub const SGSTD_ID: usize = 12;
 /// Index of the accelerometer scale-factor driving-noise channel.
+///
+/// Absent under `reduced-state`.
+#[cfg(not(feature = "reduced-state"))]
 pub const SASTD_ID: usize = 15;
 
 /// The `21 × 21` covariance and transition matrix shape.
@@ -72,7 +103,10 @@ mod tests {
 
     #[test]
     fn blocks_tile_the_state_without_gaps_or_overlap() {
+        #[cfg(not(feature = "reduced-state"))]
         let starts = [P_ID, V_ID, PHI_ID, BG_ID, BA_ID, SG_ID, SA_ID];
+        #[cfg(feature = "reduced-state")]
+        let starts = [P_ID, V_ID, PHI_ID, BG_ID, BA_ID];
         for (i, s) in starts.iter().enumerate() {
             assert_eq!(*s, i * 3, "block {i} must start at {}", i * 3);
         }
@@ -81,7 +115,10 @@ mod tests {
 
     #[test]
     fn noise_blocks_tile_the_noise_vector() {
+        #[cfg(not(feature = "reduced-state"))]
         let starts = [VRW_ID, ARW_ID, BGSTD_ID, BASTD_ID, SGSTD_ID, SASTD_ID];
+        #[cfg(feature = "reduced-state")]
+        let starts = [VRW_ID, ARW_ID, BGSTD_ID, BASTD_ID];
         for (i, s) in starts.iter().enumerate() {
             assert_eq!(*s, i * 3);
         }
@@ -99,6 +136,7 @@ mod size_tests {
     /// These types go in a `static` or on a small stack, so their size is part
     /// of the interface on an embedded target. If a change here is intended,
     /// update the numbers *and* the "Resource budget" table in docs/design.md.
+    #[cfg(not(feature = "reduced-state"))]
     #[test]
     fn types_have_their_documented_footprint() {
         assert_eq!(size_of::<StateMatrix>(), 3_528, "21x21 f64 covariance");
@@ -114,6 +152,17 @@ mod size_tests {
             4_944,
             "whole engine"
         );
+    }
+
+    /// The point of the reduced configuration: every matrix shrinks.
+    #[cfg(feature = "reduced-state")]
+    #[test]
+    fn the_reduced_configuration_is_substantially_smaller() {
+        assert_eq!(size_of::<StateMatrix>(), 1_800, "15x15 f64 covariance");
+        assert_eq!(size_of::<StateVector>(), 120, "15 f64 error state");
+        assert_eq!(size_of::<NoiseMatrix>(), 1_440, "15x12 f64 noise mapping");
+        // Roughly half the 21-state covariance, which is the whole point.
+        assert!(size_of::<StateMatrix>() * 2 < 3_528 + 300);
     }
 
     /// Nothing on the data path may carry a destructor: every type must be

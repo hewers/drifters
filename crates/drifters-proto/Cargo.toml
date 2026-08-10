@@ -38,6 +38,8 @@ heapless = "0.9"
 
 [features]
 default = []
+## Pass through to `drifters-filter`: 15 states, no scale factors.
+reduced-state = ["drifters-filter/reduced-state"]
 std = ["drifters-core/std", "drifters-filter/std"]
 
 [lints.rust]

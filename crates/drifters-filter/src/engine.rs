@@ -17,7 +17,9 @@ use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
-use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, SA_ID, SG_ID, V_ID};
+use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
+#[cfg(not(feature = "reduced-state"))]
+use crate::state::{SA_ID, SG_ID};
 
 /// How a GNSS epoch relates to the IMU interval being processed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,8 +388,13 @@ impl GinsEngine {
 
         self.state.imu_error.gyro_bias += block(BG_ID);
         self.state.imu_error.accel_bias += block(BA_ID);
-        self.state.imu_error.gyro_scale += block(SG_ID);
-        self.state.imu_error.accel_scale += block(SA_ID);
+        // Under `reduced-state` the scale factors are not estimated, so they
+        // keep whatever prior calibration was configured.
+        #[cfg(not(feature = "reduced-state"))]
+        {
+            self.state.imu_error.gyro_scale += block(SG_ID);
+            self.state.imu_error.accel_scale += block(SA_ID);
+        }
     }
 }
 

@@ -18,6 +18,17 @@ approx = { workspace = true }
 
 [features]
 default = []
+## Drop the six IMU scale-factor states, giving a 15-state filter.
+##
+## Every matrix halves — the covariance goes from 3 528 to 1 800 bytes — which
+## is the cheapest large saving available on a small target, because it changes
+## no numerics at all. Appropriate when the IMU's scale factors are calibrated
+## and stable, or when the dynamics never make them observable: a vehicle
+## driving in a straight line at constant speed observes neither.
+##
+## NOT additive: this *removes* states, so it changes `N_STATE` and the
+## filter's behaviour. Do not enable it via feature unification by accident.
+reduced-state = []
 ## Enables `std`-only conveniences inherited from `drifters-core`.
 std = ["drifters-core/std"]
 

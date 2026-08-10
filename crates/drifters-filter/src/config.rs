@@ -223,7 +223,10 @@ pub(crate) fn initial_std_vector(options: &GinsOptions) -> [F; crate::state::N_S
         options.initial_gyro_scale_std,
         options.initial_accel_scale_std,
     ];
-    for (b, block) in blocks.iter().enumerate() {
+    // `take` rather than an index guard: the state vector is exactly
+    // `N_STATE / 3` three-element blocks, and the scale factors are last, so
+    // the reduced configuration simply stops before them.
+    for (b, block) in blocks.iter().take(crate::state::N_STATE / 3).enumerate() {
         out[b * 3] = block.x;
         out[b * 3 + 1] = block.y;
         out[b * 3 + 2] = block.z;
@@ -285,7 +288,9 @@ mod tests {
 
     #[test]
     fn initial_std_vector_is_laid_out_in_state_order() {
-        use crate::state::{BA_ID, BG_ID, PHI_ID, P_ID, SA_ID, SG_ID, V_ID};
+        use crate::state::{BA_ID, BG_ID, PHI_ID, P_ID, V_ID};
+        #[cfg(not(feature = "reduced-state"))]
+        use crate::state::{SA_ID, SG_ID};
         // Each block gets a distinct sentinel so a transposed or off-by-three
         // layout shows up as a specific wrong number, not just a failure.
         let o = GinsOptions {
@@ -305,8 +310,11 @@ mod tests {
         assert_eq!(v[PHI_ID], 5.0);
         assert_eq!(v[BG_ID], 6.0);
         assert_eq!(v[BA_ID], 7.0);
-        assert_eq!(v[SG_ID], 8.0);
-        assert_eq!(v[SA_ID], 9.0);
+        #[cfg(not(feature = "reduced-state"))]
+        {
+            assert_eq!(v[SG_ID], 8.0);
+            assert_eq!(v[SA_ID], 9.0);
+        }
     }
 
     #[test]

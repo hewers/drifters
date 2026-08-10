@@ -17,6 +17,11 @@ cortex-m-rt = "0.7"
 cortex-m-semihosting = "0.5"
 panic-semihosting = "0.6"
 
+[features]
+default = []
+## Build the filter in its 15-state configuration.
+reduced-state = ["drifters-filter/reduced-state"]
+
 [profile.release]
 opt-level = "s"
 lto = "fat"

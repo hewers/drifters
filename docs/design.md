@@ -186,16 +186,46 @@ Three changes brought it to 16 480:
 The dataset regression produces **bit-identical** results before and after, which
 is what makes this a restructuring rather than a change to the filter.
 
+### The 15-state configuration
+
+`--features reduced-state` drops the six IMU scale-factor states, taking the
+filter to 15 states. Every matrix halves, and so does the stack:
+
+| | 21-state | 15-state |
+|---|---|---|
+| covariance | 3 528 B | **1 800 B** |
+| `Eskf` | 3 704 B | 1 928 B |
+| `GinsEngine` | 4 944 B | 3 168 B |
+| peak stack | 16 480 B | **9 504 B** |
+
+That is the difference between needing a 32 KiB task stack and fitting in
+16 KiB, which is what makes it the most useful lever available on a small part —
+it changes no numerics at all, it simply estimates fewer things.
+
+Measured on the KF-GINS dataset it costs very little:
+
+| | 21-state | 15-state |
+|---|---|---|
+| horizontal residual RMS | 0.0330 m | 0.0339 m |
+| vertical residual RMS | 0.0184 m | 0.0199 m |
+| NIS ratio | 0.486 | **0.554** |
+
+Three percent worse horizontally — and the NIS ratio *improves*, moving closer
+to 1.0, because dropping states the data cannot observe makes the filter less
+conservative. Scale factors need dynamics to be observable at all: a vehicle
+driving in a straight line at constant speed observes neither.
+
+The feature is **not additive** — it removes states and changes `N_STATE` — so
+it must be chosen deliberately rather than acquired through feature
+unification.
+
 ### Remaining headroom
 
-16.5 KiB fits a 32 KiB task stack comfortably and a 16 KiB one not at all. The
-floor for this formulation is four live 21×21 matrices in `predict` — 14 112
-bytes — so further reduction needs a different algorithm rather than tidier
-code. Options, in rough order of effort: keep `Q` as its six 3×3 blocks and
-multiply through them; sequential scalar measurement updates, which remove the
-21×21 Joseph temporaries entirely; or a UD-factorised filter, which halves the
-covariance storage and is better conditioned. A 15-state configuration without
-the scale factors would cut every matrix by roughly half.
+The floor for this formulation is four live `N_STATE`-square matrices in
+`predict`: 14 112 bytes at 21 states, 7 200 at 15. Going below that needs a
+different algorithm rather than tidier code — sequential scalar measurement
+updates, which remove the Joseph temporaries entirely, or a UD-factorised
+filter, which halves covariance storage again and is better conditioned.
 
 ## Auxiliary sensors ("+ other")
 

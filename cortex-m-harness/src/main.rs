@@ -150,10 +150,15 @@ fn main() -> ! {
 
     hprintln!("drifters bare-metal harness");
     hprintln!("target: thumbv7em-none-eabihf (Cortex-M4F, f64 in software)");
+    hprintln!(
+        "config: {}-state, scale factors {}",
+        N_STATE,
+        if drifters_filter::state::ESTIMATES_SCALE_FACTORS { "estimated" } else { "fixed" }
+    );
     hprintln!("");
 
     hprintln!("--- static sizes (bytes) ---");
-    hprintln!("Matrix<21,21>   {}", size_of::<StateMatrix>());
+    hprintln!("covariance      {} ({}x{})", size_of::<StateMatrix>(), N_STATE, N_STATE);
     hprintln!("Eskf            {}", size_of::<drifters_filter::Eskf>());
     hprintln!("GinsEngine      {}", size_of::<GinsEngine>());
     hprintln!("GinsOptions     {}", size_of::<GinsOptions>());

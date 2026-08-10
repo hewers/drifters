@@ -210,7 +210,7 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 - [x] Data path links no panic machinery, checked in CI
 - [x] `cargo deny` licence and advisory auditing, enforcing the ADR 0003 boundary
 - [x] Evaluate a generic scalar type — see [adr/0005](adr/0005-scalar-type.md)
-- [ ] Reduced state configuration (15-state without scale factors)
+- [x] Reduced state configuration (15-state without scale factors)
 
 ### Stack
 
@@ -245,20 +245,22 @@ spans 8.4 decimal digits against `f32`'s 7.2. Full reasoning and the numbers are
 in [adr/0005](adr/0005-scalar-type.md). Mixed precision remains open and belongs
 in M9, after a hardware baseline exists to show what it would buy.
 
-### Remaining: the 15-state configuration
+### The 15-state configuration
 
-Dropping the six scale-factor states takes every matrix from 21×21 to 15×15 —
-1 800 B against 3 528 B — which should roughly halve both the stack peak and the
-per-step arithmetic. It is the best remaining lever for embedded cost precisely
-because it changes no numerics.
+`--features reduced-state` drops the six scale-factor states. Peak stack goes
+from 16 480 B to **9 504 B** — the difference between needing a 32 KiB task
+stack and fitting in 16 KiB — for 3 % worse horizontal residual on the KF-GINS
+dataset (0.0339 m against 0.0330 m). The NIS ratio *improves*, 0.486 to 0.554,
+because dropping states the data cannot observe makes the filter less
+conservative.
 
-Planned as a non-default cargo feature switching `N_STATE` to 15 and omitting
-the `SG`/`SA` blocks from `transition_matrix`, `process_noise`,
-`initial_std_vector` and the engine's feedback. Not attempted yet: it is
-cross-cutting, and rushing a change that touches every matrix dimension while
-the regression suite is the only thing standing between it and a silent
-numerical error is a poor trade. It wants its own change, measured on the QEMU
-harness and the KF-GINS dataset the way M8's other changes were.
+Still panic-free, and CI checks both configurations independently since
+`reduced-state` removes states rather than adding capability.
+
+### Cumulative
+
+M8 took the peak stack from **35 328 B** to **9 504 B** — 3.7× — without
+changing what the filter computes at 21 states.
 
 ---
 
