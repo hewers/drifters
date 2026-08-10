@@ -6,7 +6,7 @@ Specification for the second estimator backend, transcribed from:
 > S. Weiss, **"An Equivariant Approach to Robust State Estimation for the
 > ArduPilot Autopilot System"**, ICRA 2024.
 > DOI [10.1109/ICRA57147.2024.10611108](https://doi.org/10.1109/ICRA57147.2024.10611108).
-> Local copy: [`papers/2024-fornasier-equivariant-ardupilot.pdf`](papers/2024-fornasier-equivariant-ardupilot.pdf).
+> Not redistributed here; see [`papers/`](papers/) to fetch a local copy.
 
 The underlying theory is:
 

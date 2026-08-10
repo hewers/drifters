@@ -115,7 +115,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [testing.md](docs/testing.md) — nine layers, and what each one can prove
 - [milestones.md](docs/milestones.md) — roadmap and measured outcomes
 - [adr/](docs/adr/) — decisions and why, including the ones reversed later
-- [papers/](docs/papers/) — the source papers, with citations and provenance
+- [papers/](docs/papers/) — the source papers: citations, DOIs and how to fetch them
 
 Two worth reading if you are evaluating this seriously:
 [why an accelerometer bias and a tilt are the same measurement to a stationary
