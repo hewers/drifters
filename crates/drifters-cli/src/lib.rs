@@ -5,6 +5,7 @@
 //! rather than shelling out to the binary and parsing its output.
 
 pub mod kfgins;
+pub mod plot;
 pub mod stats;
 
 use std::fs::File;
@@ -17,7 +18,9 @@ use drifters_filter::GinsEngine;
 use stats::{assess, Consistency, Running};
 
 /// What a replay produced, beyond the output files.
-#[derive(Clone, Copy, Debug)]
+///
+/// Not `Copy`: it owns the per-epoch trace, which is thousands of rows.
+#[derive(Clone, Debug)]
 pub struct Report {
     /// See [`Report`].
     pub processed: u64,
@@ -37,6 +40,25 @@ pub struct Report {
     pub residual_down: Running,
     /// See [`Report`].
     pub horizontal: Running,
+    /// One row per GNSS epoch, for plotting and offline analysis.
+    ///
+    /// Kept because the aggregate statistics above throw away exactly what is
+    /// needed to *see* the filter: when the residual grew, whether the NIS
+    /// drifted, where on the trajectory it happened.
+    pub epochs: Vec<Epoch>,
+}
+
+/// One GNSS epoch's diagnostics.
+#[derive(Clone, Copy, Debug)]
+pub struct Epoch {
+    /// GPS seconds of week.
+    pub tow: f64,
+    /// Filter position at this epoch, local NED metres from the first fix.
+    pub ned: (f64, f64, f64),
+    /// Predicted-minus-measured antenna position, NED metres.
+    pub residual: (f64, f64, f64),
+    /// Normalised innovation squared, if the fix was applied.
+    pub nis: Option<f64>,
 }
 
 impl Report {
@@ -149,6 +171,7 @@ pub fn replay(
         residual_east: Running::new(),
         residual_down: Running::new(),
         horizontal: Running::new(),
+        epochs: Vec::new(),
     };
 
     let mut next_fix = 0usize;
@@ -159,6 +182,12 @@ pub fn replay(
 
     let end = config.end_time.unwrap_or(f64::INFINITY);
     let mut last_nis_seen: Option<f64> = None;
+    // Local-frame anchor for plotting: the first fix inside the window. Plots
+    // want metres from a fixed origin, not degrees.
+    let anchor = gnss
+        .get(next_fix)
+        .map(|f| f.position)
+        .unwrap_or(config.options.initial_state.position);
 
     for sample in imu {
         let tow = sample.time.tow;
@@ -188,6 +217,14 @@ pub fn replay(
             report.residual_east.push(residual.e);
             report.residual_down.push(residual.d);
             report.horizontal.push(residual.horizontal_norm());
+            let epoch_index = report.epochs.len();
+            let from_origin = predicted.ned_from(anchor);
+            report.epochs.push(Epoch {
+                tow,
+                ned: (from_origin.n, from_origin.e, from_origin.d),
+                residual: (residual.n, residual.e, residual.d),
+                nis: None,
+            });
 
             let before = engine.inflation_count();
             engine.add_gnss(fix);
@@ -198,6 +235,7 @@ pub fn replay(
             match engine.last_nis() {
                 Some(value) if Some(value) != last_nis_seen => {
                     report.nis.push(value);
+                    report.epochs[epoch_index].nis = Some(value);
                     last_nis_seen = Some(value);
                     report.applied_fixes += 1;
                 }

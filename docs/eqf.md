@@ -8,7 +8,41 @@ Specification for the second estimator backend, transcribed from:
 > DOI [10.1109/ICRA57147.2024.10611108](https://doi.org/10.1109/ICRA57147.2024.10611108).
 > Local copy: `APEqF.pdf`.
 
-Equation numbers below are the paper's.
+The underlying theory is:
+
+> P. van Goor, T. Hamel, R. Mahony, **"Equivariant Filter (EqF)"**,
+> [arXiv:2010.14666](https://arxiv.org/abs/2010.14666)
+> (IEEE Transactions on Automatic Control, 2022). APEqF's ref [9].
+
+Equation numbers below are APEqF's.
+
+## What the EqF actually changes
+
+Worth stating before the mechanics, because it is the reason any of this is
+worth implementing.
+
+**The linearisation origin is fixed, not the moving estimate.** An EKF
+linearises about wherever the estimate currently is, so an estimate that has
+drifted linearises about the wrong point and can gain information it never
+observed — *false observability*, and the mechanism behind "confident and
+wrong". The EqF linearises the error dynamics at a fixed origin `ξ°` chosen in
+advance. That is a structural difference, not a tuning one.
+
+**Equivariant outputs give O(|ε|³) error where the usual construction gives
+O(|ε|²).** This is van Goor et al.'s Lemma 5.3, and it is what APEqF's
+"third-order linearisation error of the output map" refers to. It is also why
+the position and velocity outputs are built the way they are in (3) and (4) —
+that construction is not cosmetic.
+
+**The EqF contains the IEKF.** On a Lie group with group-affine dynamics the
+EqF specialises to the invariant EKF and the deterministic part of the state
+equation linearises *exactly*, with no higher-order remainder. That connects
+directly to the group-affine analysis in "Can we assume an ellipsoidal,
+rotating Earth?" below: group-affineness is what buys exactness, and
+position-dependent gravity is what would forfeit it.
+
+**It works on homogeneous spaces, not only Lie groups.** That is what allows a
+magnetometer output living on `S²` to be handled in the same framework.
 
 ## Why it is worth having
 

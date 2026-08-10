@@ -324,3 +324,60 @@ The threshold sits at `θ < 10⁻²`, six orders of magnitude wider than the nai
 because a 200 Hz IMU turning at 1 rad/s produces `θ = 5×10⁻³` **every sample** —
 the degraded region is exactly where the function spends its life. A sweep
 across nine decades is what caught it.
+
+---
+
+## M11 — Diagnostics and the README figure
+
+A filter that cannot be *seen* is hard to trust. The replay already computes
+everything needed; it just aggregates it away.
+
+- [ ] Replay emits a per-epoch CSV: residuals, NIS, filter and GNSS positions
+- [ ] `drifters plot` renders trajectory, error trace and NIS as **SVG**
+- [ ] Figure generated from the KF-GINS run, committed, shown in the README
+
+SVG rather than PNG, and hand-emitted rather than via a plotting library: it
+keeps the dependency count honest, the output diffable in review, and it scales
+on a README. No plotting crate earns its place for three panels.
+
+---
+
+## M12 — crates.io release preparation
+
+- [ ] Per-crate `readme` and docs.rs metadata
+- [ ] Keywords and categories within crates.io's limits (5 max each)
+- [ ] `cargo publish --dry-run` green for every publishable crate
+- [ ] Publish order recorded — dependencies must land first
+
+**Name check, done.** `drifters-core`, `drifters-filter`, `drifters-proto`,
+`drifters-interop` and `drifters-eqf` are all free. The bare name `drifters` is
+**taken** by an unrelated config-synchronisation tool, so there can be no
+umbrella facade crate under that name. The binary in `drifters-cli` is still
+called `drifters`; binary names are not registry-unique, so that is fine.
+
+---
+
+## M13 — GSDC and ground-truth error
+
+The Google Smartphone Decimeter Challenge datasets are Pixel raw GNSS and IMU
+logs **with survey-grade ground truth**. That is the missing ingredient: every
+accuracy number this project reports is a *prediction residual* against the
+fixes themselves, because neither KF-GINS nor any dataset used so far ships a
+truth trajectory.
+
+- [ ] Ground-truth error metric in the replay — true position error, not
+      residual
+- [ ] Reader for the GSDC CSV layout
+- [ ] Synthetic fixtures exercising the parser
+- [ ] Documented fetch procedure
+
+**Known limitation, stated up front.** The GSDC data lives on Kaggle behind
+authentication, and its terms preclude redistribution, so the reader's column
+schema is written from documentation and **has not been validated against real
+data**. That is exactly the kind of code that looks right and is not. It is
+marked as unverified in the source, its fixtures are synthetic, and the first
+person with a real file should expect to correct column names rather than
+assume they are right.
+
+The ground-truth *metric* has no such caveat — it is independent of the reader
+and testable on its own.

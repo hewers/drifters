@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use drifters_cli::{kfgins, replay};
+use drifters_cli::{kfgins, plot, replay};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -35,8 +35,11 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: drifters replay --config <path> [--imu <path>] [--gnss <path>]\n\
-         \x20                      [--out <dir>] [--week <n>] [--quiet]"
+        "usage: drifters <replay|plot> --config <path> [--imu <path>] [--gnss <path>]\n\
+         \x20         [--out <dir>] [--week <n>] [--quiet] [--figure <svg>] [--name <str>]\n\
+         \n\
+         \x20 replay  run the filter and report statistics\n\
+         \x20 plot    the same, and write an SVG figure"
     );
 }
 
@@ -46,13 +49,17 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    match args.first().map(String::as_str) {
-        Some("replay") => {}
+    let make_figure = match args.first().map(String::as_str) {
+        Some("replay") => false,
+        // `plot` is `replay` plus a figure: the diagnostics come from the run
+        // itself, so re-deriving them from a file would be a second source of
+        // truth to keep in sync.
+        Some("plot") => true,
         _ => {
             usage();
-            return Err("expected the `replay` subcommand".into());
+            return Err("expected the `replay` or `plot` subcommand".into());
         }
-    }
+    };
 
     let config_path = PathBuf::from(flag(args, "--config").ok_or("--config is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
@@ -93,5 +100,25 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let report = replay(&config, &imu, &gnss, &out_dir, quiet)?;
     report.print();
+
+    if make_figure {
+        let figure = flag(args, "--figure").unwrap_or("docs/figures/kf-gins.svg");
+        let caption = plot::Caption {
+            dataset: flag(args, "--name").unwrap_or("KF-GINS demo dataset"),
+            horizontal_rms: report
+                .residual_north
+                .rms()
+                .hypot(report.residual_east.rms()),
+            vertical_rms: report.residual_down.rms(),
+            nis_mean: report.nis.mean(),
+            fixes: report.applied_fixes,
+        };
+        let svg = plot::render(&report.epochs, &caption);
+        if let Some(parent) = Path::new(figure).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(figure, svg)?;
+        println!("\nwrote {figure}");
+    }
     Ok(())
 }

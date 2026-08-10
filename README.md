@@ -27,6 +27,12 @@ Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
 reckoning alone. Method and tolerances are in [docs/testing.md](docs/testing.md).
 
+![Trajectory, position residual and NIS over the KF-GINS demo dataset](docs/figures/kf-gins.svg)
+
+Regenerate it yourself with `drifters plot` — every value on the figure comes
+from the replay, none are hand-entered. The bottom panel is the one to read
+first: filter consistency means NIS *scattered about 3*, not NIS *small*.
+
 ## Status
 
 **Working and validated:** core math, strapdown mechanization, 21-state ESKF,
