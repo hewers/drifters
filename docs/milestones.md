@@ -291,7 +291,7 @@ it until this milestone runs.
 
 A second estimator, kept in its own crate (`drifters-eqf`) so the ESKF's
 measured firmware budget is untouched. Specification and scoping in
-[eqf.md](eqf.md); paper in `APEqF.pdf`.
+[eqf.md](eqf.md); paper in [`papers/`](papers/).
 
 - [x] Specification transcribed from the paper, with the two model differences
       stated
@@ -351,7 +351,7 @@ on a README. No plotting crate earns its place for three panels.
       rather than a misconfiguration
 - [x] Publish order and procedure in [releasing.md](releasing.md)
 - [x] Package contents verified — 15 files for core, 12 for filter; the 67 MB
-      dataset and `APEqF.pdf` never enter a package
+      dataset and the papers in [`papers/`](papers/) never enter a package
 
 **One judgment call.** `drifters-eqf` is held at `publish = false`. It currently
 contains the Lie group machinery and no filter, and publishing a crate named

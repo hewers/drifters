@@ -50,7 +50,7 @@ publish time.
 ## What ships
 
 Verified for `drifters-core`: 15 files — sources, README, manifests. The 67 MB
-dataset, `APEqF.pdf` and `target/` are all outside the crate directories and
+dataset, the papers in [`papers/`](papers/) and `target/` are all outside the crate directories and
 never enter a package.
 
 ## Versioning
