@@ -42,15 +42,19 @@ trace — a Samsung SM-S908B in a car, 100 Hz phone IMU, ~6 m single-point GNSS 
 which is the first dataset here carrying **survey-grade ground truth**, so this
 is true position error rather than a prediction residual.
 
-| | horizontal RMS | vertical RMS |
-|---|---|---|
-| phone GNSS (WLS) alone | 6.209 m | 17.980 m |
-| drifters (GNSS + IMU) | **6.100 m** | **16.249 m** |
-| | −1.7 % | −9.6 % |
+| | horizontal RMS | vertical RMS | horizontal max |
+|---|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
+| drifters, position-only aiding | 6.100 m | 16.249 m | 49.11 m |
+| **drifters, + Doppler velocity** | **4.055 m** | **10.235 m** | **12.97 m** |
+| | **−34.7 %** | **−43 %** | **−73 %** |
 
-**Fusing a phone IMU here buys almost nothing**, and with un-tuned phone-grade
-noise settings it makes the horizontal solution *worse* (11.4 m). That is a real
-result, not a tuning failure, and the diagnosis is in
+Position-only aiding gained almost nothing here — 1.7 % — and un-tuned it was
+*worse* than GNSS alone. That was diagnosed rather than tuned away: heading is
+weakly observable from position alone, so a phone gyro's drift injects error
+faster than 1 Hz fixes remove it. Adding a **Doppler velocity solution**, solved
+from the raw pseudorange rates already in the dataset, is what makes heading
+observable — and it moved the result from 1.7 % to 34.7 %. Full diagnosis in
 [docs/gsdc.md](docs/gsdc.md).
 
 ![GSDC 2023 trace: trajectory, residual and NIS](docs/figures/gsdc-2023.svg)

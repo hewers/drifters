@@ -351,6 +351,7 @@ pub fn run_gsdc(
     imu_scale: f64,
     gyro_scale: f64,
     gnss_lag: f64,
+    doppler: bool,
     quiet: bool,
 ) -> Result<GsdcReport, Box<dyn std::error::Error>> {
     let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
@@ -360,7 +361,12 @@ pub fn run_gsdc(
             s.dtheta = s.dtheta * gyro_scale;
         }
     }
-    let fixes = gsdc::read_gnss(&dir.join("device_gnss.csv"), utc_offset - gnss_lag, sigma)?;
+    let fixes = gsdc::read_gnss(
+        &dir.join("device_gnss.csv"),
+        utc_offset - gnss_lag,
+        sigma,
+        doppler,
+    )?;
     let reference = gsdc::read_truth(&dir.join("ground_truth.csv"), utc_offset)?;
     if !quiet {
         eprintln!(

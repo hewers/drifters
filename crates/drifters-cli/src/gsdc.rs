@@ -43,10 +43,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use drifters_core::frames::{Ecef, Lla};
-use drifters_core::math::{Euler, Vec3};
+use drifters_core::frames::{Ecef, Lla, Ned};
+use drifters_core::math::{Cholesky, Euler, Matrix, Vec3};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
+use drifters_core::F;
 
 use crate::kfgins::DataError;
 use crate::truth::Truth;
@@ -204,7 +205,14 @@ pub fn read_imu(path: &Path) -> Result<(Vec<ImuSample>, f64), DataError> {
 /// `sigma` is the assumed one-sigma position uncertainty in NED metres. The
 /// dataset carries no covariance for the WLS solution, so this is a
 /// user-supplied assumption rather than a measurement — see the module docs.
-pub fn read_gnss(path: &Path, utc_offset: f64, sigma: Vec3) -> Result<Vec<GnssFix>, DataError> {
+/// When `doppler` is set, each epoch's satellites are also used to solve for a
+/// receiver velocity — see [`solve_doppler`].
+pub fn read_gnss(
+    path: &Path,
+    utc_offset: f64,
+    sigma: Vec3,
+    doppler: bool,
+) -> Result<Vec<GnssFix>, DataError> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
     let header = Header::parse(
@@ -219,43 +227,117 @@ pub fn read_gnss(path: &Path, utc_offset: f64, sigma: Vec3) -> Result<Vec<GnssFi
         header.at("WlsPositionYEcefMeters")?,
         header.at("WlsPositionZEcefMeters")?,
     );
+    // Doppler columns are optional: a file without them still yields
+    // position-only fixes rather than failing.
+    let doppler_columns: Option<[usize; 9]> = if doppler {
+        (|| {
+            Some([
+                header.at("SvPositionXEcefMeters").ok()?,
+                header.at("SvPositionYEcefMeters").ok()?,
+                header.at("SvPositionZEcefMeters").ok()?,
+                header.at("SvVelocityXEcefMetersPerSecond").ok()?,
+                header.at("SvVelocityYEcefMetersPerSecond").ok()?,
+                header.at("SvVelocityZEcefMetersPerSecond").ok()?,
+                header.at("PseudorangeRateMetersPerSecond").ok()?,
+                header.at("SvClockDriftMetersPerSecond").ok()?,
+                header
+                    .at("PseudorangeRateUncertaintyMetersPerSecond")
+                    .ok()?,
+            ])
+        })()
+    } else {
+        None
+    };
 
+    // Rows arrive one per satellite per epoch. The WLS position is repeated
+    // identically across an epoch; the Doppler fields are not, so an epoch is
+    // accumulated and solved when the timestamp moves on.
+    struct Epoch {
+        utc: f64,
+        receiver: Ecef,
+        position: Lla,
+        satellites: Vec<DopplerObservation>,
+    }
     let mut fixes: Vec<GnssFix> = Vec::new();
-    let mut last_utc = f64::NEG_INFINITY;
+    let mut current: Option<Epoch> = None;
+
+    let finish = |e: Epoch, fixes: &mut Vec<GnssFix>| {
+        let mut fix = GnssFix {
+            time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
+            position: e.position,
+            position_std: sigma,
+            velocity: None,
+            velocity_std: Vec3::ZERO,
+        };
+        if let Some(d) = solve_doppler(&e.satellites, e.receiver, e.position) {
+            fix.velocity = Some(d.velocity);
+            fix.velocity_std = d.sigma;
+        }
+        fixes.push(fix);
+    };
+
     for line in lines {
         let line = line?;
         let parts: Vec<&str> = line.split(',').collect();
         let Ok(utc) = field(&parts, c_utc).parse::<f64>() else {
             continue;
         };
-        // The WLS solution is repeated on every satellite row of an epoch.
-        if (utc - last_utc).abs() < 1.0 {
-            continue;
+
+        // New epoch?
+        if current.as_ref().is_none_or(|e| (utc - e.utc).abs() >= 1.0) {
+            if let Some(e) = current.take() {
+                finish(e, &mut fixes);
+            }
+            let (Ok(x), Ok(y), Ok(z)) = (
+                field(&parts, cx).parse::<f64>(),
+                field(&parts, cy).parse::<f64>(),
+                field(&parts, cz).parse::<f64>(),
+            ) else {
+                continue;
+            };
+            // An epoch with no solution writes zeros; that is the centre of the
+            // earth, not a position.
+            if x.abs() < 1.0 && y.abs() < 1.0 && z.abs() < 1.0 {
+                continue;
+            }
+            let receiver = Ecef::new(x, y, z);
+            let position = receiver.to_lla();
+            if !position.is_valid() {
+                continue;
+            }
+            current = Some(Epoch {
+                utc,
+                receiver,
+                position,
+                satellites: Vec::new(),
+            });
         }
-        let (Ok(x), Ok(y), Ok(z)) = (
-            field(&parts, cx).parse::<f64>(),
-            field(&parts, cy).parse::<f64>(),
-            field(&parts, cz).parse::<f64>(),
-        ) else {
-            continue;
-        };
-        // An epoch with no solution writes zeros; that is the centre of the
-        // earth, not a position.
-        if x.abs() < 1.0 && y.abs() < 1.0 && z.abs() < 1.0 {
-            continue;
+
+        // Accumulate this row's satellite, if the Doppler fields are usable.
+        if let (Some(c), Some(e)) = (doppler_columns, current.as_mut()) {
+            let read = |i: usize| field(&parts, c[i]).parse::<f64>();
+            if let (Ok(px), Ok(py), Ok(pz), Ok(vx), Ok(vy), Ok(vz), Ok(rate), Ok(drift)) = (
+                read(0),
+                read(1),
+                read(2),
+                read(3),
+                read(4),
+                read(5),
+                read(6),
+                read(7),
+            ) {
+                let uncertainty = read(8).unwrap_or(1.0).max(1.0e-3);
+                e.satellites.push(DopplerObservation {
+                    sv_position: Vec3::new(px, py, pz),
+                    sv_velocity: Vec3::new(vx, vy, vz),
+                    corrected_rate: rate + drift,
+                    weight: 1.0 / (uncertainty * uncertainty),
+                });
+            }
         }
-        let position = Ecef::new(x, y, z).to_lla();
-        if !position.is_valid() {
-            continue;
-        }
-        last_utc = utc;
-        fixes.push(GnssFix {
-            time: GpsTime::from_tow(utc * 1.0e-3 - utc_offset),
-            position,
-            position_std: sigma,
-            velocity: None,
-            velocity_std: Vec3::ZERO,
-        });
+    }
+    if let Some(e) = current.take() {
+        finish(e, &mut fixes);
     }
     Ok(fixes)
 }
@@ -438,7 +520,7 @@ mod tests {
              2000,-2694001,-4293001,3857001\n\
              2000,-2694001,-4293001,3857001\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0)).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false).unwrap();
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
         assert_relative_eq!(fixes[0].time.tow, 1.0, epsilon = 1e-9);
@@ -453,7 +535,7 @@ mod tests {
              2000,-2694000,-4293000,3857000\n\
              3000,,,\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0)).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false).unwrap();
         assert_eq!(fixes.len(), 1);
     }
 
@@ -572,5 +654,235 @@ mod alignment_closes_the_loop {
             assert_relative_eq!(f_nav.y, 0.0, epsilon = 1e-9);
             assert_relative_eq!(f_nav.z, -g, epsilon = 1e-9);
         }
+    }
+}
+
+/// A least-squares receiver velocity from one epoch of Doppler observations.
+#[derive(Clone, Copy, Debug)]
+pub struct DopplerSolution {
+    /// Receiver velocity in the local NED frame, m/s.
+    pub velocity: Ned,
+    /// Per-axis one-sigma, m/s, from the residual scatter.
+    pub sigma: Vec3,
+    /// Satellites used.
+    pub satellites: usize,
+}
+
+/// One satellite's contribution: position, velocity, and the pseudorange rate
+/// already corrected for satellite clock drift.
+#[derive(Clone, Copy, Debug)]
+pub struct DopplerObservation {
+    /// Satellite position, ECEF metres.
+    pub sv_position: Vec3,
+    /// Satellite velocity, ECEF m/s.
+    pub sv_velocity: Vec3,
+    /// `ρ̇ + c·δṫ_sv`, m/s.
+    pub corrected_rate: F,
+    /// Weight, typically `1/σ²` of the rate.
+    pub weight: F,
+}
+
+/// Solve for receiver velocity and clock drift from Doppler.
+///
+/// # The observation
+///
+/// For a satellite with line-of-sight unit vector `e` pointing from receiver to
+/// satellite, the pseudorange rate is
+///
+/// ```text
+/// ρ̇ = (v_sv − v_rx)·e + c·δṫ_rx − c·δṫ_sv
+/// ```
+///
+/// Android reports `ρ̇` positive when the satellite is **receding**, which is
+/// this convention, and `SvClockDriftMetersPerSecond` is `c·δṫ_sv`. Folding the
+/// satellite terms into the left-hand side leaves a linear problem in four
+/// unknowns — three velocity components and the receiver clock drift:
+///
+/// ```text
+/// (ρ̇ + c·δṫ_sv) − v_sv·e  =  −e·v_rx + c·δṫ_rx
+/// ```
+///
+/// # Why this is worth doing
+///
+/// Position-only aiding leaves heading weakly observable, which is exactly what
+/// limits the smartphone result in `docs/gsdc.md`. A velocity observation
+/// constrains heading directly.
+///
+/// Requires five satellites rather than the algebraic minimum of four, so that
+/// there is at least one degree of freedom to estimate the residual scatter
+/// from — a four-satellite solution fits exactly and reports zero residual
+/// whatever the data.
+pub fn solve_doppler(
+    observations: &[DopplerObservation],
+    receiver: Ecef,
+    position: Lla,
+) -> Option<DopplerSolution> {
+    let rx = Vec3::new(receiver.x, receiver.y, receiver.z);
+    let mut rows: Vec<([F; 4], F, F)> = Vec::with_capacity(observations.len());
+
+    for o in observations {
+        let los = o.sv_position - rx;
+        let range = los.norm();
+        // A satellite closer than a thousand kilometres is not a satellite.
+        // NaN fails is_finite, so the comparisons can stay direct.
+        if !range.is_finite() || range <= 1.0e6 || !o.weight.is_finite() || o.weight <= 0.0 {
+            continue;
+        }
+        let e = los / range;
+        rows.push((
+            [-e.x, -e.y, -e.z, 1.0],
+            o.corrected_rate - o.sv_velocity.dot(e),
+            o.weight,
+        ));
+    }
+    if rows.len() < 5 {
+        return None;
+    }
+
+    // Normal equations. Four unknowns, so this is a 4x4 solve however many
+    // satellites are in view.
+    let mut ata = Matrix::<4, 4>::zeros();
+    let mut aty = Matrix::<4, 1>::zeros();
+    for (row, y, w) in &rows {
+        for i in 0..4 {
+            for j in 0..4 {
+                ata[(i, j)] += w * row[i] * row[j];
+            }
+            aty[(i, 0)] += w * row[i] * y;
+        }
+    }
+    let x = Cholesky::new(&ata)?.solve(&aty);
+    if !x.is_finite() {
+        return None;
+    }
+    let v_ecef = Vec3::new(x[(0, 0)], x[(1, 0)], x[(2, 0)]);
+
+    // Residual scatter stands in for a formal covariance: the dataset carries
+    // no velocity uncertainty, and this at least tracks epochs where the
+    // geometry or the measurements were poor.
+    let mut weighted = 0.0;
+    let mut total = 0.0;
+    for (row, y, w) in &rows {
+        let predicted = (0..4).map(|i| row[i] * x[(i, 0)]).sum::<F>();
+        weighted += w * (y - predicted) * (y - predicted);
+        total += w;
+    }
+    let dof = (rows.len() - 4) as F;
+    let scatter = (weighted / total / dof).sqrt().clamp(0.05, 20.0);
+
+    // ECEF to NED. This is a rate, so only the rotation applies — no origin
+    // shift.
+    let ned = position.dcm_ecef_from_ned().transpose() * v_ecef;
+
+    Some(DopplerSolution {
+        velocity: Ned::new(ned.x, ned.y, ned.z),
+        sigma: Vec3::splat(scatter),
+        satellites: rows.len(),
+    })
+}
+
+#[cfg(test)]
+mod doppler_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    /// Build a synthetic epoch: satellites in known directions, a known
+    /// receiver velocity and clock drift, and the pseudorange rates those
+    /// imply. Recovering the velocity is then a closed-loop check on the sign
+    /// convention, which is the part that is easy to get backwards.
+    fn synthetic(v_rx: Vec3, clock_drift: F) -> (Vec<DopplerObservation>, Ecef, Lla) {
+        let position = Lla::from_degrees(37.42, -122.07, 30.0);
+        let rx_ecef = position.to_ecef();
+        let rx = Vec3::new(rx_ecef.x, rx_ecef.y, rx_ecef.z);
+
+        // Six directions spread over the sky.
+        let dirs = [
+            Vec3::new(1.0, 0.0, 0.3),
+            Vec3::new(-1.0, 0.2, 0.5),
+            Vec3::new(0.1, 1.0, 0.4),
+            Vec3::new(0.0, -1.0, 0.6),
+            Vec3::new(0.7, 0.7, 0.9),
+            Vec3::new(-0.6, -0.5, 0.8),
+        ];
+        let mut obs = Vec::new();
+        for (i, d) in dirs.iter().enumerate() {
+            let e = d.normalized();
+            let sv_position = rx + e * 2.2e7;
+            let sv_velocity = Vec3::new(3000.0 - 200.0 * i as F, -1500.0, 900.0);
+            // rho_dot = (v_sv - v_rx).e + c*dt_rx - c*dt_sv, and the reader
+            // hands the solver rho_dot + c*dt_sv.
+            let corrected_rate = (sv_velocity - v_rx).dot(e) + clock_drift;
+            obs.push(DopplerObservation {
+                sv_position,
+                sv_velocity,
+                corrected_rate,
+                weight: 1.0,
+            });
+        }
+        (obs, rx_ecef, position)
+    }
+
+    #[test]
+    fn a_known_velocity_is_recovered() {
+        // The sign convention is the whole risk here: get it backwards and the
+        // solver returns the negated velocity, which looks plausible.
+        let position = Lla::from_degrees(37.42, -122.07, 30.0);
+        for truth_ned in [
+            Ned::new(10.0, 0.0, 0.0),
+            Ned::new(0.0, -7.5, 0.0),
+            Ned::new(3.0, 4.0, -1.0),
+            Ned::ZERO,
+        ] {
+            // Express the intended NED velocity in ECEF to build the synthetic.
+            let v_ecef3 = position.dcm_ecef_from_ned() * truth_ned.to_vec3();
+            let (obs, rx, pos) = synthetic(v_ecef3, 1234.5);
+            let s = solve_doppler(&obs, rx, pos).expect("six satellites is enough");
+            assert_relative_eq!(s.velocity.n, truth_ned.n, epsilon = 1e-6);
+            assert_relative_eq!(s.velocity.e, truth_ned.e, epsilon = 1e-6);
+            assert_relative_eq!(s.velocity.d, truth_ned.d, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn the_receiver_clock_drift_does_not_leak_into_velocity() {
+        // Clock drift is common to every satellite; the fourth unknown exists
+        // to absorb it. If it leaked, velocity would scale with it.
+        let position = Lla::from_degrees(37.42, -122.07, 30.0);
+        let truth = Ned::new(5.0, -2.0, 0.5);
+        let v_ecef3 = position.dcm_ecef_from_ned() * truth.to_vec3();
+        for drift in [0.0, 1.0e3, -5.0e4] {
+            let (obs, rx, pos) = synthetic(v_ecef3, drift);
+            let s = solve_doppler(&obs, rx, pos).unwrap();
+            assert_relative_eq!(s.velocity.n, truth.n, epsilon = 1e-6);
+            assert_relative_eq!(s.velocity.e, truth.e, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn too_few_satellites_yields_nothing() {
+        let (obs, rx, pos) = synthetic(Vec3::ZERO, 0.0);
+        // Four is the algebraic minimum but leaves no residual degree of
+        // freedom, so the solver requires five.
+        assert!(solve_doppler(&obs[..4], rx, pos).is_none());
+        assert!(solve_doppler(&obs[..5], rx, pos).is_some());
+        assert!(solve_doppler(&[], rx, pos).is_none());
+    }
+
+    #[test]
+    fn a_clean_epoch_reports_a_small_scatter() {
+        let (obs, rx, pos) = synthetic(Vec3::new(1.0, 2.0, 3.0), 500.0);
+        let s = solve_doppler(&obs, rx, pos).unwrap();
+        // Noiseless input: the residual sigma should sit at its floor.
+        assert_relative_eq!(s.sigma.x, 0.05, epsilon = 1e-9);
+        assert_eq!(s.satellites, 6);
+    }
+
+    #[test]
+    fn an_absurd_satellite_position_is_discarded() {
+        // A satellite closer than 1000 km is a parsing error, not a satellite.
+        let (mut obs, rx, pos) = synthetic(Vec3::ZERO, 0.0);
+        obs[0].sv_position = Vec3::new(rx.x + 10.0, rx.y, rx.z);
+        let s = solve_doppler(&obs, rx, pos).unwrap();
+        assert_eq!(s.satellites, 5, "the bogus satellite must be dropped");
     }
 }

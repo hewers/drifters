@@ -13,11 +13,18 @@ residual against the fixes themselves.
 | | horizontal RMS | vertical RMS | horizontal max |
 |---|---|---|---|
 | phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
-| drifters, tuned | **6.100 m** | **16.249 m** | 49.11 m |
-| drifters, un-tuned | 11.383 m | 14.804 m | 28.03 m |
+| **drifters, with Doppler velocity** | **4.055 m** | **10.235 m** | **12.97 m** |
+| drifters, position-only aiding | 6.100 m | 16.249 m | 49.11 m |
+| drifters, position-only, un-tuned | 11.383 m | 14.804 m | 28.03 m |
 
-Fusing the IMU buys **1.7 % horizontally**. With datasheet-class phone noise
-settings and no tuning it is nearly **twice as bad** as GNSS alone.
+**−34.7 % horizontal, −43 % vertical, and the worst-case error falls by 3.7×**
+— 47.96 m to 12.97 m, which matters more than the RMS for anything that has to
+trust the solution.
+
+Getting there took a diagnosis first. With **position-only** aiding the filter
+gained 1.7 %, and with datasheet-class phone noise and no tuning it was nearly
+**twice as bad** as GNSS alone. The section below is how that was tracked down,
+because the fix — a velocity observation — came directly out of it.
 
 ## Why — the diagnosis
 
@@ -67,16 +74,47 @@ phone gyro drifts; as heading drifts, body-frame accelerations rotate into the
 wrong direction in the navigation frame and inject error faster than the fixes
 remove it.
 
-## What would fix it
+## The fix: GNSS velocity from Doppler — done
 
-**GNSS velocity from Doppler.** The dataset already carries
-`PseudorangeRateMetersPerSecond` and per-satellite ECEF velocities, so a
-least-squares velocity solution is computable from what is on disk. Velocity
-observations make heading observable directly, which is the missing constraint.
-This is the single highest-value next step and is tracked in
-`docs/milestones.md`.
+The dataset carries `PseudorangeRateMetersPerSecond`, per-satellite ECEF
+positions and velocities, and satellite clock drift, so a velocity solution is
+computable from what is already on disk. For each satellite,
 
-**Non-holonomic constraints** would also help a great deal — but the phone's
+```text
+ρ̇ = (v_sv − v_rx)·e + c·δṫ_rx − c·δṫ_sv
+```
+
+which rearranges to a linear problem in four unknowns — three velocity
+components and the receiver clock drift — solved per epoch by weighted least
+squares over every satellite in view.
+
+The sign convention is the whole risk: reverse it and the solver returns the
+negated velocity, which looks entirely plausible. So it is tested closed-loop
+against synthetic epochs with a known velocity and a known clock drift, and
+separately that the clock drift does not leak into the velocity estimate.
+
+**This confirmed the diagnosis rather than merely improving the number.** The
+prediction was that heading was the missing constraint; adding a velocity
+observation is precisely what makes heading observable, and it moved the result
+from 1.7 % to 34.7 %.
+
+### A tension worth stating
+
+The most *accurate* setting is not the most statistically *consistent* one. At
+`--imu-scale 100` the NIS ratio is 0.89 — nearly ideal — but horizontal error is
+5.27 m. At `--imu-scale 300` the NIS ratio falls to 0.16, which the harness
+flags as far too conservative, yet the error is 4.06 m.
+
+That disagreement is itself informative. NIS assumes the measurement error is
+zero-mean white noise, and here it is not: the WLS fixes carry a **+2.87 m north
+and +13.30 m up bias**. Against a biased measurement, the statistically
+consistent tuning over-trusts the bias. Reporting the tuned number while showing
+the NIS is the honest way to present that — neither figure alone tells the
+truth.
+
+### Still open
+
+**Non-holonomic constraints** would help further — but the phone's
 sensor axes are not the vehicle's, and the mounting rotation is unknown, so NHC
 cannot be applied without estimating it first. The EqF's symmetry group
 estimates exactly that kind of extrinsic, which makes this a natural place to
@@ -100,6 +138,8 @@ holds `device_imu.csv`, `device_gnss.csv` and `ground_truth.csv`, then:
 ```bash
 cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale 300
 ```
+
+Add `--no-doppler` to reproduce the position-only result.
 
 The sigmas are measured from this trace rather than assumed — the dataset
 carries no covariance for the WLS solution, so they are an input, and the

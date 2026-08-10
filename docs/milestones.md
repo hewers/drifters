@@ -177,12 +177,14 @@ case (a vehicle stopped at a light) but not indefinite stationary operation.
 Freezing either state keeps the run stable, so the mitigation is to constrain
 the unobservable direction rather than to retune:
 
-- [ ] Suppress attitude feedback from velocity-only measurements during extended
-      stationary periods, or estimate only the observable combination
+- [x] Suppress attitude feedback from velocity-only measurements — delivered in
+      M8 as `HeldStates` / `zupt_holds_attitude`. Measured: over 300 s
+      stationary, 6.7 mm held against 94 km unheld.
+- [x] NIS consistency checking, wired into every replay (Layer 7)
 - [ ] Pair the stationarity detector with a height aid so the vertical channel
       does not float alongside it
-- [ ] A NEES/NIS consistency harness (M8) to catch this class of divergence
-      automatically rather than by inspection
+- [ ] Monte Carlo **NEES** over synthetic trajectories — NIS needs no truth and
+      is already in; NEES needs a known state and so needs simulation
 
 Neither the gate nor covariance inflation substitutes for this: inflation
 restores the filter's *ability to accept* measurements after a lockout, but
@@ -455,10 +457,28 @@ phone gyro's drift injects error faster than 1 Hz fixes remove it.
 The GNSS and fusion paths were ruled out first: weighting the IMU out entirely
 reproduces the GNSS solution to a millimetre.
 
-### Next: GNSS velocity from Doppler
+### GNSS velocity from Doppler ✅
 
-- [ ] Least-squares velocity from `PseudorangeRateMetersPerSecond` and the
-      per-satellite ECEF velocities already in `device_gnss.csv`
+- [x] Least-squares velocity from `PseudorangeRateMetersPerSecond` and the
+      per-satellite ECEF positions, velocities and clock drift
 
-Velocity observations make heading observable directly, which is the missing
-constraint. This is the highest-value next step for phone-grade data.
+| | horiz RMS | vert RMS | horiz max |
+|---|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
+| position-only aiding | 6.100 m | 16.249 m | 49.11 m |
+| **+ Doppler velocity** | **4.055 m** | **10.235 m** | **12.97 m** |
+
+**−34.7 % horizontal, −43 % vertical, worst case down 3.7×.** This confirmed the
+diagnosis rather than merely improving a number: the prediction was that heading
+was the missing constraint, and a velocity observation is exactly what makes
+heading observable.
+
+The sign convention is the entire risk — reverse it and the solver returns a
+negated velocity that looks completely plausible — so it is tested closed-loop
+against synthetic epochs with known velocity and known clock drift, plus a
+separate check that clock drift does not leak into the velocity estimate.
+
+**A tension worth keeping visible:** the most accurate tuning is not the most
+statistically consistent one. NIS assumes zero-mean white measurement error, and
+these fixes carry a +2.87 m north / +13.30 m up *bias*, so the consistent tuning
+over-trusts it. See [gsdc.md](gsdc.md).

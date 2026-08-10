@@ -145,6 +145,7 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         imu_scale,
         gyro_scale,
         gnss_lag,
+        !args.iter().any(|a| a == "--no-doppler"),
         quiet,
     )?;
 
