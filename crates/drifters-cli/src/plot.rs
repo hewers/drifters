@@ -85,9 +85,7 @@ impl Scale {
 }
 
 fn fmt_tick(v: f64, step_hint: f64) -> String {
-    let decimals = if step_hint >= 100.0 {
-        0
-    } else if step_hint >= 10.0 {
+    let decimals = if step_hint >= 10.0 {
         0
     } else if step_hint >= 1.0 {
         1

@@ -327,14 +327,14 @@ across nine decades is what caught it.
 
 ---
 
-## M11 — Diagnostics and the README figure
+## M11 — Diagnostics and the README figure ✅ done
 
 A filter that cannot be *seen* is hard to trust. The replay already computes
 everything needed; it just aggregates it away.
 
-- [ ] Replay emits a per-epoch CSV: residuals, NIS, filter and GNSS positions
-- [ ] `drifters plot` renders trajectory, error trace and NIS as **SVG**
-- [ ] Figure generated from the KF-GINS run, committed, shown in the README
+- [x] Replay carries a per-epoch trace: residuals, NIS, positions
+- [x] `drifters plot` renders trajectory, error trace and NIS as **SVG**
+- [x] Figure generated from the KF-GINS run, committed, shown in the README
 
 SVG rather than PNG, and hand-emitted rather than via a plotting library: it
 keeps the dependency count honest, the output diffable in review, and it scales
@@ -342,12 +342,21 @@ on a README. No plotting crate earns its place for three panels.
 
 ---
 
-## M12 — crates.io release preparation
+## M12 — crates.io release preparation ✅ done
 
-- [ ] Per-crate `readme` and docs.rs metadata
-- [ ] Keywords and categories within crates.io's limits (5 max each)
-- [ ] `cargo publish --dry-run` green for every publishable crate
-- [ ] Publish order recorded — dependencies must land first
+- [x] Per-crate `README.md`, `readme` key and docs.rs metadata
+- [x] Keywords and categories within crates.io's limits (5 max each)
+- [x] `cargo publish --dry-run` green for `drifters-core`; the rest cannot be
+      dry-run until their dependencies are on the registry, which is inherent
+      rather than a misconfiguration
+- [x] Publish order and procedure in [releasing.md](releasing.md)
+- [x] Package contents verified — 15 files for core, 12 for filter; the 67 MB
+      dataset and `APEqF.pdf` never enter a package
+
+**One judgment call.** `drifters-eqf` is held at `publish = false`. It currently
+contains the Lie group machinery and no filter, and publishing a crate named
+"equivariant filter" with no filter in it would misrepresent it. Flip when M10
+lands.
 
 **Name check, done.** `drifters-core`, `drifters-filter`, `drifters-proto`,
 `drifters-interop` and `drifters-eqf` are all free. The bare name `drifters` is

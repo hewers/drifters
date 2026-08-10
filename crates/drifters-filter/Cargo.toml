@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
 authors.workspace = true
 categories = ["no-std", "science", "embedded"]
@@ -35,3 +36,7 @@ std = ["drifters-core/std"]
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

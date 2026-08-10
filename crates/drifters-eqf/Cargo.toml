@@ -5,10 +5,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
 authors.workspace = true
 categories = ["no-std", "science", "embedded"]
 keywords = ["navigation", "equivariant", "lie-group", "filter", "ins"]
+
+# Held back from crates.io until the filter itself exists. Right now this crate
+# contains the Lie group machinery and nothing else, and publishing something
+# called "equivariant filter" that has no filter in it would misrepresent it.
+# Flip to publishable when M10 lands.
+publish = false
 
 [dependencies]
 drifters-core = { workspace = true }
@@ -23,3 +30,7 @@ std = ["drifters-core/std"]
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

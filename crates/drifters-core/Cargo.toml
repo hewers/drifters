@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
 authors.workspace = true
 categories = ["no-std", "science", "embedded"]
@@ -30,3 +31,7 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
