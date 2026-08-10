@@ -366,7 +366,7 @@ called `drifters`; binary names are not registry-unique, so that is fine.
 
 ---
 
-## M13 — GSDC and ground-truth error 🔨 partial
+## M13 — GSDC and ground-truth error ✅ done
 
 The Google Smartphone Decimeter Challenge datasets are Pixel raw GNSS and IMU
 logs **with survey-grade ground truth**. That is the missing ingredient: every
@@ -375,7 +375,8 @@ fixes themselves, because neither KF-GINS nor any dataset used so far ships a
 truth trajectory.
 
 - [x] Ground-truth machinery: trajectory, interpolation, true position error
-- [ ] Reader for the GSDC CSV layout — **not attempted**, see below
+- [x] Reader for the GSDC CSV layout — schema verified against the real data
+- [x] Run against a phone-trace with ground truth, and a comparison report
 
 ### What was built
 
@@ -395,18 +396,37 @@ Two properties worth calling out, both tested:
 - **Longitude interpolates the short way.** A trajectory crossing the
   antimeridian must not sweep 359.8° between two adjacent samples.
 
-### What was not built, and why
+### The reader
 
-The GSDC reader. The data is on Kaggle behind authentication that is not
-available here, its terms preclude redistribution, and no public mirror exists —
-the obvious candidate repositories are analysis code, not data, and none expose
-the CSV column names.
+Written against the real schema once the dataset arrived, rather than guessed.
+Three things it gets right that are easy to get wrong, all documented in the
+module and covered by tests: position comes from `WlsPosition*EcefMeters` rather
+than the raw pseudoranges; the Android sensor frame is used as the body frame
+directly with the mounting absorbed into the initial attitude; and the IMU is
+integrated on the nanosecond boot clock rather than the millisecond UTC one,
+because millisecond resolution is 10 % of a 100 Hz interval.
 
-Writing a parser against a schema that cannot be checked would produce exactly
-the failure this project keeps avoiding: code that compiles, looks right, and is
-wrong in a way nobody notices until much later. The column names are the entire
-content of such a reader, so an unverified one is not worth having.
+### The result — a genuine negative
 
-**It is roughly an hour's work given a single sample file** — even a hundred
-lines of `device_imu.csv`, `device_gnss.csv` and `ground_truth.csv` is enough to
-pin the schema and write the adapter on top of the machinery that now exists.
+| | horizontal RMS | vertical RMS |
+|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m |
+| drifters, tuned | 6.100 m | 16.249 m |
+| drifters, un-tuned | 11.383 m | 14.804 m |
+
+**Fusing a phone IMU buys 1.7 % horizontally**, and un-tuned it is nearly twice
+as bad as GNSS alone. Full diagnosis in [gsdc.md](gsdc.md); the short version is
+that the WLS fixes carry a +2.87 m north and +13.30 m up *bias* that no filter
+can remove, and heading is weakly observable with position-only aiding, so a
+phone gyro's drift injects error faster than 1 Hz fixes remove it.
+
+The GNSS and fusion paths were ruled out first: weighting the IMU out entirely
+reproduces the GNSS solution to a millimetre.
+
+### Next: GNSS velocity from Doppler
+
+- [ ] Least-squares velocity from `PseudorangeRateMetersPerSecond` and the
+      per-satellite ECEF velocities already in `device_gnss.csv`
+
+Velocity observations make heading observable directly, which is the missing
+constraint. This is the highest-value next step for phone-grade data.

@@ -33,6 +33,28 @@ Regenerate it yourself with `drifters plot` — every value on the figure comes
 from the replay, none are hand-entered. The bottom panel is the one to read
 first: filter consistency means NIS *scattered about 3*, not NIS *small*.
 
+### A second dataset, and an honest negative result
+
+The KF-GINS numbers above come from a **tactical-grade** IMU with RTK GNSS. To
+see where the filter stops helping, it was also run against a
+[Google Smartphone Decimeter Challenge 2023](https://www.kaggle.com/competitions/smartphone-decimeter-2023)
+trace — a Samsung SM-S908B in a car, 100 Hz phone IMU, ~6 m single-point GNSS —
+which is the first dataset here carrying **survey-grade ground truth**, so this
+is true position error rather than a prediction residual.
+
+| | horizontal RMS | vertical RMS |
+|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m |
+| drifters (GNSS + IMU) | **6.100 m** | **16.249 m** |
+| | −1.7 % | −9.6 % |
+
+**Fusing a phone IMU here buys almost nothing**, and with un-tuned phone-grade
+noise settings it makes the horizontal solution *worse* (11.4 m). That is a real
+result, not a tuning failure, and the diagnosis is in
+[docs/gsdc.md](docs/gsdc.md).
+
+![GSDC 2023 trace: trajectory, residual and NIS](docs/figures/gsdc-2023.svg)
+
 ## Status
 
 **Working and validated:** core math, strapdown mechanization, 21-state ESKF,

@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use drifters_cli::{kfgins, plot, replay};
+use drifters_cli::{kfgins, plot, replay, run_gsdc};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,6 +49,9 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.first().map(String::as_str) == Some("gsdc") {
+        return run_gsdc_command(args);
+    }
     let make_figure = match args.first().map(String::as_str) {
         Some("replay") => false,
         // `plot` is `replay` plus a figure: the diagnostics come from the run
@@ -112,6 +115,132 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             vertical_rms: report.residual_down.rms(),
             nis_mean: report.nis.mean(),
             fixes: report.applied_fixes,
+        };
+        let svg = plot::render(&report.epochs, &caption);
+        if let Some(parent) = Path::new(figure).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(figure, svg)?;
+        println!("\nwrote {figure}");
+    }
+    Ok(())
+}
+
+/// Replay a GSDC phone-trace and report the filter against the phone's own
+/// GNSS solution, both scored on ground truth.
+fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
+    let quiet = args.iter().any(|a| a == "--quiet");
+    // Per-axis, because smartphone GNSS vertical error is several times its
+    // horizontal error — a single figure is wrong for one of them.
+    let sn: f64 = flag(args, "--sigma-n").unwrap_or("5").parse()?;
+    let se: f64 = flag(args, "--sigma-e").unwrap_or("5").parse()?;
+    let sv: f64 = flag(args, "--sigma-v").unwrap_or("10").parse()?;
+    let imu_scale: f64 = flag(args, "--imu-scale").unwrap_or("1").parse()?;
+    let gyro_scale: f64 = flag(args, "--gyro-scale").unwrap_or("1").parse()?;
+    let gnss_lag: f64 = flag(args, "--gnss-lag").unwrap_or("0").parse()?;
+    let report = run_gsdc(
+        &dir,
+        drifters_cli::vec3(sn, se, sv),
+        imu_scale,
+        gyro_scale,
+        gnss_lag,
+        quiet,
+    )?;
+
+    println!("\n--- GSDC replay ---");
+    println!("IMU samples processed : {}", report.processed);
+    println!(
+        "GNSS fixes applied    : {} ({} rejected by the gate)",
+        report.applied, report.rejected
+    );
+    println!("assumed GNSS sigma    : N {sn:.1}, E {se:.1}, D {sv:.1} m");
+    if imu_scale != 1.0 {
+        println!("IMU process noise     : x{imu_scale} (diagnostic)");
+    }
+
+    println!("\n=== position error against ground truth (metres) ===");
+    println!(
+        "{:<26} {:>9} {:>9} {:>9}",
+        "", "horiz RMS", "vert RMS", "horiz max"
+    );
+    for (name, e) in [
+        ("phone GNSS (WLS) alone", &report.gnss_only),
+        ("drifters (GNSS + IMU)", &report.filter),
+    ] {
+        println!(
+            "{name:<26} {:>9.3} {:>9.3} {:>9.3}",
+            e.horizontal.rms(),
+            e.down.rms(),
+            e.horizontal.max()
+        );
+    }
+    let (a, b) = (
+        report.gnss_only.horizontal.rms(),
+        report.filter.horizontal.rms(),
+    );
+    if a > 0.0 {
+        println!(
+            "\nhorizontal RMS change  : {:+.1} % ({:.3} m -> {:.3} m)",
+            (b - a) / a * 100.0,
+            a,
+            b
+        );
+    }
+    // Prediction residual: how far the IMU dead-reckoned in one fix interval
+    // versus where GNSS says it went. This isolates the IMU from the fusion.
+    let mut rh = drifters_cli::stats::Running::new();
+    let mut rv = drifters_cli::stats::Running::new();
+    for e in &report.epochs {
+        rh.push(e.residual.0.hypot(e.residual.1));
+        rv.push(e.residual.2.abs());
+    }
+    println!(
+        "\n1-second dead-reckoning residual: horiz RMS {:.3} m (max {:.1}), vert RMS {:.3} m",
+        rh.rms(),
+        rh.max(),
+        rv.rms()
+    );
+    println!(
+        "epochs compared        : filter {}, GNSS {}",
+        report.filter.count(),
+        report.gnss_only.count()
+    );
+    println!(
+        "\nNIS mean {:.3} over {} fixes (expected 3.0, ratio {:.2}x — {})",
+        report.nis.mean(),
+        report.nis.count(),
+        report.nis.mean() / 3.0,
+        drifters_cli::practical_verdict(report.nis.mean() / 3.0)
+    );
+
+    if let Some(csv) = flag(args, "--dump") {
+        use std::io::Write;
+        let mut f = std::fs::File::create(csv)?;
+        writeln!(f, "tow,n,e,d,res_n,res_e,res_d,nis")?;
+        for e in &report.epochs {
+            writeln!(
+                f,
+                "{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",
+                e.tow,
+                e.ned.0,
+                e.ned.1,
+                e.ned.2,
+                e.residual.0,
+                e.residual.1,
+                e.residual.2,
+                e.nis.map(|v| format!("{v:.4}")).unwrap_or_default()
+            )?;
+        }
+        println!("wrote {csv}");
+    }
+    if let Some(figure) = flag(args, "--figure") {
+        let caption = plot::Caption {
+            dataset: flag(args, "--name").unwrap_or("GSDC 2023 phone trace"),
+            horizontal_rms: report.filter.horizontal.rms(),
+            vertical_rms: report.filter.down.rms(),
+            nis_mean: report.nis.mean(),
+            fixes: report.applied,
         };
         let svg = plot::render(&report.epochs, &caption);
         if let Some(parent) = Path::new(figure).parent() {

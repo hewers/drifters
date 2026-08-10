@@ -4,6 +4,7 @@
 //! Exposed as a library so the regression test can drive a replay directly
 //! rather than shelling out to the binary and parsing its output.
 
+pub mod gsdc;
 pub mod kfgins;
 pub mod plot;
 pub mod stats;
@@ -14,7 +15,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use drifters_core::math::RAD_TO_DEG;
-use drifters_filter::GinsEngine;
+use drifters_filter::{GinsEngine, GinsOptions};
 
 use stats::{assess, Consistency, Running};
 
@@ -319,4 +320,163 @@ pub(crate) fn write_row(
     }
     writeln!(std_out)?;
     Ok(())
+}
+
+/// Result of a GSDC replay: the filter and the phone's own GNSS solution, both
+/// scored against ground truth.
+pub struct GsdcReport {
+    /// Error of the fused solution against truth.
+    pub filter: truth::ErrorStats,
+    /// Error of the phone's weighted-least-squares GNSS fixes against truth.
+    ///
+    /// The baseline that matters: it is what the device produces unaided, so
+    /// the difference is what fusing the IMU actually bought.
+    pub gnss_only: truth::ErrorStats,
+    /// Per-epoch trace for plotting.
+    pub epochs: Vec<Epoch>,
+    /// IMU samples processed.
+    pub processed: u64,
+    /// Fixes applied, and fixes the gate rejected.
+    pub applied: u64,
+    /// Fixes rejected by the chi-squared gate.
+    pub rejected: u64,
+    /// Normalised innovation squared over the run.
+    pub nis: stats::Running,
+}
+
+/// Replay a GSDC phone-trace directory.
+pub fn run_gsdc(
+    dir: &Path,
+    sigma: drifters_core::math::Vec3,
+    imu_scale: f64,
+    gyro_scale: f64,
+    gnss_lag: f64,
+    quiet: bool,
+) -> Result<GsdcReport, Box<dyn std::error::Error>> {
+    let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
+    // Diagnostic: 0 ignores rotation entirely, -1 flips the sign convention.
+    if gyro_scale != 1.0 {
+        for s in imu.iter_mut() {
+            s.dtheta = s.dtheta * gyro_scale;
+        }
+    }
+    let fixes = gsdc::read_gnss(&dir.join("device_gnss.csv"), utc_offset - gnss_lag, sigma)?;
+    let reference = gsdc::read_truth(&dir.join("ground_truth.csv"), utc_offset)?;
+    if !quiet {
+        eprintln!(
+            "{} IMU samples, {} GNSS fixes, {} truth samples",
+            imu.len(),
+            fixes.len(),
+            reference.len()
+        );
+    }
+    let first = *fixes.first().ok_or("no usable GNSS fixes in this trace")?;
+
+    let attitude = gsdc::coarse_align(&imu, &fixes, 2.0);
+    if !quiet {
+        eprintln!(
+            "coarse alignment: roll {:.1}°, pitch {:.1}°, yaw {:.1}° \
+             (roll/pitch describe how the phone was mounted)",
+            attitude.roll.to_degrees(),
+            attitude.pitch.to_degrees(),
+            attitude.yaw.to_degrees()
+        );
+    }
+
+    let options = GinsOptions {
+        // Phone-grade MEMS, several orders worse than the tactical unit in the
+        // KF-GINS dataset. These are datasheet-class figures, not calibrated.
+        imu_noise: drifters_core::types::ImuNoise {
+            gyro_arw: drifters_core::math::Vec3::splat(
+                imu_scale * 0.3 * drifters_core::math::DEG_TO_RAD / 60.0,
+            ),
+            accel_vrw: drifters_core::math::Vec3::splat(imu_scale * 0.2 / 60.0),
+            gyro_bias_std: drifters_core::math::Vec3::splat(
+                imu_scale * 20.0 * drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC,
+            ),
+            accel_bias_std: drifters_core::math::Vec3::splat(
+                imu_scale * 2000.0 * drifters_core::math::MGAL_TO_M_S2,
+            ),
+            gyro_scale_std: drifters_core::math::Vec3::splat(1000.0 * drifters_core::math::PPM),
+            accel_scale_std: drifters_core::math::Vec3::splat(1000.0 * drifters_core::math::PPM),
+            correlation_time: 3600.0,
+        },
+        initial_position_std: sigma,
+        initial_velocity_std: drifters_core::math::Vec3::splat(2.0),
+        initial_attitude_std: drifters_core::math::Vec3::new(
+            5.0 * drifters_core::math::DEG_TO_RAD,
+            5.0 * drifters_core::math::DEG_TO_RAD,
+            30.0 * drifters_core::math::DEG_TO_RAD,
+        ),
+        ..GinsOptions::default()
+    }
+    .with_initial_state(first.position, drifters_core::frames::Ned::ZERO, attitude);
+
+    let mut engine = GinsEngine::new(options)?;
+    let mut report = GsdcReport {
+        filter: truth::ErrorStats::new(),
+        gnss_only: truth::ErrorStats::new(),
+        epochs: Vec::new(),
+        processed: 0,
+        applied: 0,
+        rejected: 0,
+        nis: stats::Running::new(),
+    };
+
+    let anchor = first.position;
+    let mut next = 0usize;
+    let mut last_nis: Option<f64> = None;
+    for sample in &imu {
+        let t = sample.time.tow;
+        if t < first.time.tow {
+            continue;
+        }
+        if next < fixes.len() && fixes[next].time.tow <= t {
+            let fix = fixes[next];
+            next += 1;
+            // Score the phone's own solution on the same epochs, so the two are
+            // compared on identical ground.
+            report
+                .gnss_only
+                .push(&reference, fix.time.tow, fix.position);
+
+            engine.add_gnss(fix);
+            engine.add_imu(*sample)?;
+            report.processed += 1;
+
+            match engine.last_nis() {
+                Some(v) if Some(v) != last_nis => {
+                    report.nis.push(v);
+                    last_nis = Some(v);
+                    report.applied += 1;
+                }
+                _ => report.rejected += 1,
+            }
+
+            let solution = engine.nav_state().position();
+            report.filter.push(&reference, t, solution);
+            let ned = solution.ned_from(anchor);
+            let residual = engine.antenna_position().ned_from(fix.position);
+            report.epochs.push(Epoch {
+                tow: t,
+                ned: (ned.n, ned.e, ned.d),
+                residual: (residual.n, residual.e, residual.d),
+                nis: engine.last_nis(),
+            });
+        } else {
+            engine.add_imu(*sample)?;
+            report.processed += 1;
+        }
+    }
+    Ok(report)
+}
+
+/// Convenience for callers that do not depend on `drifters-core` directly.
+pub fn vec3_splat(v: f64) -> drifters_core::math::Vec3 {
+    drifters_core::math::Vec3::splat(v)
+}
+
+/// Convenience for callers that do not depend on `drifters-core` directly.
+pub fn vec3(x: f64, y: f64, z: f64) -> drifters_core::math::Vec3 {
+    drifters_core::math::Vec3::new(x, y, z)
 }
