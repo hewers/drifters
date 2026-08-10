@@ -5856,6 +5856,20 @@ pub mod drifters_ {
             pub r#max_consecutive_rejections: u32,
             /// Covariance scale factor applied when that limit is reached. Must be >= 1.
             pub r#rejection_inflation: f64,
+            /// Whether a zero-velocity update may correct attitude. Stationary,
+            /// accelerometer bias and tilt produce identical velocity signatures, so a
+            /// ZUPT observes only their sum; letting it correct both makes the pair drift
+            /// apart until the tilt's gravity mis-projection dominates. Holding attitude
+            /// sends the whole correction to the bias, which ZUPT can actually pin down.
+            ///
+            /// `optional` so that absence is distinguishable from an explicit false. A
+            /// plain proto3 bool defaults to false, which is the UNSAFE setting here — a
+            /// config that simply predates this field would silently decode to the
+            /// behaviour that diverges. Absent means "use the recommended default", which
+            /// is true.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#zupt_holds_attitude: bool,
             /// Tracks presence of optional and message fields
             pub _has: GinsOptions_::_Hazzer,
         }
@@ -5893,6 +5907,7 @@ pub mod drifters_ {
                     &= (self.r#max_consecutive_rejections
                         == other.r#max_consecutive_rejections);
                 ret &= (self.r#rejection_inflation == other.r#rejection_inflation);
+                ret &= (self.r#zupt_holds_attitude() == other.r#zupt_holds_attitude());
                 ret
             }
         }
@@ -6522,6 +6537,49 @@ pub mod drifters_ {
                 self.r#rejection_inflation = value.into();
                 self
             }
+            /// Return a reference to `zupt_holds_attitude` as an `Option`
+            #[inline]
+            pub fn r#zupt_holds_attitude(&self) -> ::core::option::Option<&bool> {
+                self._has.r#zupt_holds_attitude().then_some(&self.r#zupt_holds_attitude)
+            }
+            /// Set the value and presence of `zupt_holds_attitude`
+            #[inline]
+            pub fn set_zupt_holds_attitude(&mut self, value: bool) -> &mut Self {
+                self._has.set_zupt_holds_attitude();
+                self.r#zupt_holds_attitude = value.into();
+                self
+            }
+            /// Return a mutable reference to `zupt_holds_attitude` as an `Option`
+            #[inline]
+            pub fn mut_zupt_holds_attitude(
+                &mut self,
+            ) -> ::core::option::Option<&mut bool> {
+                self._has
+                    .r#zupt_holds_attitude()
+                    .then_some(&mut self.r#zupt_holds_attitude)
+            }
+            /// Clear the presence of `zupt_holds_attitude`
+            #[inline]
+            pub fn clear_zupt_holds_attitude(&mut self) -> &mut Self {
+                self._has.clear_zupt_holds_attitude();
+                self
+            }
+            /// Take the value of `zupt_holds_attitude` and clear its presence
+            #[inline]
+            pub fn take_zupt_holds_attitude(&mut self) -> ::core::option::Option<bool> {
+                let val = self
+                    ._has
+                    .r#zupt_holds_attitude()
+                    .then(|| ::core::mem::take(&mut self.r#zupt_holds_attitude));
+                self._has.clear_zupt_holds_attitude();
+                val
+            }
+            /// Builder method that sets the value of `zupt_holds_attitude`. Useful for initializing the message.
+            #[inline]
+            pub fn init_zupt_holds_attitude(mut self, value: bool) -> Self {
+                self.set_zupt_holds_attitude(value);
+                self
+            }
         }
         impl ::micropb::MessageDecode for GinsOptions {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
@@ -6645,6 +6703,14 @@ pub mod drifters_ {
                                     *mut_ref = val as _;
                                 }
                             };
+                        }
+                        16u32 => {
+                            let mut_ref = &mut self.r#zupt_holds_attitude;
+                            {
+                                let val = decoder.decode_bool()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_zupt_holds_attitude();
                         }
                         _ => {
                             decoder.skip_wire_value(tag.wire_type())?;
@@ -6833,6 +6899,16 @@ pub mod drifters_ {
                         break 'msg (::core::result::Result::<usize, _>::Err(err));
                     }
                 }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(1usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
                 ::core::result::Result::Ok(max_size)
             };
             fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
@@ -6954,6 +7030,14 @@ pub mod drifters_ {
                     if *val_ref != 0.0 {
                         encoder.encode_varint32(121u32)?;
                         encoder.encode_double(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#zupt_holds_attitude()
+                    {
+                        encoder.encode_varint32(128u32)?;
+                        encoder.encode_bool(*val_ref)?;
                     }
                 }
                 Ok(())
@@ -7112,6 +7196,13 @@ pub mod drifters_ {
                     let val_ref = &self.r#rejection_inflation;
                     if *val_ref != 0.0 {
                         size += 1usize + 8;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#zupt_holds_attitude()
+                    {
+                        size += 2usize + 1;
                     }
                 }
                 size
@@ -7451,6 +7542,31 @@ pub mod drifters_ {
                 #[inline]
                 pub const fn init_antenna_lever_arm_m(mut self) -> Self {
                     self.set_antenna_lever_arm_m();
+                    self
+                }
+                /// Query presence of `zupt_holds_attitude`
+                #[inline]
+                pub const fn r#zupt_holds_attitude(&self) -> bool {
+                    (self.0[1] & 32) != 0
+                }
+                /// Set presence of `zupt_holds_attitude`
+                #[inline]
+                pub const fn set_zupt_holds_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `zupt_holds_attitude`
+                #[inline]
+                pub const fn clear_zupt_holds_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `zupt_holds_attitude`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_zupt_holds_attitude(mut self) -> Self {
+                    self.set_zupt_holds_attitude();
                     self
                 }
             }

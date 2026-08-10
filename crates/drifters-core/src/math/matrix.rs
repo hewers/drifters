@@ -191,7 +191,16 @@ impl<const R: usize, const C: usize> Matrix<R, C> {
         c0: usize,
         src: &Matrix<BR, BC>,
     ) {
-        assert!(r0 + BR <= R && c0 + BC <= C, "block does not fit");
+        // Phrased as subtraction rather than `r0 + BR <= R` so it cannot be
+        // satisfied by an overflowed sum. That is not paranoia about the
+        // caller: with overflow checks off in release, LLVM cannot rule out a
+        // wrap in `r0 + BR`, so it cannot then prove `r0 + i < R` and emits a
+        // bounds check — and therefore a reachable panic — for every element.
+        // In this form the data path links no `panic_bounds_check` at all.
+        assert!(
+            BR <= R && BC <= C && r0 <= R - BR && c0 <= C - BC,
+            "block does not fit"
+        );
         for i in 0..BR {
             for j in 0..BC {
                 self.data[r0 + i][c0 + j] = src.data[i][j];
@@ -205,7 +214,16 @@ impl<const R: usize, const C: usize> Matrix<R, C> {
     /// If the block would extend past the edge of `self`.
     #[inline]
     pub fn block<const BR: usize, const BC: usize>(&self, r0: usize, c0: usize) -> Matrix<BR, BC> {
-        assert!(r0 + BR <= R && c0 + BC <= C, "block does not fit");
+        // Phrased as subtraction rather than `r0 + BR <= R` so it cannot be
+        // satisfied by an overflowed sum. That is not paranoia about the
+        // caller: with overflow checks off in release, LLVM cannot rule out a
+        // wrap in `r0 + BR`, so it cannot then prove `r0 + i < R` and emits a
+        // bounds check — and therefore a reachable panic — for every element.
+        // In this form the data path links no `panic_bounds_check` at all.
+        assert!(
+            BR <= R && BC <= C && r0 <= R - BR && c0 <= C - BC,
+            "block does not fit"
+        );
         let mut out = Matrix::<BR, BC>::zeros();
         for i in 0..BR {
             for j in 0..BC {

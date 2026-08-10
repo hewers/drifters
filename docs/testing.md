@@ -317,3 +317,45 @@ That is the general case for stack budgets on this kind of code. Fixed-size
 matrix arithmetic written as expressions creates a temporary per subexpression,
 and how many survive is a question about the optimiser, not about the source.
 It has to be measured.
+
+## Layer 9 — the data path links no panic machinery
+
+`cortex-m-harness/src/bin/panic_audit.rs` is a firmware binary containing only
+the filter's hot path: no formatting, no semihosting, no strings. Whatever panic
+machinery survives linking there is reachable from `drifters` itself rather than
+from the harness around it.
+
+CI fails if `nm` finds any `core::panicking` symbol in it.
+
+A panic on a microcontroller is usually unrecoverable — in an interrupt handler
+it is a dead device — so "can this code panic" is a property worth checking
+mechanically rather than reasoning about.
+
+### What the audit found
+
+Both problems were invisible from the source and only appeared in the linked
+binary.
+
+**`panic_bounds_check`, reached from `GinsEngine::propagate`.** `Matrix::
+set_block` guarded itself with `assert!(r0 + BR <= R)`. With overflow checks off
+in release, LLVM cannot rule out that `r0 + BR` wrapped, so it cannot then prove
+`r0 + i < R` and emitted a bounds check — and a panic — for every element
+written. Rephrasing the guard as `BR <= R && r0 <= R - BR` cannot be satisfied
+by a wrapped sum, and the checks disappear.
+
+**`panic_fmt`, also from `propagate`.** `transition_matrix` and `process_noise`
+wrote their Gauss-Markov blocks by iterating `[BG_ID, BA_ID, SG_ID, SA_ID]`.
+Those are compile-time constants, but iterating an array hides that from the
+optimiser, which then could not fold `set_block`'s assert away. Unrolling the
+four calls made the indices visibly constant and the assert vanished.
+
+The general lesson matches Layer 8's: what the optimiser can prove is not
+visible in the source. Both of these read as obviously-fine code, and both
+linked a panic.
+
+### Scope
+
+This covers the steady-state data path — `add_imu`, `apply_zupt`,
+`apply_height`. Construction and configuration validation are *not* in scope and
+may legitimately panic on programmer error; they run once, at startup, where a
+panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.

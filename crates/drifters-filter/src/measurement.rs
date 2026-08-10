@@ -41,6 +41,7 @@ use drifters_core::math::{wrap_pi, Mat3, Matrix, Vec3};
 use drifters_core::types::{ImuSample, Pva};
 use drifters_core::F;
 
+use crate::eskf::HeldStates;
 use crate::state::{N_STATE, PHI_ID, P_ID, V_ID};
 
 /// A measurement ready to be applied to the filter.
@@ -57,6 +58,9 @@ pub struct Measurement<const M: usize> {
     pub noise: Matrix<M, M>,
     /// Chi-squared gate. `None` accepts unconditionally.
     pub gate: Option<F>,
+    /// Error states this measurement must not correct. See
+    /// [`HeldStates`](crate::eskf::HeldStates).
+    pub held: HeldStates,
 }
 
 impl<const M: usize> Measurement<M> {
@@ -66,6 +70,13 @@ impl<const M: usize> Measurement<M> {
     #[inline]
     pub fn with_gate(mut self, gate: Option<F>) -> Self {
         self.gate = gate;
+        self
+    }
+
+    /// Hold the given states fixed across this update.
+    #[inline]
+    pub fn holding(mut self, held: HeldStates) -> Self {
+        self.held = held;
         self
     }
 }
@@ -117,6 +128,7 @@ pub fn zero_velocity(pva: &Pva, sigma: Vec3) -> Measurement<3> {
         jacobian,
         noise: sigma.squared().to_diag(),
         gate: Some(crate::eskf::chi_squared::P999[3]),
+        held: HeldStates::NONE,
     }
 }
 
@@ -154,6 +166,7 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
         jacobian,
         noise: Matrix::<2, 2>::from_diagonal(&[sigma.0 * sigma.0, sigma.1 * sigma.1]),
         gate: Some(crate::eskf::chi_squared::P999[2]),
+        held: HeldStates::NONE,
     }
 }
 
@@ -182,6 +195,7 @@ pub fn wheel_speed(pva: &Pva, speed: F, sigma: F) -> Measurement<1> {
         jacobian,
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
+        held: HeldStates::NONE,
     }
 }
 
@@ -207,6 +221,7 @@ pub fn height(pva: &Pva, height: F, sigma: F) -> Measurement<1> {
         jacobian,
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
+        held: HeldStates::NONE,
     }
 }
 
@@ -234,6 +249,7 @@ pub fn magnetic_heading(pva: &Pva, heading: F, sigma: F) -> Measurement<1> {
         jacobian,
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
+        held: HeldStates::NONE,
     }
 }
 
@@ -271,6 +287,7 @@ pub fn gnss_velocity(
         jacobian,
         noise: sigma.squared().to_diag(),
         gate: Some(crate::eskf::chi_squared::P999[3]),
+        held: HeldStates::NONE,
     }
 }
 

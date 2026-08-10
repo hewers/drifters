@@ -153,3 +153,37 @@ jobs:
           # 16.5 KiB while still failing if a change reintroduces the
           # expression-chained form that cost 35.3 KiB.
           test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
+      - name: the data path must link no panic machinery
+        working-directory: cortex-m-harness
+        run: |
+          cargo build --release --bin panic_audit
+          bin=target/thumbv7em-none-eabihf/release/panic_audit
+          if nm "$bin" | grep -i 'core9panicking'; then
+            echo "the filter's data path can reach a panic; see docs/testing.md Layer 9"
+            exit 1
+          fi
+          echo "no panic machinery linked"
+
+  # Licence and advisory auditing.
+  #
+  # Deliberately run on the DEFAULT feature set. `gnss-rtk` is AGPL-3.0 and is
+  # not on the allow list, so `--all-features` fails by design — that is the
+  # machine check behind ADR 0003, which says a permissive crate must never
+  # carry an AGPL dependency on its default path. Enabling the feature is the
+  # user's informed choice; making it the project's default is not.
+  deny:
+    name: licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
+      - name: the AGPL boundary must actually hold
+        run: |
+          if cargo deny --all-features check licenses 2>&1 | grep -q 'AGPL-3.0'; then
+            echo "confirmed: enabling gnss-rtk-interop is caught by the licence policy"
+          else
+            echo "the AGPL guard did not fire; the boundary in ADR 0003 is unenforced"
+            exit 1
+          fi

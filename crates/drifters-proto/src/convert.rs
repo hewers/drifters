@@ -463,6 +463,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
         let mut msg = Self {
             r#max_consecutive_rejections: o.max_consecutive_rejections,
             r#rejection_inflation: o.rejection_inflation,
+
             ..Default::default()
         };
         msg.set_initial_position((&o.initial_state.position).into());
@@ -478,6 +479,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
         msg.set_initial_accel_scale_std((&o.initial_accel_scale_std).into());
         msg.set_imu_noise((&o.imu_noise).into());
         msg.set_antenna_lever_arm_m((&o.antenna_lever_arm).into());
+        msg.set_zupt_holds_attitude(o.zupt_holds_attitude);
         msg
     }
 }
@@ -540,6 +542,10 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
             antenna_lever_arm: require!(msg.r#antenna_lever_arm_m(), "antenna_lever_arm_m").into(),
             max_consecutive_rejections: msg.r#max_consecutive_rejections,
             rejection_inflation: msg.r#rejection_inflation,
+            // Absent means "the recommended default", not false. A message
+            // written before this field existed must not silently decode to
+            // the setting that lets the accel-bias/tilt pair diverge.
+            zupt_holds_attitude: msg.r#zupt_holds_attitude().copied().unwrap_or(true),
         };
         if options.validate().is_some() {
             return Err(ConvertError::Invalid("gins_options"));
@@ -1062,5 +1068,43 @@ mod decode_robustness {
         ) {
             exercise_every_message(&bytes);
         }
+    }
+}
+
+#[cfg(test)]
+mod option_defaults {
+    use super::*;
+
+    #[test]
+    fn an_absent_zupt_flag_decodes_to_the_safe_default() {
+        // proto3 bools default to false, and false is the setting that lets the
+        // accelerometer-bias/tilt pair diverge. A config predating the field
+        // must not silently pick it up.
+        let mut msg = pb::GinsOptions::from(&GinsOptions::default());
+        msg.clear_zupt_holds_attitude();
+        let decoded = GinsOptions::try_from(&msg).expect("still valid");
+        assert!(
+            decoded.zupt_holds_attitude,
+            "absent flag must mean the recommended default, not false"
+        );
+    }
+
+    #[test]
+    fn an_explicit_false_survives_the_round_trip() {
+        // The escape hatch still has to work: someone who has other attitude
+        // aiding may legitimately want the textbook optimal gain.
+        let options = GinsOptions {
+            zupt_holds_attitude: false,
+            ..Default::default()
+        };
+        let msg = pb::GinsOptions::from(&options);
+        let decoded = GinsOptions::try_from(&msg).expect("valid");
+        assert!(!decoded.zupt_holds_attitude);
+    }
+
+    #[test]
+    fn an_explicit_true_survives_the_round_trip() {
+        let msg = pb::GinsOptions::from(&GinsOptions::default());
+        assert!(GinsOptions::try_from(&msg).unwrap().zupt_holds_attitude);
     }
 }

@@ -110,9 +110,16 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
     // --- IMU errors: first-order Gauss-Markov -----------------------------
     let decay = -1.0 / noise.correlation_time;
     let decay_block = Mat3::identity().scaled(decay);
-    for id in [BG_ID, BA_ID, SG_ID, SA_ID] {
-        f.set_block(id, id, &decay_block);
-    }
+    // Unrolled rather than looped over `[BG_ID, BA_ID, SG_ID, SA_ID]`. The
+    // indices are constants either way, but iterating an array hides that from
+    // the optimiser, which then cannot fold away `set_block`'s bounds assert —
+    // leaving a reachable `panic_fmt` on the filter's hot path. Written out,
+    // the data path links no panic machinery at all. See docs/testing.md,
+    // "Layer 9".
+    f.set_block(BG_ID, BG_ID, &decay_block);
+    f.set_block(BA_ID, BA_ID, &decay_block);
+    f.set_block(SG_ID, SG_ID, &decay_block);
+    f.set_block(SA_ID, SA_ID, &decay_block);
 
     f
 }
@@ -169,6 +176,53 @@ mod tests_support {
     }
 }
 
+/// A set of error states to hold fixed across a measurement update.
+///
+/// Zeroing a state's row of the Kalman gain stops a measurement from correcting
+/// it, while still letting that state's uncertainty contribute to the
+/// innovation covariance. This is the Schmidt-Kalman "consider" treatment, and
+/// Joseph form remains valid because it holds for *any* gain, not only the
+/// optimal one — so the covariance stays symmetric and positive definite.
+///
+/// The motivating case is in `docs/state-model.md`: stationary, accelerometer
+/// bias and tilt are mutually unobservable, and letting a zero-velocity update
+/// correct both makes the pair drift apart until the tilt's gravity
+/// mis-projection dominates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeldStates(u32);
+
+impl HeldStates {
+    /// Hold nothing — the ordinary optimal gain.
+    pub const NONE: Self = Self(0);
+
+    /// Hold the three attitude-error states.
+    pub const ATTITUDE: Self = Self(0b111 << PHI_ID);
+
+    /// Hold the three accelerometer-bias states.
+    pub const ACCEL_BIAS: Self = Self(0b111 << BA_ID);
+
+    /// Hold the three gyroscope-bias states.
+    pub const GYRO_BIAS: Self = Self(0b111 << BG_ID);
+
+    /// True when state `index` is held.
+    #[inline]
+    pub const fn contains(self, index: usize) -> bool {
+        index < N_STATE && (self.0 >> index) & 1 == 1
+    }
+
+    /// True when nothing is held.
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Union of two sets.
+    #[inline]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
 /// The discrete process noise `Q = G Qc Gᵀ`, built directly as 3×3 blocks.
 ///
 /// `Qc` is diagonal by construction and `G` is block structured — see
@@ -192,15 +246,29 @@ pub fn process_noise(state: &Pva, noise: &ImuNoise) -> StateMatrix {
 
     // The Gauss-Markov states are driven in their own axes, so their blocks stay
     // diagonal. `2σ²/τ` is the density sustaining a steady-state variance σ².
+    // Unrolled for the same reason as `transition_matrix`: a looped constant
+    // index is not a constant index as far as the optimiser is concerned.
     let gm = 2.0 / noise.correlation_time;
-    for (id, density) in [
-        (BG_ID, noise.gyro_bias_std),
-        (BA_ID, noise.accel_bias_std),
-        (SG_ID, noise.gyro_scale_std),
-        (SA_ID, noise.accel_scale_std),
-    ] {
-        q.set_block(id, id, &(density.squared() * gm).to_diag());
-    }
+    q.set_block(
+        BG_ID,
+        BG_ID,
+        &(noise.gyro_bias_std.squared() * gm).to_diag(),
+    );
+    q.set_block(
+        BA_ID,
+        BA_ID,
+        &(noise.accel_bias_std.squared() * gm).to_diag(),
+    );
+    q.set_block(
+        SG_ID,
+        SG_ID,
+        &(noise.gyro_scale_std.squared() * gm).to_diag(),
+    );
+    q.set_block(
+        SA_ID,
+        SA_ID,
+        &(noise.accel_scale_std.squared() * gm).to_diag(),
+    );
     q
 }
 
@@ -346,7 +414,8 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
     ) -> Result<(), FilterError> {
-        self.update_inner(innovation, h, r, None).map(|_| ())
+        self.update_inner(innovation, h, r, None, HeldStates::NONE)
+            .map(|_| ())
     }
 
     /// Apply a measurement update, rejecting it if it fails a chi-squared gate.
@@ -368,7 +437,23 @@ impl Eskf {
         r: &Matrix<M, M>,
         threshold: F,
     ) -> Result<bool, FilterError> {
-        self.update_inner(innovation, h, r, Some(threshold))
+        self.update_inner(innovation, h, r, Some(threshold), HeldStates::NONE)
+    }
+
+    /// Apply a gated update, holding the states in `held` fixed.
+    ///
+    /// See [`HeldStates`]. The held states still shape the innovation
+    /// covariance — their uncertainty is *considered* — they are simply not
+    /// corrected.
+    pub fn update_gated_holding<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        threshold: Option<F>,
+        held: HeldStates,
+    ) -> Result<bool, FilterError> {
+        self.update_inner(innovation, h, r, threshold, held)
     }
 
     /// The normalised innovation squared `νᵀ S⁻¹ ν` a measurement would
@@ -396,6 +481,7 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
         gate: Option<F>,
+        held: HeldStates,
     ) -> Result<bool, FilterError> {
         if !self.covariance.is_finite() {
             return Err(FilterError::Diverged);
@@ -419,7 +505,19 @@ impl Eskf {
 
         // K = P Hᵀ S⁻¹, obtained as (S⁻¹ H P)ᵀ so the solve replaces an
         // explicit inverse.
-        let k = chol.solve(&hp).transpose();
+        let mut k = chol.solve(&hp).transpose();
+
+        // Held states keep their prior: zeroing their gain rows stops this
+        // measurement correcting them, while S above already accounted for
+        // their uncertainty. Joseph form below is valid for any gain, so the
+        // covariance stays consistent with the gain actually applied.
+        if !held.is_empty() {
+            for i in 0..N_STATE {
+                if held.contains(i) {
+                    k.data[i] = [0.0; M];
+                }
+            }
+        }
 
         // dx += K (innovation − H dx)
         let residual = *innovation - h.matmul(&self.dx);
@@ -505,6 +603,74 @@ impl Eskf {
             return false;
         }
         self.covariance.diagonal().iter().all(|v| *v >= 0.0)
+    }
+}
+
+#[cfg(test)]
+mod held_states_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_set_covers_exactly_its_block() {
+        for i in 0..N_STATE {
+            assert_eq!(
+                HeldStates::ATTITUDE.contains(i),
+                (PHI_ID..PHI_ID + 3).contains(&i),
+                "attitude mask wrong at {i}"
+            );
+            assert_eq!(
+                HeldStates::ACCEL_BIAS.contains(i),
+                (BA_ID..BA_ID + 3).contains(&i)
+            );
+            assert_eq!(
+                HeldStates::GYRO_BIAS.contains(i),
+                (BG_ID..BG_ID + 3).contains(&i)
+            );
+        }
+    }
+
+    #[test]
+    fn the_empty_set_holds_nothing() {
+        assert!(HeldStates::NONE.is_empty());
+        assert!(!HeldStates::ATTITUDE.is_empty());
+        for i in 0..N_STATE {
+            assert!(!HeldStates::NONE.contains(i));
+        }
+    }
+
+    #[test]
+    fn sets_combine() {
+        let both = HeldStates::ATTITUDE.union(HeldStates::ACCEL_BIAS);
+        assert!(both.contains(PHI_ID) && both.contains(BA_ID));
+        assert!(!both.contains(BG_ID));
+    }
+
+    #[test]
+    fn an_out_of_range_index_is_never_held() {
+        // The mask is a u32 and the state count is 21; indexing past the end
+        // must not read a stray bit.
+        assert!(!HeldStates::ATTITUDE.contains(N_STATE));
+        assert!(!HeldStates::ATTITUDE.contains(1000));
+    }
+
+    #[test]
+    fn holding_every_state_leaves_the_estimate_untouched() {
+        // Degenerate but worth pinning: a fully held update must change
+        // nothing about dx, while still being a legal operation.
+        let mut filter = Eskf::new(&[1.0; N_STATE]);
+        let all = HeldStates(u32::MAX);
+        let h = Matrix::<1, N_STATE>::from_rows([[1.0; N_STATE]]);
+        let innovation = Matrix::<1, 1>::from_column([5.0]);
+        let r = Matrix::<1, 1>::from_column([0.01]);
+
+        let before = filter.dx;
+        filter
+            .update_gated_holding(&innovation, &h, &r, None, all)
+            .unwrap();
+        assert_eq!(filter.dx, before);
+        // The covariance still shrinks: the measurement was applied, its
+        // information simply went nowhere.
+        assert!(filter.covariance.is_finite());
     }
 }
 

@@ -106,4 +106,17 @@ message GinsOptions {
   uint32 max_consecutive_rejections = 14;
   // Covariance scale factor applied when that limit is reached. Must be >= 1.
   double rejection_inflation = 15;
+
+  // Whether a zero-velocity update may correct attitude. Stationary,
+  // accelerometer bias and tilt produce identical velocity signatures, so a
+  // ZUPT observes only their sum; letting it correct both makes the pair drift
+  // apart until the tilt's gravity mis-projection dominates. Holding attitude
+  // sends the whole correction to the bias, which ZUPT can actually pin down.
+  //
+  // `optional` so that absence is distinguishable from an explicit false. A
+  // plain proto3 bool defaults to false, which is the UNSAFE setting here — a
+  // config that simply predates this field would silently decode to the
+  // behaviour that diverges. Absent means "use the recommended default", which
+  // is true.
+  optional bool zupt_holds_attitude = 16;
 }

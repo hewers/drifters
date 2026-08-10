@@ -45,6 +45,23 @@ pub struct GinsOptions {
     /// exactly the information that would fix it. This bounds how long that can
     /// go on. Zero disables the recovery entirely.
     pub max_consecutive_rejections: u32,
+    /// Whether a zero-velocity update may correct attitude.
+    ///
+    /// Stationary, accelerometer bias and tilt produce identical velocity
+    /// signatures — `d(δv_N)/dt = δb_a,N + g·φ_E` — so a ZUPT observes only
+    /// their sum. Letting it correct both makes the pair drift apart along the
+    /// unobservable direction until the tilt's gravity mis-projection dominates
+    /// the bias it was meant to absorb.
+    ///
+    /// Holding attitude sends the whole correction to the bias, which is the
+    /// state that ZUPT can actually pin down. Defaults to `true`: measured over
+    /// 120 s of stationary ZUPT-only aiding, holding keeps the run stable while
+    /// the unheld filter diverges. Set `false` to restore the textbook optimal
+    /// gain — appropriate when some other measurement is making attitude
+    /// observable.
+    ///
+    /// See "Observability notes" in `docs/state-model.md`.
+    pub zupt_holds_attitude: bool,
     /// Covariance scale factor applied when that limit is reached.
     ///
     /// 4.0 doubles every standard deviation, which is aggressive enough to
@@ -68,6 +85,7 @@ impl Default for GinsOptions {
             initial_accel_scale_std: Vec3::splat(1000.0 * PPM),
             imu_noise: ImuNoise::default(),
             antenna_lever_arm: Vec3::ZERO,
+            zupt_holds_attitude: true,
             max_consecutive_rejections: 10,
             rejection_inflation: 4.0,
         }

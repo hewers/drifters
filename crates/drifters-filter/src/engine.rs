@@ -268,16 +268,13 @@ impl GinsEngine {
     /// discarded, leaving the filter untouched. Constructors for the supported
     /// sensors are in [`crate::measurement`].
     pub fn apply<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
-        let accepted = match m.gate {
-            Some(threshold) => {
-                self.filter
-                    .update_gated(&m.innovation, &m.jacobian, &m.noise, threshold)?
-            }
-            None => {
-                self.filter.update(&m.innovation, &m.jacobian, &m.noise)?;
-                true
-            }
-        };
+        let accepted = self.filter.update_gated_holding(
+            &m.innovation,
+            &m.jacobian,
+            &m.noise,
+            m.gate,
+            m.held,
+        )?;
         if accepted {
             self.consecutive_rejections = 0;
             self.feedback();
@@ -327,7 +324,10 @@ impl GinsEngine {
     /// See [`measurement::zero_velocity`]; the caller decides *when*, usually
     /// from a [`measurement::StationarityDetector`].
     pub fn apply_zupt(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
-        let m = measurement::zero_velocity(&self.state.pva, sigma);
+        let mut m = measurement::zero_velocity(&self.state.pva, sigma);
+        if self.options.zupt_holds_attitude {
+            m = m.holding(crate::eskf::HeldStates::ATTITUDE);
+        }
         self.apply(&m)
     }
 
@@ -919,35 +919,126 @@ mod tests {
 
     #[test]
     fn stationary_zupt_cannot_separate_accelerometer_bias_from_tilt() {
-        // A limitation, pinned as a test so it stays a known property rather
-        // than becoming a surprise.
+        // The underlying limitation, pinned so it stays a known property.
         //
         // Stationary, the velocity-error dynamics are
         //     d(dv_N)/dt = db_a,N + g * phi_E
         // so an accelerometer bias and a platform tilt produce *identical*
-        // signatures. ZUPT observes only their sum. With both states free the
-        // pair drifts apart along that unobservable direction, and past a few
-        // tens of seconds the tilt's gravity mis-projection (g * phi, i.e.
-        // 0.04 m/s^2 at only 4 mrad) grows to dominate the bias it was meant to
-        // absorb.
+        // signatures and ZUPT observes only their sum. With both states free
+        // the pair drifts apart along that unobservable direction, and past a
+        // few tens of seconds the tilt's gravity mis-projection (0.04 m/s^2 at
+        // only 4 mrad) dominates the bias it was meant to absorb.
         //
-        // Freezing either state removes the ambiguity and the run stays stable
-        // — which is what demonstrates the cause is observability, not a sign
-        // error in the model. Real systems break the tie with motion, GNSS, or
-        // a tilt aid rather than running ZUPT alone for minutes. Tracked as an
-        // M6 follow-up in docs/milestones.md.
-        let long = 120.0;
-        let (free_pair, _) = outage_drift(true, long);
-
-        let frozen_tilt = {
-            let mut o = options();
-            o.initial_attitude_std = Vec3::splat(1e-12);
-            run_stationary_with_zupt(o, long)
-        };
+        // `zupt_holds_attitude` is the fix and defaults to true, so this test
+        // has to turn it off to observe the problem it solves.
+        let mut free = options();
+        free.zupt_holds_attitude = false;
+        let diverged = run_stationary_with_zupt(free, 120.0);
         assert!(
-            frozen_tilt < free_pair / 10.0,
-            "freezing tilt gave {frozen_tilt} m vs {free_pair} m with both states free; \
-             if these were comparable the divergence would not be an observability effect"
+            diverged > 10.0,
+            "expected the unheld pair to diverge, got {diverged} m"
+        );
+    }
+
+    #[test]
+    fn holding_attitude_keeps_a_long_stationary_run_stable() {
+        // The M6 follow-up, delivered. Holding attitude sends the whole ZUPT
+        // correction to the accelerometer bias — the state ZUPT can actually
+        // pin down — instead of splitting it along a direction neither state
+        // can be resolved in.
+        let held = run_stationary_with_zupt(options(), 300.0);
+        assert!(
+            held < 0.05,
+            "held run drifted {held} m over 300 s; it should stay millimetric"
+        );
+
+        let mut free = options();
+        free.zupt_holds_attitude = false;
+        let unheld = run_stationary_with_zupt(free, 300.0);
+        assert!(
+            unheld > 1000.0 * held,
+            "holding attitude should be transformative here: {held} m held \
+             against {unheld} m unheld"
+        );
+    }
+
+    #[test]
+    fn holding_attitude_still_converges_the_accelerometer_bias() {
+        // Holding must not cost observability of the state ZUPT exists to
+        // find. If anything it helps, because the correction stops leaking
+        // into tilt.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=12_000 {
+            let t = i as F * 0.01;
+            let mut s = stationary_sample(&e, 0.01, t);
+            s.dvel.x += 0.02 * s.dt;
+            e.add_imu(s).unwrap();
+            if i % 100 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+            }
+        }
+        let estimate = e.nav_state().imu_error.accel_bias.x;
+        assert!(
+            (estimate - 0.02).abs() < 0.004,
+            "bias estimate {estimate} did not converge to 0.02"
+        );
+        assert_eq!(
+            e.inflation_count(),
+            0,
+            "a held run should never need rescuing"
+        );
+    }
+
+    #[test]
+    fn a_held_state_keeps_its_prior_exactly() {
+        let mut e = GinsEngine::new(options_with(
+            Ned::new(0.3, -0.2, 0.1),
+            Euler::new(0.0, 0.0, 0.2),
+        ))
+        .unwrap();
+        let attitude_before = e.nav_state().euler();
+        let sigma_before = e.std_deviations();
+
+        let m = measurement::zero_velocity(&e.nav_state().pva, Vec3::splat(0.02))
+            .holding(crate::eskf::HeldStates::ATTITUDE);
+        assert!(e.apply(&m).unwrap());
+
+        // Attitude untouched...
+        let after = e.nav_state().euler();
+        assert_relative_eq!(after.roll, attitude_before.roll, epsilon = 1e-15);
+        assert_relative_eq!(after.pitch, attitude_before.pitch, epsilon = 1e-15);
+        assert_relative_eq!(after.yaw, attitude_before.yaw, epsilon = 1e-15);
+        // ...while velocity, which the measurement does observe, moved.
+        assert!(e.nav_state().speed() < 0.02);
+        // The held states' own uncertainty is unchanged: nothing corrected
+        // them, so nothing should have shrunk them either.
+        for i in 0..3 {
+            assert!(
+                e.std_deviations()[PHI_ID + i] <= sigma_before[PHI_ID + i] * 1.000_001,
+                "held attitude sigma grew"
+            );
+        }
+    }
+
+    #[test]
+    fn holding_keeps_the_covariance_positive_definite() {
+        // Joseph form is valid for any gain, not only the optimal one, which
+        // is what makes zeroing gain rows safe. Verified over many updates.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=20_000 {
+            let t = i as F * 0.01;
+            let mut s = stationary_sample(&e, 0.01, t);
+            s.dvel.x += 0.02 * s.dt;
+            e.add_imu(s).unwrap();
+            if i % 50 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+            }
+        }
+        assert!(e.filter.is_healthy());
+        assert_relative_eq!(e.covariance().asymmetry(), 0.0, epsilon = 1e-10);
+        assert!(
+            drifters_core::math::Cholesky::new(e.covariance()).is_some(),
+            "covariance lost positive definiteness under a suboptimal gain"
         );
     }
 

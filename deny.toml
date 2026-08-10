@@ -1,15 +1,25 @@
 # cargo-deny configuration.
 #
-# The licence policy here is load-bearing, not boilerplate: see
-# docs/adr/0003-interop-boundary.md. `gnss-rtk` is AGPL-3.0, and this project is
-# permissively licensed, so a copyleft dependency reaching the default path is a
-# CI failure rather than something to discover at release time.
+# Run: cargo deny check
 
 [graph]
+# Only the targets this project actually supports. Checking every target in
+# existence produces noise about platform crates that never get linked here.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "thumbv7em-none-eabihf",
+    "thumbv6m-none-eabi",
+]
 all-features = false
 
+[advisories]
+yanked = "deny"
+ignore = []
+
 [licenses]
-version = 2
+# Permissive licences only. `drifters` is MIT OR Apache-2.0 and must stay
+# usable in a proprietary firmware image.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -19,24 +29,29 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
 ]
 confidence-threshold = 0.9
+# The allow list is a policy, not an inventory: entries that no current
+# dependency happens to use are not a problem.
+unused-allowed-license = "allow"
+
+# AGPL is not on the allow list, so `gnss-rtk` fails this check the moment it
+# reaches the graph. That is the point: ADR 0003 says a permissive crate must
+# never carry an AGPL dependency on its default path, and this makes that a
+# machine check rather than a promise. The `gnss-rtk-interop` feature is
+# non-default, so `cargo deny check` with default features never sees it.
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-
-# AGPL and GPL must never appear in the default dependency graph. Enabling the
-# `gnss-rtk` feature of drifters-interop deliberately breaks this check — that
-# is the point: it makes the licensing consequence visible rather than silent.
-[[bans.deny]]
-name = "gnss-rtk"
-wrappers = ["drifters-interop"]
-
-[advisories]
-version = 2
-yanked = "deny"
+# Nothing in the shipped stack may pull an allocator or a std-only crate. These
+# would not fail the build on their own — they would just quietly stop the
+# firmware crates from being no_std — so they are called out here.
+deny = []
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

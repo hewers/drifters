@@ -207,52 +207,78 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 - [x] Bare-metal build and run on Cortex-M4F / M7 (`cortex-m-harness`, QEMU)
 - [x] Stack-usage measurement, and the reduction it showed was needed
 - [x] In-place covariance propagation
-- [ ] Cycle-count benchmarks for predict and update — **needs real silicon**
-- [ ] Evaluate a generic scalar type (`f32` for the non-position states)
-- [ ] Reduced state configurations (15-state without scale factors)
-- [ ] `#[no_panic]` verification on the data path
+- [x] Data path links no panic machinery, checked in CI
+- [x] `cargo deny` licence and advisory auditing, enforcing the ADR 0003 boundary
+- [x] Evaluate a generic scalar type — see [adr/0005](adr/0005-scalar-type.md)
+- [ ] Reduced state configuration (15-state without scale factors)
 
-**Partially met.** The filter runs on emulated Cortex-M4 and Cortex-M7 and its
-stack is measured and bounded in CI. Timing is not done and cannot be done here.
+### Stack
 
-### Measured
-
-| operation | peak stack |
+| operation | peak |
 |---|---|
-| `add_imu` (mechanize + predict) | 16 488 B |
-| `apply_zupt` (3-dim update) | 13 780 B |
-| `apply_height` (1-dim update) | 11 548 B |
+| `add_imu` (mechanize + predict) | 16 480 B |
+| `apply_zupt` (3-dim update) | 13 796 B |
+| `apply_height` (1-dim update) | 11 500 B |
 
-Firmware links to ~48 KiB `.text`, 1.7 KiB `.rodata`, 8 B `.bss`.
+Down from a first measurement of **35 328 B**, against a documented *estimate*
+of ~11 000 B. Block-diagonal `Q`, in-place products and borrowing accumulation
+account for the 2.1× reduction, with bit-identical regression results.
 
-### The estimate was wrong, and wrong in the bad direction
+### Panic freedom
 
-The budget in [design.md](design.md) had carried **~11 KiB**, reasoned from
-"about three live temporaries". The first measurement came back at **35 328
-bytes**. Restructuring `predict` and the Joseph update — block-diagonal `Q`,
-in-place products, borrowing accumulation — brought it to **16 488**, a 2.1×
-reduction, with **bit-identical** results on the KF-GINS regression.
+`panic_audit` — a firmware binary containing only the filter's hot path — links
+**no `core::panicking` symbols**. Getting there needed two fixes that were
+invisible in the source:
 
-The general lesson is in [testing.md](testing.md), "Layer 8": how many
-temporaries survive in fixed-size matrix arithmetic is a question about the
-optimiser, not about the source, so it cannot be reasoned out.
+- `Matrix::set_block`'s guard was `r0 + BR <= R`; with overflow checks off, LLVM
+  cannot rule out a wrapped sum and so emitted a bounds check per element.
+  Rephrased as `BR <= R && r0 <= R - BR`.
+- `transition_matrix` and `process_noise` wrote their Gauss-Markov blocks by
+  iterating an array of constant indices, which hid their constancy from the
+  optimiser. Unrolled.
 
-### Why there are no cycle counts
+### f32
 
-QEMU models no pipeline, no cache, no flash wait states and no FPU latency, so
-any timing it reports is meaningless. Worse for this project specifically:
-Cortex-M4F's FPU is **single precision** and `drifters` uses `f64` throughout,
-so every float operation on that target is software-emulated — the dominant real
-cost, and entirely invisible under emulation.
+Measured and rejected as a global switch: `f32` latitude costs **0.76 m per
+ULP** against a measured 0.033 m residual budget, and the covariance diagonal
+spans 8.4 decimal digits against `f32`'s 7.2. Full reasoning and the numbers are
+in [adr/0005](adr/0005-scalar-type.md). Mixed precision remains open and belongs
+in M9, after a hardware baseline exists to show what it would buy.
 
-Stack and size are exact under QEMU and are reported. Timing needs hardware, and
-until it exists this repository claims nothing about it.
+### Remaining: the 15-state configuration
 
-### Remaining headroom
+Dropping the six scale-factor states takes every matrix from 21×21 to 15×15 —
+1 800 B against 3 528 B — which should roughly halve both the stack peak and the
+per-step arithmetic. It is the best remaining lever for embedded cost precisely
+because it changes no numerics.
 
-16.5 KiB fits a 32 KiB task stack and not a 16 KiB one. The floor for this
-formulation is four live 21×21 matrices in `predict` (14 112 B), so going lower
-needs a different algorithm rather than tidier code: multiplying through `Q`'s
-six 3×3 blocks, sequential scalar updates that remove the Joseph temporaries
-entirely, or a UD-factorised filter. A 15-state configuration would roughly
-halve every matrix.
+Planned as a non-default cargo feature switching `N_STATE` to 15 and omitting
+the `SG`/`SA` blocks from `transition_matrix`, `process_noise`,
+`initial_std_vector` and the engine's feedback. Not attempted yet: it is
+cross-cutting, and rushing a change that touches every matrix dimension while
+the regression suite is the only thing standing between it and a silent
+numerical error is a poor trade. It wants its own change, measured on the QEMU
+harness and the KF-GINS dataset the way M8's other changes were.
+
+---
+
+## M9 — Hardware validation
+
+Everything that an emulator cannot answer. Nothing here is startable without a
+board on a desk.
+
+- [ ] Cycle-count benchmarks for `predict` and `update` on real Cortex-M4F/M7
+- [ ] Cost of software-emulated `f64`, measured rather than assumed
+- [ ] Flash wait-state and cache effects at realistic clock speeds
+- [ ] Sustained-rate check: does a 200 Hz IMU keep up with a 1 Hz GNSS update?
+- [ ] Power per filter step
+- [ ] Mixed-precision experiment (`f32` for the IMU-error states), once there is
+      a baseline to compare against — see [adr/0005](adr/0005-scalar-type.md)
+- [ ] True cross-implementation comparison against KF-GINS's C++ output
+
+**Why this is separate.** QEMU models no pipeline, cache, flash wait states or
+FPU latency, so every timing number it produces is meaningless. On a real M4F
+running from flash with wait states the same code can be several times slower
+than from zero-wait RAM. Stack and size are exact under emulation and are
+already measured in M8; timing is not, and this repository claims nothing about
+it until this milestone runs.

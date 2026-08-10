@@ -149,10 +149,10 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 
 | operation | bytes |
 |---|---|
-| `add_imu` (mechanize + predict) | 16 488 |
-| `apply_zupt` (3-dim update) | 13 780 |
-| `apply_height` (1-dim update) | 11 548 |
-| **peak** | **16 488** |
+| `add_imu` (mechanize + predict) | 16 480 |
+| `apply_zupt` (3-dim update) | 13 796 |
+| `apply_height` (1-dim update) | 11 500 |
+| **peak** | **16 480** |
 
 Firmware for the whole harness — filter, semihosting and panic handler —
 links to about 48 KiB of `.text` and 1.7 KiB of `.rodata`, with 8 bytes of
@@ -167,7 +167,7 @@ form of `predict` keeps about a dozen 21×21 temporaries alive at once, not
 three. The estimate was wrong in the direction that matters: it said the filter
 fit in a 16 KiB stack when it needed 35 KiB.
 
-Three changes brought it to 16 488:
+Three changes brought it to 16 480:
 
 1. **`Q = G Qc Gᵀ` is built as 3×3 blocks.** `Qc` is diagonal by construction
    and `G` is block structured, so the product is block diagonal. Forming the
