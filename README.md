@@ -1,123 +1,125 @@
 # drifters
 
-A `no_std`, allocation-free **error-state Kalman filter** that fuses IMU, GNSS
-and auxiliary sensors into a pose estimate — position, velocity and attitude —
-portable from a Cortex-M microcontroller to a workstation.
+A `no_std`, allocation-free GNSS/INS sensor fusion library in Rust. Fuses IMU,
+GNSS and auxiliary sensors into position, velocity and attitude — the same code
+on a Cortex-M microcontroller and on a workstation.
 
 The architecture follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS): a
-loosely-coupled 21-state error-state EKF over a local-level (NED) strapdown
-mechanization, with feedback correction after every measurement. What differs is
-that this is `no_std`, allocation-free and sans-IO.
+loosely-coupled 21-state error-state Kalman filter over a local-level (NED)
+strapdown mechanization, with feedback after every measurement. What differs is
+that this is `no_std`, allocation-free, sans-IO, and measured on bare metal.
 
-> **Status: early.** The core, the mechanization, the filter and loosely-coupled
-> GNSS work and are tested (132 tests). Protobuf codegen, auxiliary sensors and
-> validation against the KF-GINS reference dataset are not done yet. See
-> [docs/milestones.md](docs/milestones.md).
+## Measured, not asserted
 
-## Design in one screen
+Every number here is produced by a test in this repository.
 
-- **21 error states** — position, velocity, attitude, gyro bias, accel bias,
-  gyro scale factor, accel scale factor.
-- **Quaternions** for attitude (Hamilton, scalar-first). Euler angles are output
-  only.
-- **Two-sample coning and sculling** compensation, with midpoint evaluation of
-  the earth terms.
-- **Joseph-form** covariance update, Cholesky solve instead of an explicit
-  inverse, explicit re-symmetrisation.
-- **One dependency** in the `no_std` stack: `libm`.
-- **Sans-IO.** Push samples in, pull state out. No allocation, no threads, no
-  clock, no file access.
+| | |
+|---|---|
+| **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
+| | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
+| | per-axis bias below 1 mm |
+| **Footprint** | **9.5 KiB** peak stack (15-state), 16.5 KiB (21-state), on Cortex-M4 |
+| **Safety** | the data path links **zero** `core::panicking` symbols |
+| **Dependencies** | **one** in the shipped stack: `libm` |
+| **Tests** | 242, plus fuzzing and a bare-metal QEMU harness |
+
+Accuracy is an open-loop check: the filter's predicted antenna position
+*before* each fix is applied, so between fixes it is running on inertial dead
+reckoning alone. Method and tolerances are in [docs/testing.md](docs/testing.md).
+
+## Status
+
+**Working and validated:** core math, strapdown mechanization, 21-state ESKF,
+loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
+odometer, barometric height, magnetometer heading), protobuf serialization,
+bare-metal Cortex-M, KF-GINS dataset regression.
+
+**In progress:** an equivariant filter (EqF) as a second estimator — Lie group
+foundations are in, the filter itself is not. See [docs/eqf.md](docs/eqf.md).
+
+**Not done:** timing on real silicon, and this has never run on a physical IMU.
+Everything is dataset replay plus emulation. See
+[docs/milestones.md](docs/milestones.md) for the full roadmap and what each
+milestone actually proved.
+
+## Layout
 
 ```
 drifters-core      no_std, no alloc, deps: libm
-                   math, WGS-84 earth model, frames, time, sensor types
-drifters-filter    no_std, no alloc, deps: drifters-core
-                   mechanization, 21-state ESKF, GinsEngine
-drifters-proto     no_std — protobuf codecs (micropb)
+                   fixed-size matrices, quaternions, WGS-84, frames, time
+drifters-filter    no_std, no alloc — mechanization, 21-state ESKF, GinsEngine
+drifters-proto     no_std — protobuf codecs (micropb), codegen needs no protoc
+drifters-eqf       no_std — equivariant filter, in progress
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
 drifters-cli       std — file-driven replay and validation
 ```
 
-## Usage
+## Quick start
+
+```bash
+cargo add drifters-filter
+```
 
 ```rust
 use drifters_core::prelude::*;
 use drifters_filter::{GinsEngine, GinsOptions};
 
-let options = GinsOptions::default()
-    .with_initial_state(
-        Lla::from_degrees(30.5282, 114.3569, 25.0),
-        Ned::ZERO,
-        drifters_core::math::Euler::default(),
-    )
-    .with_antenna_lever_arm(Vec3::new(0.1, 0.0, -1.2));
+let mut engine = GinsEngine::new(GinsOptions::default())?;
 
-let mut engine = GinsEngine::new(options)?;
-
-// GNSS fixes are queued and applied at the right point inside the IMU
-// interval that contains them — including splitting a sample mid-interval.
-engine.add_gnss(fix);
-engine.add_imu(sample)?;
-
+// Push samples in, pull state out. No allocation, no threads, no clock.
+engine.add_imu(imu_sample)?;
+engine.add_gnss(gnss_fix);
 let solution = engine.nav_state();
-let sigma = engine.std_deviations();
 ```
 
-Units are **radians and metres** everywhere in the API. Degrees appear only in
-constructors whose name says so. See [docs/frames.md](docs/frames.md) — it is
-the single source of truth for frames, units and signs, and it is worth reading
-before writing a driver.
-
-## A note on `gnss-rtk` and `nav-types`
-
-These were requested as the interface types, and for a host application they are
-a good choice. They are **not** on the default path here, for two reasons
-verified against their published manifests:
-
-- **`gnss-rtk` is AGPL-3.0.** Linking it would extend that obligation to the
-  combined work — for firmware, the whole device image. This crate is
-  MIT OR Apache-2.0 and must not pull an AGPL dependency in by default.
-- **Neither is `no_std`.** `gnss-rtk` needs `hifitime` with `std` (plus `anise`,
-  `itertools`, `polyfit-rs`); `nav-types` pulls `nalgebra` 0.32 with default
-  features. They also pin different `nalgebra` majors, so using both duplicates
-  it in the graph.
-
-So `drifters-core` defines its own small `Copy` types, and `drifters-interop`
-provides **opt-in, off-by-default** adapters for both — with the AGPL implication
-stated at the feature. Anyone on Linux who wants `gnss-rtk` gets it with one
-flag, knowingly. Full reasoning in
-[docs/adr/0003](docs/adr/0003-interop-boundary.md).
-
-`nav-types` is MIT and only needs `nalgebra`'s `libm` feature plus
-`default-features = false` to work on bare metal — a good upstream contribution
-for someone.
-
-## Building
+Reproduce the accuracy number yourself — the dataset is not committed, so fetch
+it first (67 MB, from the KF-GINS authors):
 
 ```bash
-cargo test --workspace
+mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done
 ```
-
-Bare-metal check (the test that actually proves `no_std`):
 
 ```bash
-cargo build -p drifters-filter --target thumbv7em-none-eabihf
+cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 ```
 
-Building does **not** require `protoc` — generated protobuf code is checked in.
-See [docs/adr/0002](docs/adr/0002-protobuf.md).
+## Design notes
+
+- **21 error states** — position, velocity, attitude, gyro bias, accel bias,
+  gyro and accel scale factors. `--features reduced-state` drops the scale
+  factors for 15 states, halving every matrix for 3 % accuracy.
+- **Quaternions** for attitude (Hamilton, scalar-first). Euler angles are output
+  only, never round-tripped through.
+- **Two-sample coning and sculling** compensation with midpoint earth terms.
+- **Joseph-form** covariance update, Cholesky solve rather than an explicit
+  inverse, explicit re-symmetrisation.
+- **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
+  file. That is what lets the same code run inside an interrupt handler.
+- **`f64` throughout**, deliberately — `f32` latitude costs 0.76 m per ULP
+  against a 3.3 cm error budget. Reasoning in
+  [docs/adr/0005](docs/adr/0005-scalar-type.md).
 
 ## Documentation
 
-| | |
-|---|---|
-| [design.md](docs/design.md) | architecture, processing flow, resource budget |
-| [frames.md](docs/frames.md) | frames, units, signs — read this first |
-| [state-model.md](docs/state-model.md) | the 21-state error dynamics, derived |
-| [testing.md](docs/testing.md) | the eight test layers and why each exists |
-| [milestones.md](docs/milestones.md) | roadmap, M0–M8 |
-| [adr/](docs/adr/) | why the significant decisions went the way they did |
+The docs carry the reasoning, including the parts that did not work.
+
+- [design.md](docs/design.md) — architecture and resource budget
+- [state-model.md](docs/state-model.md) — the 21-state error model, derived
+- [frames.md](docs/frames.md) — coordinate frames and conventions
+- [testing.md](docs/testing.md) — nine layers, and what each one can prove
+- [milestones.md](docs/milestones.md) — roadmap and measured outcomes
+- [adr/](docs/adr/) — decisions and why, including the ones reversed later
+
+Two worth reading if you are evaluating this seriously:
+[why an accelerometer bias and a tilt are the same measurement to a stationary
+filter](docs/state-model.md), and [why `f32` was measured and
+rejected](docs/adr/0005-scalar-type.md).
 
 ## Licence
 
 MIT OR Apache-2.0, at your option.
+
+`drifters-interop`'s `gnss-rtk-interop` feature is **not** default and links
+AGPL-3.0 code; enabling it places the AGPL's obligations on the combined work.
+`cargo deny` enforces that boundary in CI. See
+[adr/0003](docs/adr/0003-interop-boundary.md).
