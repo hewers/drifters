@@ -219,6 +219,99 @@ Comparing the two directly is a natural ablation.
 
 ---
 
+## Two questions the scoping raises
+
+### Should the EqF also estimate IMU scale factors?
+
+**No — and the reason is structural, not a preference.**
+
+Bias works in this framework because it enters the dynamics **additively in the
+Lie algebra**: `(W − B)` in (5), with `B = (b_ω, b_a, 0)^ ∈ se₂(3)`. That is
+exactly what the semi-direct-bias construction is for, and why the group carries
+an `se(3)` factor whose 6 dimensions match `(b_ω, b_a)`.
+
+A scale factor is **multiplicative on the input** — a linear map applied to `ω`
+and `a`, not a translation in the algebra. It does not fit the same
+construction. Accommodating it equivariantly would need the symmetry to act on
+the input space, which is a larger group and a full re-derivation of the lift
+and linearisation, not an extra block.
+
+The empirical case points the same way. M8's 15-state configuration dropped
+exactly these six states and cost **3 % horizontal RMS** on the KF-GINS dataset,
+while the NIS ratio *improved* (0.486 → 0.554) — dropping states the data cannot
+observe made the filter less conservative. Scale factors need dynamics to be
+observable at all.
+
+Note what the paper spends those six dimensions on instead: GNSS lever arm and
+magnetometer rotation. That is a deliberate allocation — extrinsics are constant
+and observable under ordinary motion; scale factors drift and are not.
+
+If they are wanted later, the honest way is to append them as **explicitly
+non-equivariant** states with a trivial group action, forfeiting the guarantee
+for those states while keeping it for the navigation states, and then measure
+whether they earn their place. Not first.
+
+### Can we assume an ellipsoidal, rotating Earth?
+
+These are two different questions with two different answers.
+
+**What makes the filter work.** A system is group-affine when its dynamics take
+the form `f(T) = T·A + B·T` for algebra elements `A`, `B` that do **not** depend
+on `T`. Verifying the defining condition directly:
+
+```text
+f(XY) = XYA + BXY
+f(X)Y + X f(Y) − X f(I) Y = (XA+BX)Y + X(YA+BY) − X(A+B)Y = BXY + XYA   ✓
+```
+
+Everything below is about whether an Earth term can be written in that form.
+
+**Rotating Earth — the obstruction is frame choice, not physics.** In ECEF the
+dynamics need `Ṙ ⊃ −ω_ie^ R` and `v̇ ⊃ −2 ω_ie^ v`. Both draw on the *same*
+top-left block of `B`, which supplies `−ω_ie^ v` where `−2 ω_ie^ v` is required.
+The naive embedding does not fit. In an **inertial frame there is no Coriolis
+term at all**, and the dynamics recover the paper's structure exactly — which
+says the difficulty is the rotating frame rather than Earth rotation itself.
+Whether a clean ECEF construction exists in the literature is worth checking
+against refs [11]–[14] and Barrau & Bonnabel before either adopting or
+dismissing it.
+
+**Ellipsoidal Earth — this is the real obstruction, in every frame.** Constant
+gravity enters as `(G − N)T` with `G` fixed. Position-dependent gravity `g(p)`
+makes that term depend on the state, so it is no longer of the form `T·A + B·T`
+and group-affineness is lost. Since exactness is the entire reason to build an
+EqF, that is not a trade to make casually.
+
+The practical route keeps the structure: hold gravity **piecewise constant**,
+re-evaluated at low rate outside the filter. Over the KF-GINS trajectory —
+measured extent **1 483 m**, height range 18.7–35.4 m — normal gravity varies by
+order 10⁻⁵ m/s², and the tangent-plane error is **0.17 m** (`L²/2R`). Both are
+small enough to treat as modelling error and report.
+
+Position must also be **Cartesian**: geodetic lat/lon/h is not a vector space
+under the `SE₂(3)` action, so an Earth-referenced EqF works in ECEF or a local
+tangent frame and converts to geodetic only for output.
+
+**The number that decides it for our data.** Earth rate is 15.04 °/h. The
+KF-GINS IMU (Leador-A15, tactical grade) has a gyro bias stability of
+0.027 °/h — Earth rate is **557× larger**. A flat, non-rotating model cannot be
+used on that dataset without a large unmodelled attitude drift, and we should
+predict that rather than discover it.
+
+For the paper's own target it is entirely reasonable: a consumer MEMS gyro at
+~10 °/h bias sees Earth rate at only **1.5×** its own noise floor. The
+flat-Earth assumption is well matched to ArduPilot's hardware and poorly matched
+to ours. That is a statement about grade of IMU, not about the paper.
+
+**Recommendation.** Implement the paper faithfully first and compare on
+consumer-grade terms, where its assumptions hold. Treat an Earth-referenced
+equivariant filter as a separate, later investigation — starting with input-side
+Earth-rate compensation (`ω_ib − R̂ᵀ ω_ie`), noting that this makes the input
+depend on the estimate and so needs checking against the lift's assumptions
+rather than assuming it is free.
+
+---
+
 ## Implementation plan
 
 `crates/drifters-eqf`, separate from `drifters-filter`, so the ESKF's dependency
