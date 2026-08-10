@@ -284,3 +284,43 @@ running from flash with wait states the same code can be several times slower
 than from zero-wait RAM. Stack and size are exact under emulation and are
 already measured in M8; timing is not, and this repository claims nothing about
 it until this milestone runs.
+
+---
+
+## M10 — Equivariant filter (EqF) 🔨 in progress
+
+A second estimator, kept in its own crate (`drifters-eqf`) so the ESKF's
+measured firmware budget is untouched. Specification and scoping in
+[eqf.md](eqf.md); paper in `APEqF.pdf`.
+
+- [x] Specification transcribed from the paper, with the two model differences
+      stated
+- [x] Lie machinery: `SE₂(3)`, `se(3)`/`se₂(3)`, wedge/vee, exp/log, `Ad`/`ad`,
+      `Γ`/`χ`/`Π`
+- [ ] Symmetry group `G = (SE₂(3) × se(3)) ⋉ R³ × SO(3)`: product, inverse,
+      actions `φ`, `ρ_m`, `ρ_p`, `ρ_v`
+- [ ] Lift `Λ₁…Λ₄` (Thm 4.1)
+- [ ] Linearised `A_t⁰` (10) and outputs `C*_m`, `C*_p`, `C*_v` (11–13), each
+      block checked against a numerical Jacobian
+- [ ] GCU innovation inflation (Sec. VI)
+- [ ] Local-tangent-frame adapter, and the ESKF-vs-EqF comparison
+- [ ] Extract a common backend trait, once both estimators exist and their
+      shapes are known
+
+**Why it is worth having.** The paper's motivating failure — *false
+observability* under prolonged static conditions, where an EKF gains spurious
+information and produces a confident wrong attitude — is the same class of
+problem M6 hit here. Held states constrained the symptom; the EqF addresses why
+the linearisation is wrong.
+
+### Note: the small-angle branch
+
+The `SO(3)` left Jacobian and its inverse both differ two quantities that
+approach each other, and the direct forms lose about `log₁₀(1/θ²)` significant
+digits. Measured: **four digits gone at θ = 10⁻⁶**.
+
+The threshold sits at `θ < 10⁻²`, six orders of magnitude wider than the naive
+"avoid dividing by zero" value a first implementation used. That matters
+because a 200 Hz IMU turning at 1 rad/s produces `θ = 5×10⁻³` **every sample** —
+the degraded region is exactly where the function spends its life. A sweep
+across nine decades is what caught it.
