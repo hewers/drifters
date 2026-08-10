@@ -59,7 +59,7 @@ pub struct Measurement<const M: usize> {
     /// Chi-squared gate. `None` accepts unconditionally.
     pub gate: Option<F>,
     /// Error states this measurement must not correct. See
-    /// [`HeldStates`](crate::eskf::HeldStates).
+    /// [`HeldStates`].
     pub held: HeldStates,
 }
 

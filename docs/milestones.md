@@ -5,7 +5,7 @@ CI passing. Status as of the initial commit.
 
 ---
 
-## M0 — Scaffolding ✅ done
+## M0 — Scaffolding and CI ✅ done
 
 Workspace, licences, lint configuration, CI, and this documentation set.
 
@@ -13,10 +13,42 @@ Workspace, licences, lint configuration, CI, and this documentation set.
 - [x] Dual MIT / Apache-2.0 licensing
 - [x] `docs/` — design, frames, state model, testing, ADRs
 - [x] `forbid(unsafe_code)`, `deny(missing_docs)` across the `no_std` crates
-- [ ] GitHub Actions: fmt, clippy, test, and a bare-metal build check
-- [ ] `cargo deny` for licence and advisory auditing
+- [x] GitHub Actions — ten jobs, listed below
+- [x] `cargo deny` for licence and advisory auditing
 
-**Exit criterion:** `cargo test --workspace` green, zero warnings.
+**Exit criterion:** `cargo test --workspace` green, zero warnings. ✅
+
+### What CI actually checks
+
+| job | what it would catch |
+|---|---|
+| `test` | three OSes, all-features, no-default-features, and `reduced-state` |
+| `lint` | `cargo fmt --check`, clippy with `-D warnings` |
+| `no_std` | bare-metal build of all four shipped crates on three targets |
+| `msrv` | a dependency quietly raising the minimum Rust version |
+| `docs` | rustdoc with `-D warnings` — broken intra-doc links |
+| `deny` | licences and advisories, **and** that the AGPL guard actually fires |
+| `proto` | the checked-in bindings still match the `.proto` sources |
+| `fuzz` | the decode fuzz target still builds and runs |
+| `interop` | the permissive `nav-types` adapter |
+| `cortex_m` | stack budget under QEMU, and no panic machinery on the data path |
+
+Four problems were found in the workflow when it was finally exercised
+end-to-end rather than assumed:
+
+- **`deny` was defined twice.** YAML keeps only the last duplicate key, so the
+  earlier stub looked like a job and silently never ran. Latent since M0.
+- **`--all-features` across the workspace pulls AGPL code.** It enables
+  `gnss-rtk-interop`, dragging `gnss-rtk` and `anise` into every ordinary run —
+  contradicting the boundary [adr/0003](adr/0003-interop-boundary.md) exists to
+  defend, and adding minutes to each build. Now excluded, with the dedicated
+  `interop` job covering the permissive adapter on purpose.
+- **`drifters-eqf` was never built bare-metal**, despite being a `no_std` crate.
+- **The `docs` job would have failed.** `RUSTDOCFLAGS: -D warnings` catches a
+  redundant explicit link target that no local build had ever surfaced.
+
+The lesson is the same one M8 taught about stack and panics: a check that has
+never been run is not a check.
 
 ---
 

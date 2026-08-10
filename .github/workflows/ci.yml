@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a branch makes the previous run obsolete; cancel it rather
+# than paying for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -21,7 +27,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
+      # NOT `--all-features` across the workspace: that would enable
+      # `gnss-rtk-interop`, pulling AGPL code and a large dependency tree into
+      # every ordinary CI run. The `interop` job covers the permissive adapter
+      # deliberately and on its own. See docs/adr/0003.
+      - run: cargo test --workspace --exclude drifters-interop --all-features
       - run: cargo test --workspace --no-default-features
       # `reduced-state` removes states rather than adding capability, so it is
       # a genuinely different filter and needs its own run.
@@ -37,7 +47,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features
+      # See the note in the `test` job on why this is not `--all-features`.
+      - run: cargo clippy --workspace --exclude drifters-interop --all-targets --all-features
 
   # The job that actually proves no_std. A crate can silently acquire a `std`
   # dependency and nothing in a host build will notice; this fails when it does.
@@ -62,6 +73,7 @@ jobs:
       - run: cargo build -p drifters-core --target ${{ matrix.target }}
       - run: cargo build -p drifters-filter --target ${{ matrix.target }}
       - run: cargo build -p drifters-proto --target ${{ matrix.target }}
+      - run: cargo build -p drifters-eqf --target ${{ matrix.target }}
 
   msrv:
     name: minimum supported Rust
@@ -81,14 +93,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --no-deps --all-features
-
-  deny:
-    name: licences + advisories
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - run: cargo doc --workspace --exclude drifters-interop --no-deps --all-features
 
   # The checked-in protobuf bindings must match the schemas that produced them.
   # `cargo xtask proto` needs no `protoc` — the whole toolchain is pure Rust,
