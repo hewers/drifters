@@ -21,7 +21,7 @@ Every number here is produced by a test in this repository.
 | **Footprint** | **9.5 KiB** peak stack (15-state), 16.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
-| **Tests** | 242, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 268, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -123,6 +123,9 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   inverse, explicit re-symmetrisation.
 - **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
   file. That is what lets the same code run inside an interrupt handler.
+- **NED navigation frame, FRD body frame** — the navigation-literature
+  convention, not ROS's ENU/FLU. Conversion belongs at the boundary; reasoning
+  in [docs/adr/0006](docs/adr/0006-frame-convention.md).
 - **`f64` throughout**, deliberately — `f32` latitude costs 0.76 m per ULP
   against a 3.3 cm error budget. Reasoning in
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
@@ -134,15 +137,18 @@ The docs carry the reasoning, including the parts that did not work.
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
 - [frames.md](docs/frames.md) — coordinate frames and conventions
-- [testing.md](docs/testing.md) — nine layers, and what each one can prove
+- [testing.md](docs/testing.md) — eleven layers, and what each one can prove
+- [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
+- [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [milestones.md](docs/milestones.md) — roadmap and measured outcomes
 - [adr/](docs/adr/) — decisions and why, including the ones reversed later
 - [papers/](docs/papers/) — the source papers: citations, DOIs and how to fetch them
 
-Two worth reading if you are evaluating this seriously:
+Three worth reading if you are evaluating this seriously:
 [why an accelerometer bias and a tilt are the same measurement to a stationary
-filter](docs/state-model.md), and [why `f32` was measured and
-rejected](docs/adr/0005-scalar-type.md).
+filter](docs/state-model.md), [why `f32` was measured and
+rejected](docs/adr/0005-scalar-type.md), and [why the frame is NED/FRD rather
+than the ROS convention](docs/adr/0006-frame-convention.md).
 
 ## Licence
 

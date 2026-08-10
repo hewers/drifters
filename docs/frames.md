@@ -4,6 +4,11 @@ Every ambiguity in a navigation filter eventually becomes a sign error. This
 file is the single source of truth; if code and this document disagree, one of
 them is a bug.
 
+> **Why NED and FRD rather than ROS's ENU and FLU?** Considered and rejected —
+> see [adr/0006](adr/0006-frame-convention.md). In short: the literature and the
+> reference implementation are both NED/FRD, and interop is a boundary concern
+> that a conversion solves exactly.
+
 ## Units
 
 | quantity | unit | notes |

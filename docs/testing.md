@@ -263,7 +263,7 @@ for bit-exact golden vectors, so tests needing bit-exactness call
 - Prefer asserting *convergence order* or an *analytic bound* over a captured
   number. A captured number only says the code still does what it did.
 
-## Layer 8 — bare-metal stack budget
+## Layer 9 — bare-metal stack budget
 
 `cortex-m-harness/` boots the filter on an emulated Cortex-M4 and measures its
 peak stack use. Run it with:
@@ -318,7 +318,7 @@ matrix arithmetic written as expressions creates a temporary per subexpression,
 and how many survive is a question about the optimiser, not about the source.
 It has to be measured.
 
-## Layer 9 — the data path links no panic machinery
+## Layer 10 — the data path links no panic machinery
 
 `cortex-m-harness/src/bin/panic_audit.rs` is a firmware binary containing only
 the filter's hot path: no formatting, no semihosting, no strings. Whatever panic
@@ -359,3 +359,30 @@ This covers the steady-state data path — `add_imu`, `apply_zupt`,
 `apply_height`. Construction and configuration validation are *not* in scope and
 may legitimately panic on programmer error; they run once, at startup, where a
 panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.
+
+## Layer 11 — error against ground truth
+
+Layers 6 and 7 measure a **prediction residual**: the filter's predicted
+position against the GNSS fix it is about to consume. That is an honest
+open-loop check and it is not the same as error against truth — the fixes carry
+their own error, and a filter that tracked them perfectly would report zero
+residual while still being wrong by however much they were.
+
+The GSDC 2023 dataset carries survey-grade truth, so it closes that gap.
+`drifters_cli::truth` interpolates a truth trajectory and accumulates true
+position error; `drifters gsdc` scores both the filter *and* the phone's own
+GNSS solution on identical epochs, so the comparison isolates what fusing the
+IMU actually bought.
+
+Two properties are tested rather than assumed:
+
+- **It refuses to extrapolate.** Outside the truth span an epoch is *counted as
+  skipped*, never estimated. Extrapolated truth yields a confident wrong error
+  exactly where a run is least trustworthy.
+- **Longitude interpolates the short way**, so a trajectory crossing the
+  antimeridian does not sweep 359.8° between adjacent samples.
+
+The result on smartphone data is a **negative one**, recorded in full at
+[gsdc.md](gsdc.md): fusing a phone IMU with position-only smartphone GNSS gains
+1.7 %. That is worth as much as a positive result — it bounds where this filter
+helps, and it was diagnosed rather than tuned away.
