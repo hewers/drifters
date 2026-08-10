@@ -7,6 +7,7 @@
 pub mod kfgins;
 pub mod plot;
 pub mod stats;
+pub mod truth;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};

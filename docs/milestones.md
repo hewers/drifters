@@ -366,7 +366,7 @@ called `drifters`; binary names are not registry-unique, so that is fine.
 
 ---
 
-## M13 — GSDC and ground-truth error
+## M13 — GSDC and ground-truth error 🔨 partial
 
 The Google Smartphone Decimeter Challenge datasets are Pixel raw GNSS and IMU
 logs **with survey-grade ground truth**. That is the missing ingredient: every
@@ -374,19 +374,39 @@ accuracy number this project reports is a *prediction residual* against the
 fixes themselves, because neither KF-GINS nor any dataset used so far ships a
 truth trajectory.
 
-- [ ] Ground-truth error metric in the replay — true position error, not
-      residual
-- [ ] Reader for the GSDC CSV layout
-- [ ] Synthetic fixtures exercising the parser
-- [ ] Documented fetch procedure
+- [x] Ground-truth machinery: trajectory, interpolation, true position error
+- [ ] Reader for the GSDC CSV layout — **not attempted**, see below
 
-**Known limitation, stated up front.** The GSDC data lives on Kaggle behind
-authentication, and its terms preclude redistribution, so the reader's column
-schema is written from documentation and **has not been validated against real
-data**. That is exactly the kind of code that looks right and is not. It is
-marked as unverified in the source, its fixtures are synthetic, and the first
-person with a real file should expect to correct column names rather than
-assume they are right.
+### What was built
 
-The ground-truth *metric* has no such caveat — it is independent of the reader
-and testable on its own.
+`drifters_cli::truth` — a truth trajectory with time interpolation and a
+position-error accumulator. Deliberately **not** tied to any dataset: truth is a
+time-ordered sequence of geodetic positions, whether it came from Kaggle,
+post-processed RTK, a total station or a simulator. That makes it more useful
+than a GSDC-specific path, and it is fully testable without any dataset at all.
+
+Two properties worth calling out, both tested:
+
+- **It refuses to extrapolate.** Outside the truth span the query returns
+  `None` and the epoch is *counted as skipped*, not silently dropped.
+  Extrapolated truth produces a confident wrong error at exactly the moments a
+  run is least trustworthy — the first and last seconds, before initialisation
+  has settled.
+- **Longitude interpolates the short way.** A trajectory crossing the
+  antimeridian must not sweep 359.8° between two adjacent samples.
+
+### What was not built, and why
+
+The GSDC reader. The data is on Kaggle behind authentication that is not
+available here, its terms preclude redistribution, and no public mirror exists —
+the obvious candidate repositories are analysis code, not data, and none expose
+the CSV column names.
+
+Writing a parser against a schema that cannot be checked would produce exactly
+the failure this project keeps avoiding: code that compiles, looks right, and is
+wrong in a way nobody notices until much later. The column names are the entire
+content of such a reader, so an unverified one is not worth having.
+
+**It is roughly an hour's work given a single sample file** — even a hundred
+lines of `device_imu.csv`, `device_gnss.csv` and `ground_truth.csv` is enough to
+pin the schema and write the adapter on top of the machinery that now exists.
