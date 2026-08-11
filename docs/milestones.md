@@ -339,9 +339,10 @@ measured firmware budget is untouched. Specification and scoping in
 - [x] Linearised `A_t⁰` (10) and outputs `C*_m`, `C*_p`, `C*_v` (11–13), each
       block checked against a numerical Jacobian
 - [x] GCU innovation inflation (Sec. VI)
-- [ ] Group exponential — `exp` on `G` needs `∫₀¹ Ad_{χ(exp(s u_c))} ds` for the
-      `γ` component, not the naive `u_γ`
-- [ ] Propagation, update and reset — the filter itself
+- [x] Group exponential — `∫₀¹ Ad_{χ(exp(s u_c))} ds` for the `γ` component,
+      not the naive `u_γ`; pinned by the one-parameter subgroup property
+- [x] Propagation, update and reset — the filter itself, closed-loop against an
+      independent simulator
 - [ ] Local-tangent-frame adapter, and the ESKF-vs-EqF comparison
 - [ ] Extract a common backend trait, once both estimators exist and their
       shapes are known
@@ -352,13 +353,13 @@ information and produces a confident wrong attitude — is the same class of
 problem M6 hit here. Held states constrained the symptom; the EqF addresses why
 the linearisation is wrong.
 
-### Five places the source cannot be taken literally
+### Six places the source cannot be taken literally
 
-Working from the paper rather than a summary surfaced five. All are recorded in
-[eqf.md](eqf.md), and each has a test that fails under the other reading. Two
-are almost certainly artefacts of extracting block matrices from a PDF, one is a
-notational slip, and two are places where the paper says something narrower than
-a first reading suggests.
+Working from the paper rather than a summary surfaced six. All are recorded in
+[eqf.md](eqf.md), and each has a test that fails under the other reading.
+Several are almost certainly artefacts of extracting block matrices from a PDF;
+the rest are places where the paper says something narrower than a first reading
+suggests.
 
 - **Table II's `Ad_{C_X}` must be `Ad_{χ(C_X)}`.** As printed it does not
   type-check — `γ ∈ se(3)` is a 6-vector against a `9 × 9` adjoint — and the
@@ -377,19 +378,34 @@ a first reading suggests.
   ones. A magnetometer cannot observe a GNSS antenna offset, and the error
   output is `ᴳm + ᴳm^ ε₄` exactly — the attitude terms cancel against the
   calibration terms.
-- **`C*_v`'s skew argument needs `(Â ᴵω)^ δ̂`**, not `ᴵω^ δ̂`. The trailing
-  `ᴵω^` block *is* body-frame and is confirmed as such; the skew's argument is
+- **`C*_v`'s skew argument needs `(Â ᴵω)^ δ̂`**, not `ᴵω^ δ̂`. It is
   `ρ_v(X̂⁻¹, 0, ω)`, which only reduces to `ᴳν` at consistency with the `Â`
   present. Without it the `½` average is a bias rather than a second-order
   refinement.
+- **`C*_v`'s lever-arm block needs `(Â ᴵω)^`** too, not `ᴵω^` —
+  `∂ᴳν/∂ε₃ = −R̂ ᴵω^ Âᵀ = −(Â ᴵω)^`. Same missing `Â`, one term over.
 
 **How they were found.** Nothing here was transcribed. Each matrix was derived
 from its definition and then checked, entry by entry, against a
-central-difference Jacobian of the map it claims to linearise — two independent
-routes, one algebra and one arithmetic, over the actual group actions. `₂A`
-failed on the first run by exactly `ad_γ̂`. Three of the five were caught that
-way; the other two do not type-check or do not compose, which is its own kind of
-test.
+central-difference Jacobian — two independent routes, one algebra and one
+arithmetic, over the actual group actions. `₂A` failed on the first run by
+exactly `ad_γ̂`. Two others do not type-check or do not compose, which is its own
+kind of test.
+
+**The sixth needed a better test.** `C*_v`'s lever-arm block passed the first
+round of Jacobians, because those were evaluated at the **identity** observer —
+where `Â = I` and a body-frame rate is indistinguishable from a global-frame
+one. It surfaced only in the closed loop, as a lever arm converging to `0.44 m`
+of error while its covariance claimed `0.045 m`: confidently wrong, which is the
+exact failure the EqF exists to avoid.
+
+The tests now differentiate the **innovation the update is handed**, as a
+function of the true state, at a non-identity `X̂`. Correcting the matrix moved
+the 300-second closed-loop position error from `0.45 m` to `4.6 mm` and the
+lever arm from `0.44 m` to `5 mm`. The lesson is cheap to state and easy to
+forget: a numerical Jacobian is only as good as the point it is evaluated at,
+and identity elements are the worst possible choice, precisely because they make
+distinct expressions agree.
 
 ### A sixth thing that is not an error: the lift is not equivariant
 

@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod filter;
 pub mod gcu;
 pub mod group;
 pub mod lie;

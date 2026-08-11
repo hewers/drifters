@@ -195,32 +195,49 @@ pub fn position_output_matrix(origin: Vec3, transported: Vec3) -> OutputMatrix {
 /// C*_v = [ ½(y_v + â − (Â ᴵω)^ δ̂)^   −I₃   0₃ₓ₉   ᴵω^   0₃ₓ₃ ]
 /// ```
 ///
-/// # The rate in the skew's argument is in the global frame
+/// # Both rates are in the global frame
 ///
-/// The paper prints `½(y_v + â − ᴵω^ δ̂)^`, with the body-frame rate. The
-/// structure is right and the trailing `ᴵω^` block genuinely is the body-frame
-/// rate — that one comes from `ρ_v`'s own `δ^ ᴵω` term and the Jacobian
-/// confirms it. But the skew's argument is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating
-/// that action gives `â − (Â ᴵω)^ δ̂`.
+/// The paper prints `½(y_v + â − ᴵω^ δ̂)^ … ᴵω^`, with the body-frame rate in
+/// both places. It belongs in neither, and `rate` here is `Â ᴵω`.
 ///
-/// The `Â` is not cosmetic, and one identity settles it. The `½` average is
-/// only second-order-accurate if its two arguments coincide when the estimate
-/// is consistent. At consistency `â = v̂` and `δ̂ = −R̂ t̂`, so
+/// **The skew's argument.** It is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating that action
+/// gives `â − (Â ᴵω)^ δ̂`. The `½` average is only second-order-accurate if its
+/// two arguments coincide when the estimate is consistent, and at consistency
+/// `â = v̂` and `δ̂ = −R̂ ᴵt`, so
 ///
 /// ```text
-/// â − (Â ᴵω)^ δ̂ = v̂ + (R̂ ᴵω) × (R̂ ᴵt̂) = v̂ + R̂ ᴵω^ ᴵt̂ = ᴳν = y_v   ✓
+/// â − (Â ᴵω)^ δ̂ = v̂ + (R̂ ᴵω) × (R̂ ᴵt) = v̂ + R̂ ᴵω^ ᴵt = ᴳν = y_v   ✓
 /// ```
 ///
-/// whereas `â − ᴵω^ δ̂ = v̂ + ᴵω × R̂ t̂` does not reduce to `ᴳν` — it mixes a
-/// body-frame rate with a global-frame lever arm. `the_transported_measurements_
-/// agree_with_the_prediction_when_consistent` is the test, and it fails with
-/// the printed form. [`transported_velocity`] derives the correct value from
-/// the action so it cannot drift from `ρ_v`.
-pub fn velocity_output_matrix(origin: Vec3, transported: Vec3, omega: Vec3) -> OutputMatrix {
+/// whereas `â − ᴵω^ δ̂ = v̂ + ᴵω × R̂ t̂` does not reduce to `ᴳν` — it crosses a
+/// body-frame rate with a global-frame lever arm.
+///
+/// **The lever-arm block.** `ᴳν = v + R ᴵω^ ᴵt` with `ᴵt = t̂ − Âᵀ ε₃`, so
+///
+/// ```text
+/// ∂ᴳν/∂ε₃ = −R̂ ᴵω^ Âᵀ = −Â ᴵω^ Âᵀ = −(Â ᴵω)^
+/// ```
+///
+/// which is the same missing `Â`, in the same place, for the same reason.
+///
+/// # This one was found by a test having a hole in it
+///
+/// Worth recording. The first version of
+/// `the_velocity_output_matrix_matches_a_numerical_jacobian` differentiated the
+/// output map at the **identity** observer, where `Â = I` and the two readings
+/// are indistinguishable — so it passed on the printed form and the error only
+/// showed up in the closed loop, as a lever arm that converged ten times slower
+/// than its own covariance claimed.
+///
+/// The tests now differentiate the measurement a real sensor would produce,
+/// as a function of the true state, at a **non-identity** `X̂`. That is a
+/// harder thing to satisfy and it is the definition the filter actually needs:
+/// `C* = −∂y/∂ε`, since the innovation is `transported − y`.
+pub fn velocity_output_matrix(origin: Vec3, transported: Vec3, rate: Vec3) -> OutputMatrix {
     let mut m = OutputMatrix::zeros();
     m.set_block(0, 0, &((origin + transported) * 0.5).skew());
     m.set_block(0, 3, &-Mat3::identity());
-    m.set_block(0, 15, &omega.skew());
+    m.set_block(0, 15, &rate.skew());
     m
 }
 
@@ -251,9 +268,7 @@ mod tests {
     use drifters_core::F;
 
     use crate::group::Algebra;
-    use crate::group::{
-        act_state, curve, output_direction, output_position, output_velocity, State,
-    };
+    use crate::group::{act_state, curve, output_direction, State};
     use crate::lie::{Se23, Se3Tangent};
     use crate::lift::lift;
 
@@ -396,46 +411,54 @@ mod tests {
         }
     }
 
-    fn assert_output_matches<M: Fn(&State) -> Vec3>(
+    /// `C* = ∂(innovation)/∂ε`, differentiating literally what
+    /// [`crate::filter::EqFilter::update`] is handed.
+    ///
+    /// The true state is `ξ(ε) = φ(X̂, ψ(ε))`, the measurement is what a real
+    /// sensor would return from it, and the innovation is however that sensor's
+    /// update forms it. Nothing about the output map's own coordinates enters,
+    /// which is the point: this is the definition the filter needs.
+    ///
+    /// The observer is deliberately **not** the identity. At the identity a
+    /// body-frame rate and a global-frame rate are the same thing, and a
+    /// version of this test that used `Symmetry::IDENTITY` passed on a `C*_v`
+    /// with `ᴵω^` where `(Â ᴵω)^` was needed.
+    fn assert_innovation_jacobian<M: Fn(&State) -> Vec3>(
         analytic: &OutputMatrix,
-        h: M,
+        innovation: M,
         x: &Symmetry,
         what: &str,
     ) {
         for k in 0..DIM {
             let e = basis(k);
-            let fwd = h(&at(&e, H, x));
-            let back = h(&at(&e, -H, x));
+            let fwd = innovation(&at(&e, H, x));
+            let back = innovation(&at(&e, -H, x));
             for i in 0..3 {
                 assert_close((fwd[i] - back[i]) / (2.0 * H), analytic[(i, k)], what, i, k);
             }
         }
     }
 
-    /// The identity element as the observer: the Jacobian of the *error* output
-    /// is taken at the error origin, where `X̂` has already been divided out.
-    fn origin() -> Symmetry {
-        Symmetry::IDENTITY
-    }
-
     #[test]
     fn the_direction_output_matrix_matches_a_numerical_jacobian() {
+        let x = observer();
         let north = Vec3::new(0.48, 0.0, 0.88).normalized();
-        // At consistency the transported measurement equals the origin output,
-        // and C* reduces to the plain Jacobian — which is the only case a
-        // Jacobian can check.
-        let analytic = direction_output_matrix(north, north);
-        // The leading ᴳm^ of (11) is the chart: the output lives on S², and
-        // δ(y) = ᴳm^ y carries a neighbourhood of ᴳm into its tangent plane.
-        // C*_m is the Jacobian of δ∘h_m, not of h_m, and comparing against the
-        // ambient output would be short exactly one factor of ᴳm^.
-        assert_output_matches(
+        let estimate = act_state(&x, &State::default());
+
+        // Consistent measurement: the transported value then equals the origin
+        // output, and C* reduces to the plain Jacobian, which is the only case
+        // a Jacobian can check.
+        let transported = transported_direction(&x, output_direction(&estimate, north));
+        let analytic = direction_output_matrix(north, transported);
+
+        // Both the chart δ(y) = ᴳm^ y and the transport are part of what the
+        // filter compares, so both belong inside the differentiated quantity.
+        assert_innovation_jacobian(
             &analytic,
-            |s| north.skew() * output_direction(s, north),
-            &origin(),
+            |s| north.skew() * transported_direction(&x, output_direction(s, north)),
+            &x,
             "C*_m",
         );
-        // And it really is confined to the magnetometer columns.
         for i in 0..3 {
             for j in 0..18 {
                 assert_eq!(analytic[(i, j)], 0.0, "C*_m column {j} should be zero");
@@ -446,22 +469,42 @@ mod tests {
 
     #[test]
     fn the_position_output_matrix_matches_a_numerical_jacobian() {
-        let pi = Vec3::new(180.4, -260.6, -35.2);
-        let analytic = position_output_matrix(pi, pi);
-        assert_output_matches(&analytic, |s| output_position(s, pi), &origin(), "C*_p");
+        let x = observer();
+        let transported = transported_position(&x);
+        let analytic = position_output_matrix(transported, transported);
+        assert_innovation_jacobian(&analytic, |s| transported - antenna_position(s), &x, "C*_p");
     }
 
+    /// The test that a body-frame rate would pass at the identity and fails
+    /// here. Both the lever-arm block and the skew's argument need `Â ᴵω`.
     #[test]
     fn the_velocity_output_matrix_matches_a_numerical_jacobian() {
-        let nu = Vec3::new(12.1, -3.05, 0.44);
+        let x = observer();
         let omega = input().omega;
-        let analytic = velocity_output_matrix(nu, nu, omega);
-        assert_output_matches(
+        let transported = transported_velocity(&x, omega);
+        let analytic = velocity_output_matrix(transported, transported, x.a() * omega);
+        assert_innovation_jacobian(
             &analytic,
-            |s| output_velocity(s, nu, omega),
-            &origin(),
+            |s| transported - antenna_velocity(s, omega),
+            &x,
             "C*_v",
         );
+
+        // And spelled out: the printed body-frame reading is a different matrix.
+        assert!(
+            (analytic.block::<3, 3>(0, 15) - omega.skew()).amax() > 1e-3,
+            "the observer must separate ᴵω from Â ᴵω"
+        );
+    }
+
+    /// `ᴳπ = p + R t`, the antenna position a GNSS receiver reports.
+    fn antenna_position(s: &State) -> Vec3 {
+        s.pose.position + s.pose.rotation * s.lever
+    }
+
+    /// `ᴳν = v + R ᴵω^ ᴵt`, the antenna velocity.
+    fn antenna_velocity(s: &State, omega: Vec3) -> Vec3 {
+        s.pose.velocity + s.pose.rotation * omega.cross(s.lever)
     }
 
     /// The identity that decides the `Â` in `C*_v`'s skew argument, and the

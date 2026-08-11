@@ -197,19 +197,17 @@ Auxiliary maps: `Γ: SE₂(3) → SO(3)` takes the rotation block; `χ: SE₂(3)
 takes rotation plus the first translation column; `Π: se₂(3) → se(3)` drops the
 third column.
 
-### Five places the source cannot be taken literally
+### Six places the source cannot be taken literally
 
 Every one was resolved from first principles rather than guessed, and every one
-has a test that fails under the other reading. Three of them
-([`₂A`](#the-linearisation), [`C*_m`](#the-linearisation) and
-[`C*_v`](#the-linearisation)) are recorded further down, next to the equations
-they belong to. The two structural ones are here.
+has a test that fails under the other reading. Four of them — `₂A`, `C*_m`, and
+both halves of `C*_v` — are recorded further down, next to the equations they
+belong to. The two structural ones are here.
 
-None of this is a complaint about the paper. Two are almost certainly artefacts
-of extracting block matrices from a PDF, one is a notational slip, and two are
-places where the paper is stating something narrower than a first reading
-suggests. What matters is that a transcription would have shipped all five, and
-a numerical Jacobian catches four of them in the first run.
+None of this is a complaint about the paper. Several are almost certainly
+artefacts of extracting block matrices from a PDF, and the rest are places where
+the paper says something narrower than a first reading suggests. What matters is
+that a transcription would have shipped all six.
 
 **The product's adjoint is over `SE(3)`, not `SE₂(3)`.** Table II writes
 `γ_X + Ad_{C_X}[γ_Y]`, which does not type-check: `γ ∈ se(3)` is a 6-vector and
@@ -332,9 +330,19 @@ in `₂A`. The numerical Jacobian disagrees with the printed form by exactly
 
 ```text
 C*_m = ᴳm^ [ 0₃ₓ₁₈   ½(ᴳm + Ê y_d)^ ]
-C*_p = [ ½(y_p + b̂ − δ̂)^          0₃ₓ₃   −I₃   0₃ₓ₆   I₃    0₃ₓ₃ ]
-C*_v = [ ½(y_v + â − (Â ᴵω)^ δ̂)^  −I₃    0₃ₓ₉         ᴵω^   0₃ₓ₃ ]
+C*_p = [ ½(y_p + b̂ − δ̂)^          0₃ₓ₃   −I₃   0₃ₓ₆   I₃        0₃ₓ₃ ]
+C*_v = [ ½(y_v + â − (Â ᴵω)^ δ̂)^  −I₃    0₃ₓ₉         (Â ᴵω)^   0₃ₓ₃ ]
 ```
+
+The definition these are checked against is the one the filter actually uses:
+
+```text
+C* = ∂(innovation)/∂ε,    ξ(ε) = φ(X̂, ψ(ε))
+```
+
+— differentiate the innovation the update is handed, as a function of the true
+state, at a **non-identity** `X̂`. That last condition is not a detail; see
+below.
 
 The `½` average is between the output at the error origin and the raw
 measurement transported into the error frame by `ρ(X̂⁻¹, ·)`. The two coincide
@@ -357,12 +365,12 @@ against the calibration terms — so the derivative is non-zero in `ε₄` and
 nowhere else. Most likely the trailing two blocks swapped during extraction
 rather than an error in the paper.
 
-**`C*_v`'s skew argument needs the rate in the global frame.** The paper prints
-`½(y_v + â − ᴵω^ δ̂)^`. The trailing `ᴵω^` block genuinely is the body-frame rate
-— that one comes from `ρ_v`'s own `δ^ ᴵω` term and the Jacobian confirms it —
-but the skew's argument is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating that action gives
+**`C*_v` needs the rate in the global frame, in both places.** The paper prints
+`½(y_v + â − ᴵω^ δ̂)^ … ᴵω^`, body-frame in both. It belongs in neither.
+
+*The skew's argument* is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating that action gives
 `â − (Â ᴵω)^ δ̂`. One identity decides it: at consistency `â = v̂` and
-`δ̂ = −R̂ t̂`, so
+`δ̂ = −R̂ ᴵt`, so
 
 ```text
 â − (Â ᴵω)^ δ̂ = v̂ + (R̂ ᴵω) × (R̂ ᴵt) = v̂ + R̂ ᴵω^ ᴵt = ᴳν = y_v   ✓
@@ -371,6 +379,37 @@ but the skew's argument is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating that action g
 whereas `â − ᴵω^ δ̂ = v̂ + ᴵω × R̂ t̂` does not reduce to `ᴳν` — it crosses a
 body-frame rate with a global-frame lever arm. Without the `Â` the `½` average
 is a bias rather than a second-order refinement.
+
+*The lever-arm block* is the same missing `Â`, one term over. With
+`ᴳν = v + R ᴵω^ ᴵt` and `ᴵt = t̂ − Âᵀ ε₃`,
+
+```text
+∂ᴳν/∂ε₃ = −R̂ ᴵω^ Âᵀ = −Â ᴵω^ Âᵀ = −(Â ᴵω)^
+```
+
+### The one that a passing test was hiding
+
+The lever-arm half of that is the only correction here that a first round of
+numerical Jacobians **missed**, and how it was missed is the useful part.
+
+Those tests differentiated the output map at the **identity** observer — where
+`Â = I` and a body-frame rate is indistinguishable from a global-frame one. The
+printed form passed. It surfaced instead in the closed loop, as a lever arm
+converging to `0.44 m` of error while its own covariance claimed `0.045 m`: an
+estimate that was not merely wrong but confidently wrong, which is the exact
+failure mode the EqF exists to avoid.
+
+The fix to the tests is to differentiate the **innovation the update is
+handed**, as a function of the true state, at a non-identity `X̂` — the
+definition above. Correcting the matrix moved the 300-second closed-loop
+position error from `0.45 m` to `4.6 mm` and the lever arm from `0.44 m` to
+`5 mm`, with the covariance consistent afterwards.
+
+Two lessons worth keeping. A numerical Jacobian is only as good as the point it
+is evaluated at, and identity elements are the worst possible choice precisely
+because they make distinct expressions agree. And a filter whose covariance
+disagrees with its own error by a factor of ten is reporting a modelling bug,
+not bad luck.
 
 ## Uncertain observation handling (Sec. VI)
 
@@ -523,11 +562,18 @@ footprint and measured firmware budget are untouched.
    block against a central-difference Jacobian of the map it linearises.
 5. **GCU inflation** — done, `gcu.rs`. Self-contained, including where the
    paper's `ỹᵀS'⁻¹ỹ < 1` bound stops holding.
-6. **Filter** — next. Needs a genuine group exponential (the `γ` component wants
-   `∫₀¹ Ad_{χ(exp(s u_c))} ds`, not `u_γ`), then propagation, update and reset.
-7. **Backend trait** — extract the common interface once both estimators exist
+6. **Group exponential** — done, in `group.rs`. Componentwise for `C` and `E`,
+   but `γ` and `δ` are the vector part of a semi-direct product and pick up
+   `∫₀¹ Ad_{χ(exp(s u_c))} ds` and the `SO(3)` left Jacobian. Characterised
+   completely by three tests — identity, derivative, one-parameter subgroup —
+   so no reference values and no need for `log`.
+7. **Filter** — done, `filter.rs`. Midpoint propagation, GCU-inflated update,
+   left-multiplied reset, Joseph covariance. Closed-loop against an independent
+   fourth-order simulator: from a `10 m`, `0.1 rad`, zero-lever start it
+   reaches `3 cm` position, `1.5 mrad` attitude and `3 cm` lever arm in 120 s.
+8. **Backend trait** — extract the common interface once both estimators exist
    and their shapes are known, rather than guessing it in advance.
-8. **Comparison** — local-tangent-frame adapter, then ESKF vs EqF on the same
+9. **Comparison** — local-tangent-frame adapter, then ESKF vs EqF on the same
    data, reporting the flat-Earth modelling error as its own term.
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no

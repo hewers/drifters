@@ -31,10 +31,10 @@
 //! them accordingly — `ρ_p` takes `b`, `ρ_v` takes `a` — which is the sanity
 //! check that the mapping is the right way round.
 
-use drifters_core::math::{Mat3, Vec3};
+use drifters_core::math::{Mat3, Vec3, Vector};
 use drifters_core::F;
 
-use crate::lie::{Se23, Se23Tangent, Se3, Se3Tangent};
+use crate::lie::{integrated_adjoint, left_jacobian, Se23, Se23Tangent, Se3, Se3Tangent};
 
 /// An element of the symmetry group.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,6 +147,17 @@ impl Algebra {
         out
     }
 
+    /// Scale every component.
+    #[inline]
+    pub fn scaled(self, s: F) -> Self {
+        Self {
+            c: self.c.scaled(s),
+            gamma: Se3Tangent::new(self.gamma.omega * s, self.gamma.nu * s),
+            delta: self.delta * s,
+            e: self.e * s,
+        }
+    }
+
     /// Unpack from 21 elements.
     pub fn from_array(v: &[F; 21]) -> Self {
         let mut c = [0.0; 9];
@@ -163,6 +174,39 @@ impl Algebra {
 }
 
 impl Symmetry {
+    /// The group exponential `exp : g → G`.
+    ///
+    /// Componentwise for `C` and `E`, which are ordinary Lie group factors, but
+    /// **not** for `γ` and `δ`: those are the vector part of a semi-direct
+    /// product, carried by `C`, and a one-parameter subgroup through them picks
+    /// up the integrated action
+    ///
+    /// ```text
+    /// exp(u) = ( exp_{SE₂(3)}(u_c),
+    ///            ∫₀¹ Ad_{χ(exp(s u_c))} ds · u_γ,
+    ///            ∫₀¹ Γ(exp(s u_c)) ds · u_δ,
+    ///            exp_{SO(3)}(u_e) )
+    /// ```
+    ///
+    /// The second integral is [`integrated_adjoint`]; the third is exactly the
+    /// `SO(3)` left Jacobian, which is already here for `SE₂(3)`'s own
+    /// exponential.
+    ///
+    /// Dropping both integrals gives `crate::group::curve`, which is a
+    /// first-order retraction — correct to `O(h)` and silently wrong beyond it.
+    /// That is why the tests use `curve` (a derivative sees nothing else) and
+    /// the filter uses this.
+    pub fn exp(u: Algebra) -> Self {
+        let psi = integrated_adjoint(u.c.pi());
+        let gamma = psi.matmul(&Vector::<6>::from_column(u.gamma.to_array()));
+        Self {
+            c: Se23::exp(u.c),
+            gamma: Se3Tangent::from_array(gamma.to_column()),
+            delta: left_jacobian(u.c.omega) * u.delta,
+            e: drifters_core::math::Quat::from_rotation_vector(u.e).to_dcm(),
+        }
+    }
+
     /// The group Adjoint `Ad_X : g → g`, applied without forming a `21 × 21`.
     ///
     /// Derived from the product of Table II by differentiating
@@ -230,6 +274,25 @@ impl Default for State {
             bias: Se3Tangent::ZERO,
             lever: Vec3::ZERO,
             mag: Mat3::identity(),
+        }
+    }
+}
+
+impl Symmetry {
+    /// The group element that carries the origin `ξ°` to `xi`.
+    ///
+    /// The inverse of `X ↦ φ(X, ξ°)`, which is a bijection because the action
+    /// is free and transitive at the origin — that is what lets the filter
+    /// carry a group element and report a state. Used to initialise `X̂` from a
+    /// desired starting estimate.
+    pub fn from_state(xi: &State) -> Self {
+        let a = xi.pose.rotation;
+        let c = xi.pose;
+        Self {
+            c,
+            gamma: -c.chi().adjoint_apply(xi.bias),
+            delta: -(a * xi.lever),
+            e: a.matmul(&xi.mag),
         }
     }
 }
@@ -641,6 +704,106 @@ mod tests {
         let v = act_velocity(&x, Vec3::ZERO, Vec3::ZERO);
         assert_relative_eq!(v.x, -7.0, epsilon = 1e-12);
         assert_relative_eq!(v.y, 0.0, epsilon = 1e-12);
+    }
+
+    fn sample_algebra() -> [Algebra; 3] {
+        [
+            Algebra::ZERO,
+            Algebra {
+                c: Se23Tangent::new(
+                    Vec3::new(0.11, -0.24, 0.37),
+                    Vec3::new(1.5, -0.5, 2.0),
+                    Vec3::new(-3.0, 1.25, 0.5),
+                ),
+                gamma: Se3Tangent::new(Vec3::new(0.02, -0.05, 0.01), Vec3::new(0.3, -0.2, 0.15)),
+                delta: Vec3::new(0.4, -0.7, 1.1),
+                e: Vec3::new(-0.15, 0.25, 0.05),
+            },
+            // Large enough that argument reduction inside integrated_adjoint
+            // actually runs, and that a first-order retraction is visibly wrong.
+            Algebra {
+                c: Se23Tangent::new(
+                    Vec3::new(1.9, -1.1, 0.8),
+                    Vec3::new(-4.0, 2.5, 6.0),
+                    Vec3::new(7.0, -2.0, 1.5),
+                ),
+                gamma: Se3Tangent::new(Vec3::new(-0.4, 0.5, 0.3), Vec3::new(-1.2, 0.8, 2.0)),
+                delta: Vec3::new(-2.0, 1.4, 0.6),
+                e: Vec3::new(0.9, -0.4, 1.3),
+            },
+        ]
+    }
+
+    /// `exp` is characterised completely by three properties: it starts at the
+    /// identity, its derivative there is `u`, and `s ↦ exp(su)` is a
+    /// one-parameter subgroup. Together they leave no freedom, so these three
+    /// tests are a proof rather than a spot check — no reference values, and no
+    /// need for `log` to exist yet.
+    #[test]
+    fn exp_starts_at_the_identity_with_the_right_derivative() {
+        assert_same_group(&Symmetry::exp(Algebra::ZERO), &Symmetry::IDENTITY, 1e-15);
+
+        let h = 1e-6;
+        for u in sample_algebra() {
+            let read_off = |s: F| {
+                let p = Symmetry::exp(u.scaled(s));
+                Algebra {
+                    c: p.c.log(),
+                    gamma: p.gamma,
+                    delta: p.delta,
+                    e: Quat::from_dcm(&p.e).to_rotation_vector(),
+                }
+                .to_array()
+            };
+            let (fwd, back) = (read_off(h), read_off(-h));
+            let expected = u.to_array();
+            for i in 0..21 {
+                let numeric = (fwd[i] - back[i]) / (2.0 * h);
+                assert!(
+                    (numeric - expected[i]).abs() <= 1e-6 * (1.0 + expected[i].abs()),
+                    "d/ds exp(su)[{i}]: {numeric} vs {}",
+                    expected[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exp_is_a_one_parameter_subgroup() {
+        // exp((s+t)u) = exp(su) exp(tu). This is what the ∫ Ad in the γ
+        // component exists to satisfy; the naive u_γ fails it.
+        for u in sample_algebra() {
+            for (s, t) in [(0.3, 0.7), (1.0, 1.0), (-0.4, 1.9), (0.5, -0.5)] {
+                let together = Symmetry::exp(u.scaled(s + t));
+                let apart = Symmetry::exp(u.scaled(s)).compose(&Symmetry::exp(u.scaled(t)));
+                assert_same_group(&together, &apart, 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_order_retraction_is_not_the_exponential() {
+        // Pinned so the cheap version cannot quietly replace the real one:
+        // `curve` agrees to first order and diverges after, which is exactly
+        // the failure mode that would survive every other test in this file.
+        let u = sample_algebra()[2];
+        let exact = Symmetry::exp(u);
+        let approximate = curve(u, 1.0);
+        assert!(
+            (exact.gamma - approximate.gamma).to_array()[0].abs() > 1e-2,
+            "the sample must separate the two"
+        );
+
+        // ...and they converge as h → 0, at first order.
+        let mut previous = F::INFINITY;
+        for h in [1e-1, 1e-2, 1e-3] {
+            let gap = (Symmetry::exp(u.scaled(h)).gamma - curve(u, h).gamma)
+                .to_array()
+                .iter()
+                .fold(0.0, |m: F, v| m.max(v.abs()));
+            assert!(gap < previous, "the gap must shrink with h");
+            previous = gap;
+        }
     }
 
     /// `Ad_X[u] = d/ds|₀ X exp(su) X⁻¹`, against central differences.

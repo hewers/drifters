@@ -417,6 +417,63 @@ impl Se3 {
             nu: self.translation.cross(r_omega) + self.rotation * u.nu,
         }
     }
+
+    /// Exponential map from `se(3)`.
+    pub fn exp(u: Se3Tangent) -> Self {
+        Self {
+            rotation: Quat::from_rotation_vector(u.omega).to_dcm(),
+            translation: left_jacobian(u.omega) * u.nu,
+        }
+    }
+}
+
+/// `ψ(v) = ∫₀¹ Ad_{exp(s v)} ds`, the integrated `SE(3)` Adjoint.
+///
+/// This is the factor a semi-direct product needs in its exponential: for
+/// `G = H ⋉_ρ V`, `exp(ξ_h, ξ_v) = (exp_H(ξ_h), ∫₀¹ ρ(exp_H(s ξ_h)) ds · ξ_v)`.
+/// With `ρ = Ad_χ` that integral is this function, and getting it wrong — using
+/// plain `ξ_v`, say — gives a first-order retraction that looks right at small
+/// corrections and drifts at large ones.
+///
+/// # Why a series and not a closed form
+///
+/// `ψ(M) = Σ_{k≥0} M^k/(k+1)!` where `M = ad_v`. The obvious closed form
+/// `M⁻¹(exp M − I)` does not apply: `ad_v v = 0`, so `ad_v` is singular for
+/// every `v`. A closed form for the `SE(3)` case exists but is long, has its own
+/// small-angle branches, and would need the same numerical care as
+/// [`left_jacobian`] for no gain — this is called once per filter update, not
+/// once per IMU sample.
+///
+/// Argument reduction keeps the series honest: halve `v` until the series
+/// converges to machine precision in a fixed number of terms, then walk back up
+/// with `ψ(2M) = ½(I + Ad_{exp(v)}) ψ(M)`, using the *exact* `Ad_{exp(v)}` at
+/// each level rather than a second series.
+pub fn integrated_adjoint(v: Se3Tangent) -> Matrix<6, 6> {
+    // amax of ad_v is max(|ω|∞, |ν|∞); at 1/16 the 16-term truncation is below
+    // one ulp even against the crude ‖M‖ ≤ 6·amax bound.
+    let mut halvings = 0;
+    let mut w = v;
+    while w.omega.amax().max(w.nu.amax()) > 0.0625 && halvings < 64 {
+        w = Se3Tangent::new(w.omega * 0.5, w.nu * 0.5);
+        halvings += 1;
+    }
+
+    let m = w.ad();
+    let mut term = Matrix::<6, 6>::identity();
+    let mut psi = term;
+    for k in 1..16 {
+        term = term.matmul(&m).scaled(1.0 / (k + 1) as F);
+        psi += &term;
+    }
+
+    for _ in 0..halvings {
+        let doubled = (Matrix::<6, 6>::identity() + Se3::exp(w).adjoint())
+            .matmul(&psi)
+            .scaled(0.5);
+        psi = doubled;
+        w = Se3Tangent::new(w.omega * 2.0, w.nu * 2.0);
+    }
+    psi
 }
 
 /// Squared-angle threshold below which the Taylor forms are used, `θ < 10⁻²`.

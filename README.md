@@ -21,7 +21,7 @@ Every number here is produced by a test in this repository.
 | **Footprint** | **9.5 KiB** peak stack (15-state), 16.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
-| **Tests** | 307, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 317, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -66,11 +66,16 @@ loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
 odometer, barometric height, magnetometer heading), protobuf serialization,
 bare-metal Cortex-M, KF-GINS dataset regression.
 
-**In progress:** an equivariant filter (EqF) as a second estimator. The symmetry
-group, lift, linearisation and innovation inflation are in and checked against
-numerical Jacobians; the propagate/update loop is not. That work found
-[five places the source paper cannot be taken literally](docs/eqf.md) — a
-transcription would have shipped all five.
+**In progress:** an equivariant filter (EqF) as a second estimator. The filter
+runs — symmetry group, lift, linearisation, group exponential, GCU inflation and
+the propagate/update loop — and converges closed-loop against an independent
+simulator, self-calibrating its GNSS lever arm from zero. Still to do: the
+local-tangent-frame adapter and the head-to-head against the ESKF on real data.
+
+That work turned up
+[six places the source paper cannot be taken literally](docs/eqf.md). A
+transcription would have shipped all six; the last one was caught only because a
+numerical Jacobian was moved off the identity element.
 
 **Not done:** timing on real silicon, and this has never run on a physical IMU.
 Everything is dataset replay plus emulation. See
@@ -84,7 +89,7 @@ drifters-core      no_std, no alloc, deps: libm
                    fixed-size matrices, quaternions, WGS-84, frames, time
 drifters-filter    no_std, no alloc — mechanization, 21-state ESKF, GinsEngine
 drifters-proto     no_std — protobuf codecs (micropb), codegen needs no protoc
-drifters-eqf       no_std — equivariant filter, in progress
+drifters-eqf       no_std — equivariant filter (EqF), in progress
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
 drifters-cli       std — file-driven replay and validation
 ```
