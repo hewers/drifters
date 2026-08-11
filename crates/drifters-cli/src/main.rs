@@ -41,7 +41,8 @@ fn usage() {
          \x20 replay  run the ESKF and report statistics\n\
          \x20 plot    the same, and write an SVG figure\n\
          \x20 eqf     run the equivariant filter on the same data\n\
-         \x20 gsdc    replay a GSDC phone trace against ground truth"
+         \x20 gsdc    replay a GSDC phone trace against ground truth\n\
+         \x20 tune    sweep the IMU process noise and score every point"
     );
 }
 
@@ -56,6 +57,9 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.first().map(String::as_str) == Some("eqf") {
         return run_eqf_command(args);
+    }
+    if args.first().map(String::as_str) == Some("tune") {
+        return run_tune_command(args);
     }
     let make_figure = match args.first().map(String::as_str) {
         Some("replay") => false,
@@ -445,5 +449,78 @@ fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(figure, svg)?;
         println!("\nwrote {figure}");
     }
+    Ok(())
+}
+
+/// Sweep the IMU process-noise scale and report where each filter is
+/// statistically consistent.
+///
+/// The IMU noise densities in the GSDC path are datasheet-class figures, and
+/// `--imu-scale` has been a hand-picked multiplier on them. This replaces the
+/// hand-picking with a measurement: mean NIS should equal the measurement
+/// dimension, 3, when the assumed noise matches the real one. Too little
+/// process noise makes the filter overconfident and NIS large; too much makes it
+/// ignore its own propagation and NIS small.
+///
+/// Because this trace carries ground truth, the sweep also reports the error at
+/// every point, so the consistency-optimal scale and the accuracy-optimal scale
+/// can be compared rather than assumed equal.
+fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
+    let quiet = args.iter().any(|a| a == "--quiet");
+    let sn: f64 = flag(args, "--sigma-n").unwrap_or("5.7").parse()?;
+    let se: f64 = flag(args, "--sigma-e").unwrap_or("2.5").parse()?;
+    let sv: f64 = flag(args, "--sigma-v").unwrap_or("18").parse()?;
+    let alpha: f64 = flag(args, "--alpha").unwrap_or("0").parse()?;
+
+    let scales: Vec<f64> = match flag(args, "--scales") {
+        Some(list) => list
+            .split(',')
+            .map(str::trim)
+            .map(str::parse)
+            .collect::<Result<_, _>>()?,
+        None => vec![1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0],
+    };
+
+    if !quiet {
+        eprintln!("sweeping {} process-noise scales", scales.len());
+    }
+    let rows =
+        drifters_cli::tune_gsdc(&dir, drifters_cli::vec3(sn, se, sv), &scales, alpha, quiet)?;
+
+    println!("\n--- posterior IMU process-noise tune ---");
+    println!("assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF alpha {alpha:.2}");
+    println!(
+        "\n{:>8}   {:>9} {:>10}   {:>9} {:>10}",
+        "scale", "ESKF NIS", "ESKF RMS", "EqF NIS", "EqF RMS"
+    );
+    for r in &rows {
+        println!(
+            "{:>8.0}   {:>9.3} {:>9.3} m   {:>9.3} {:>9.3} m",
+            r.scale, r.eskf_nis, r.eskf_rms, r.eqf_nis, r.eqf_rms
+        );
+    }
+
+    let show = |name: &str, consistent: Option<f64>, best: Option<f64>| {
+        let c = consistent.map_or("outside the sweep".to_string(), |v| format!("x{v:.0}"));
+        let b = best.map_or("-".to_string(), |v| format!("x{v:.0}"));
+        println!("{name:<6} consistent (NIS -> 3): {c:<20} lowest error: {b}");
+    };
+    println!();
+    show(
+        "ESKF",
+        eqf::nis_crossing(&rows, |r| r.eskf_nis, 3.0),
+        eqf::best_rms(&rows, |r| r.eskf_rms),
+    );
+    show(
+        "EqF",
+        eqf::nis_crossing(&rows, |r| r.eqf_nis, 3.0),
+        eqf::best_rms(&rows, |r| r.eqf_rms),
+    );
+    println!(
+        "\nWhere the two disagree, the difference is model error rather than\n\
+         tuning: NIS can only report whether the assumed noise explains the\n\
+         innovations, not whether the model generating them is right."
+    );
     Ok(())
 }

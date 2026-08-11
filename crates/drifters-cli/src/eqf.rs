@@ -516,3 +516,43 @@ pub fn replay_gsdc_eqf(
     out.lever = filter.nav_state().lever;
     out
 }
+
+/// One row of a process-noise sweep.
+pub struct TuneRow {
+    /// Multiplier applied to every IMU noise density.
+    pub scale: f64,
+    /// Mean NIS of the ESKF, and its horizontal RMS error against truth.
+    pub eskf_nis: f64,
+    /// See [`TuneRow::eskf_nis`].
+    pub eskf_rms: f64,
+    /// Mean NIS of the EqF, and its horizontal RMS error against truth.
+    pub eqf_nis: f64,
+    /// See [`TuneRow::eqf_nis`].
+    pub eqf_rms: f64,
+}
+
+/// The scale at which mean NIS crosses `target`, by log-linear interpolation.
+///
+/// NIS falls monotonically as the assumed process noise rises, so the crossing
+/// is unique when it exists. Returns `None` when the sweep does not bracket it,
+/// which is itself informative: the sweep was too narrow.
+pub fn nis_crossing(rows: &[TuneRow], nis: impl Fn(&TuneRow) -> f64, target: f64) -> Option<f64> {
+    for pair in rows.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let (na, nb) = (nis(a), nis(b));
+        if (na - target) * (nb - target) <= 0.0 && (na - nb).abs() > f64::EPSILON {
+            let t = (na - target) / (na - nb);
+            let (la, lb) = (a.scale.ln(), b.scale.ln());
+            return Some((la + t * (lb - la)).exp());
+        }
+    }
+    None
+}
+
+/// The scale with the lowest horizontal RMS in the sweep.
+pub fn best_rms(rows: &[TuneRow], rms: impl Fn(&TuneRow) -> f64) -> Option<f64> {
+    rows.iter()
+        .filter(|r| rms(r).is_finite())
+        .min_by(|a, b| rms(a).total_cmp(&rms(b)))
+        .map(|r| r.scale)
+}

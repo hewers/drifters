@@ -13,7 +13,7 @@ that this is `no_std`, allocation-free, sans-IO, and measured on bare metal.
 
 Every number here is produced by a test in this repository.
 
-| | |
+| | measured |
 |---|---|
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
@@ -22,7 +22,7 @@ Every number here is produced by a test in this repository.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 324, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 328, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -61,20 +61,31 @@ gyro drifts at ~20 °/h, so Earth rate sits *below* its noise floor rather than
 557× above it. No Earth compensation is applied here; this is the paper's filter
 as written.
 
-| against survey-grade truth | horizontal RMS | vertical RMS | horizontal max |
-|---|---|---|---|
-| phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
-| **drifters ESKF** | **4.055 m** | 10.235 m | 12.97 m |
-| drifters EqF | 4.850 m | 12.044 m | 24.08 m |
+| against survey-grade truth | horizontal RMS | mean NIS |
+|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | — |
+| ESKF, at its consistent tuning (×95) | 5.71 m | 3.16 |
+| **EqF, at its consistent tuning (×74)** | **4.39 m** | **3.00** |
+| ESKF, at the hand-picked ×300 | 4.055 m | 0.47 |
+| EqF, at the hand-picked ×300 | 4.850 m | 1.58 |
 
-Both beat the phone's own solution; the ESKF is 16 % ahead of the EqF. One
-finding is worth more than the ranking: the EqF's **generalised covariance union
-turned out to be actively harmful here**. Sweeping its convergence rate α — the
+Both beat the phone's own solution. The ordering between them depends entirely
+on how the IMU process noise is set, so it is set by measurement rather than by
+hand — `drifters tune` sweeps the scale and reports where mean NIS reaches 3,
+the point at which the assumed noise explains the observed innovations.
+
+**At that tuning the EqF leads, by 22 %.** The earlier ESKF win needed ×300,
+where its NIS is 0.47: the filter is claiming roughly six times more uncertainty
+than its own innovations support. Across the whole consistent region, scale 60
+to 130, the EqF stays at 4.2–4.6 m and the ESKF at 5.0–5.7 m.
+
+A second finding, larger than the ranking: the EqF's **generalised covariance
+union is actively harmful on this trace**. Sweeping its convergence rate α — the
 knob that replaces χ² rejection — gives 4.85 m at α = 0 and **27.4 m at α = 1**,
 monotonically worse. GCU inflates the innovation covariance *along the
-innovation*, which is right when a large innovation means a bad measurement, and
+innovation*, which is right when a large innovation means a bad measurement and
 wrong when it means the filter has drifted and the measurement is the only thing
-that can fix it. On this trace it is the second. Full sweep in
+that can correct it. Here it is the second. Full sweeps in
 [docs/eqf.md](docs/eqf.md).
 
 Regenerate either figure yourself — every value on them comes from the replay,
@@ -84,15 +95,19 @@ none are hand-entered:
 cargo run --release -p drifters-cli -- eqf --config datasets/kf-gins/kf-gins.yaml --earth-rate --compare docs/figures/kf-gins-comparison.svg
 ```
 
+```bash
+cargo run --release -p drifters-cli -- tune --dir datasets/gsdc2023
+```
+
 The per-filter diagnostic figures, with NIS, are still there: `drifters plot`
 and `drifters gsdc --figure`. Filter consistency means NIS *scattered about 3*,
 not NIS *small*.
 
 ### What made the phone result work: Doppler
 
-Worth pulling out, because the first attempt at that trace was a negative
-result. Position-only aiding gained **1.7 %** over the phone's own GNSS, and
-un-tuned it was *worse* than doing nothing.
+The first attempt at that trace was a negative result. Position-only aiding
+gained **1.7 %** over the phone's own GNSS, and un-tuned it was *worse* than
+doing nothing.
 
 That was diagnosed rather than tuned away. Heading is weakly observable from
 position alone, so a phone gyro's drift injects error faster than 1 Hz fixes

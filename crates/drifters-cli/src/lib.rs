@@ -554,6 +554,49 @@ pub fn run_gsdc(
     Ok(report)
 }
 
+/// Sweep the IMU process-noise scale over a GSDC trace and score every point.
+///
+/// The scale multiplies all four IMU noise densities together, which is the
+/// same single knob `--imu-scale` exposes. Sweeping it rather than the four
+/// independently is a deliberate limitation: with one 20-minute trace and one
+/// measurement type there is not enough information to separate them, and
+/// fitting four parameters to that would be curve-fitting rather than
+/// calibration.
+pub fn tune_gsdc(
+    dir: &Path,
+    sigma: drifters_core::math::Vec3,
+    scales: &[f64],
+    alpha: f64,
+    quiet: bool,
+) -> Result<Vec<eqf::TuneRow>, Box<dyn std::error::Error>> {
+    let mut rows = Vec::new();
+    for scale in scales {
+        if !quiet {
+            eprintln!("  scale x{scale}...");
+        }
+        let r = run_gsdc(
+            dir,
+            GsdcOptions {
+                sigma,
+                imu_scale: *scale,
+                gyro_scale: 1.0,
+                gnss_lag: 0.0,
+                doppler: true,
+                alpha,
+            },
+            true,
+        )?;
+        rows.push(eqf::TuneRow {
+            scale: *scale,
+            eskf_nis: r.nis.mean(),
+            eskf_rms: r.filter.horizontal.rms(),
+            eqf_nis: r.eqf_nis.mean(),
+            eqf_rms: r.eqf.horizontal.rms(),
+        });
+    }
+    Ok(rows)
+}
+
 /// Convenience for callers that do not depend on `drifters-core` directly.
 pub fn vec3_splat(v: f64) -> drifters_core::math::Vec3 {
     drifters_core::math::Vec3::splat(v)

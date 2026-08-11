@@ -129,6 +129,52 @@ With a 6 m GNSS bias and a phone gyro, there is very little for an IMU to add
 over one-second fix intervals. The place a phone IMU earns its keep is bridging
 GNSS *outages*, which this trace does not contain.
 
+## Posterior tuning of the IMU process noise
+
+`--imu-scale` multiplies the datasheet IMU noise densities, and for a long time
+its value here was hand-picked at 300. `drifters tune` replaces that with a
+measurement: mean NIS equals the measurement dimension, 3, when the assumed
+noise explains the observed innovations. Below that the filter is overconfident;
+above it, it discounts its own propagation.
+
+```bash
+cargo run --release -p drifters-cli -- tune --dir datasets/gsdc2023
+```
+
+| scale | ESKF NIS | ESKF RMS | EqF NIS | EqF RMS |
+|---|---|---|---|---|
+| 1 | 41.07 | 5.573 m | 6.43 | 7.241 m |
+| 10 | 23.00 | 4.688 m | 6.01 | 6.608 m |
+| 60 | 6.34 | 6.041 m | 3.35 | 4.588 m |
+| **74** | 4.66 | 5.001 m | **3.00** | **4.387 m** |
+| **95** | **3.16** | **5.707 m** | 2.62 | 4.235 m |
+| 130 | 1.76 | 5.186 m | 2.22 | 4.210 m |
+| 300 | 0.47 | 4.055 m | 1.58 | 4.850 m |
+| 3000 | 0.19 | 5.484 m | 0.42 | 5.710 m |
+
+The consistency crossing is ×95 for the ESKF and ×74 for the EqF. Two things
+follow.
+
+**The ranking depended on the tuning.** At ×300 the ESKF leads, 4.055 m against
+4.850 m. Anywhere in the consistent region, 60 to 130, the EqF leads: 4.2–4.6 m
+against 5.0–5.7 m. The ×300 figure is not wrong as a number, but its NIS of 0.47
+says the ESKF is claiming about six times more uncertainty than its innovations
+support, and a filter tuned that far from consistency is being fitted to this
+trace rather than characterised on it.
+
+**Consistency and accuracy do not coincide.** The ESKF's lowest error sits near
+×170–300, well past its crossing. That gap is model error, not tuning: NIS can
+only report whether the assumed noise explains the innovations, not whether the
+model that generated them is right. A filter that needs more process noise than
+its sensors justify is compensating for something it does not model — here,
+almost certainly the phone's mount flexing and the unmodelled scale factors on a
+part that has never been calibrated.
+
+The sweep uses one scalar over all four IMU noise densities rather than fitting
+them separately. With one 20-minute trace and one measurement type there is not
+enough information to separate four parameters, and fitting them anyway would be
+curve-fitting rather than calibration.
+
 ## Reproducing
 
 The dataset is ~3.7 GB, lives on Kaggle behind a competition-rules acceptance,

@@ -120,6 +120,15 @@ impl EqFilter {
     /// One midpoint evaluation removes it and makes the scheme second order.
     /// Attitude and the calibration states were exact to `10⁻¹⁵` either way,
     /// their part of `Λ` being constant over the interval.
+    ///
+    /// # Negative `dt`
+    ///
+    /// A negative `dt` integrates the state backwards, which is what a reverse
+    /// pass needs. `exp(dt Λ)` and the transition matrix both invert with the
+    /// sign, but process noise does not: uncertainty accumulates in whichever
+    /// direction time is being traversed, so `Q` enters with `|dt|`. Adding it
+    /// with a signed `dt` would *subtract* covariance and produce a filter that
+    /// grows more confident the further it runs.
     pub fn propagate(&mut self, u: &Input, dt: F, q: &ProcessNoise) {
         let estimate = self.nav_state();
 
@@ -135,7 +144,8 @@ impl EqFilter {
         let a_dt = a * dt;
         let phi = Matrix::<DIM, DIM>::identity() + a_dt + a_dt.matmul(&a_dt) * 0.5;
         let noise = self.process_noise(&estimate, q);
-        self.sigma = phi.matmul(&self.sigma).mul_transpose(&phi) + noise * dt;
+        // |dt|, not dt: see the note on negative dt above.
+        self.sigma = phi.matmul(&self.sigma).mul_transpose(&phi) + noise * dt.abs();
         self.sigma.symmetrize();
     }
 
@@ -492,6 +502,68 @@ mod tests {
             lever: Vec3::ZERO,
             mag: Mat3::identity(),
         }
+    }
+
+    /// Propagating forward then backward over the same inputs must return the
+    /// state to where it started. This is what a reverse pass depends on, and
+    /// it is not free: `exp(dt Λ)` has to invert with the sign of `dt` and the
+    /// midpoint evaluation has to land on the same midpoint from either side.
+    ///
+    /// The covariance is deliberately *not* asserted to return: process noise
+    /// enters with `|dt|`, so it grows in both directions. A covariance that
+    /// came back to its starting value would mean noise was being subtracted.
+    #[test]
+    fn a_backward_pass_retraces_the_trajectory() {
+        let mut t = truth();
+        let q = process_noise();
+        let dt = 0.01;
+
+        let mut f = EqFilter::new(&t.state, initial_covariance(), GRAVITY);
+        let start = f.nav_state();
+        let trace_before = f.sigma.trace();
+
+        // Forward over 10 s, recording the inputs exactly as applied. A fixed
+        // array rather than a Vec: this crate is no_std and the test should not
+        // be the one thing that needs an allocator.
+        let mut inputs = [Input::default(); 1_000];
+        for slot in inputs.iter_mut() {
+            let u = t.imu();
+            f.propagate(&u, dt, &q);
+            *slot = u;
+            t.step(dt);
+            t.steer();
+        }
+
+        // ...and back again, same inputs in reverse, negative dt.
+        for u in inputs.iter().rev() {
+            f.propagate(u, -dt, &q);
+        }
+
+        let back = f.nav_state();
+        assert_relative_eq!(
+            (back.pose.position - start.pose.position).norm(),
+            0.0,
+            epsilon = 1e-6
+        );
+        assert_relative_eq!(
+            (back.pose.velocity - start.pose.velocity).norm(),
+            0.0,
+            epsilon = 1e-8
+        );
+        let residual = back.pose.rotation.transpose().matmul(&start.pose.rotation);
+        let angle = Quat::from_dcm(&residual).to_rotation_vector().norm();
+        assert!(angle < 1e-10, "attitude did not retrace: {angle:.2e} rad");
+        assert_relative_eq!((back.lever - start.lever).norm(), 0.0, epsilon = 1e-10);
+
+        // Uncertainty grew in both directions, as it must.
+        assert!(
+            f.sigma.trace() > trace_before,
+            "process noise must accumulate regardless of time direction"
+        );
+        assert!(
+            Cholesky::new(&f.sigma).is_some(),
+            "Σ must stay positive definite"
+        );
     }
 
     #[test]
