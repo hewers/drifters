@@ -181,13 +181,43 @@ disagree, and they disagree in the same direction on every trace.
 **The EqF's lead over the ESKF does generalise** at the A-fitted tuning — ahead
 on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 it is mixed.
 
-Consistency and accuracy diverging systematically points at unmodelled error
-that extra process noise absorbs — most likely the phone's mount flexing and the
-uncalibrated scale factors. A second candidate has not been tested: multipath
-gives heavy-tailed innovations, and a *mean* NIS is not robust to them, so the
-crossing this sweep reports is pulled by the tail. Computing the crossing from a
-median NIS instead is the obvious next experiment, and the per-epoch NIS is
-already carried in the report to do it with.
+### The heavy-tail hypothesis, tested and rejected
+
+Two explanations were on the table for consistency and accuracy disagreeing:
+unmodelled error that extra process noise absorbs, or multipath giving
+heavy-tailed innovations that drag a *mean* NIS around. `drifters tune` now
+reports a median crossing alongside the mean one, which separates them.
+
+A consistent filter on a 3-D measurement has mean NIS 3 and **median NIS
+2.366** — the two differ because the chi-squared distribution is right-skewed,
+and quoting 3 for a median would build in a bias before any data arrived.
+
+| | mean → 3 | median → 2.366 | lowest error |
+|---|---|---|---|
+| ESKF | ×99 | ×59 | ×300 |
+| EqF | ×74 | ≈×25 | ×130 |
+
+**The innovations are heavy-tailed.** The mean-to-median ratio runs 2.1 to 3.3
+across the sweep against the 1.27 a chi-squared distribution would give, so the
+tail is real and substantial.
+
+**It does not explain the gap.** Correcting for it moves the consistency point
+the wrong way. Both median crossings sit *below* their mean crossings, so the
+distance to the accuracy optimum roughly doubles: ×59 against ×300 for the ESKF,
+×25 against ×130 for the EqF. The hypothesis predicted the gap would close and
+it widened.
+
+That leaves unmodelled error as the surviving explanation, and it is a large
+one: the filters want between five and twelve times more process noise than
+either consistency criterion supports. The phone's mount flexing and its
+uncalibrated scale factors are the obvious candidates, and neither is in the
+model.
+
+The tails being real has a separate consequence worth following. Heavy tails are
+what innovation *rejection* exists for, and the ESKF has a χ² gate while the
+EqF's GCU never rejects. That is the same mechanism the α sweep found harmful
+above, from the other direction — and it sits awkwardly against the EqF still
+winning at the consistent tuning. Not resolved here.
 
 The sweep uses one scalar over all four IMU noise densities rather than fitting
 them separately. With one 20-minute trace and one measurement type there is not

@@ -505,36 +505,58 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- posterior IMU process-noise tune ---");
     println!("assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF alpha {alpha:.2}");
     println!(
-        "\n{:>8}   {:>9} {:>10}   {:>9} {:>10}",
-        "scale", "ESKF NIS", "ESKF RMS", "EqF NIS", "EqF RMS"
+        "\n{:>8}   {:>8} {:>8} {:>9}   {:>8} {:>8} {:>9}",
+        "scale", "ESKF~x", "ESKF~m", "ESKF RMS", "EqF~x", "EqF~m", "EqF RMS"
+    );
+    println!(
+        "{:>8}   {:>8} {:>8} {:>9}   {:>8} {:>8} {:>9}",
+        "", "mean", "median", "", "mean", "median", ""
     );
     for r in &rows {
         println!(
-            "{:>8.0}   {:>9.3} {:>9.3} m   {:>9.3} {:>9.3} m",
-            r.scale, r.eskf_nis, r.eskf_rms, r.eqf_nis, r.eqf_rms
+            "{:>8.0}   {:>8.3} {:>8.3} {:>7.3} m   {:>8.3} {:>8.3} {:>7.3} m",
+            r.scale,
+            r.eskf_nis,
+            r.eskf_nis_median,
+            r.eskf_rms,
+            r.eqf_nis,
+            r.eqf_nis_median,
+            r.eqf_rms
         );
     }
 
-    let show = |name: &str, consistent: Option<f64>, best: Option<f64>| {
-        let c = consistent.map_or("outside the sweep".to_string(), |v| format!("x{v:.0}"));
-        let b = best.map_or("-".to_string(), |v| format!("x{v:.0}"));
-        println!("{name:<6} consistent (NIS -> 3): {c:<20} lowest error: {b}");
+    let fmt = |v: Option<f64>| v.map_or("outside sweep".to_string(), |x| format!("x{x:.0}"));
+    let show = |name: &str, mean: Option<f64>, med: Option<f64>, best: Option<f64>| {
+        println!(
+            "{name:<5} mean NIS -> 3: {:<14} median NIS -> {:.3}: {:<14} lowest error: {}",
+            fmt(mean),
+            drifters_cli::stats::CHI2_3DOF_MEDIAN,
+            fmt(med),
+            fmt(best)
+        );
     };
+    let med_target = drifters_cli::stats::CHI2_3DOF_MEDIAN;
     println!();
     show(
         "ESKF",
         eqf::nis_crossing(&rows, |r| r.eskf_nis, 3.0),
+        eqf::nis_crossing(&rows, |r| r.eskf_nis_median, med_target),
         eqf::best_rms(&rows, |r| r.eskf_rms),
     );
     show(
         "EqF",
         eqf::nis_crossing(&rows, |r| r.eqf_nis, 3.0),
+        eqf::nis_crossing(&rows, |r| r.eqf_nis_median, med_target),
         eqf::best_rms(&rows, |r| r.eqf_rms),
     );
     println!(
-        "\nWhere the two disagree, the difference is model error rather than\n\
-         tuning: NIS can only report whether the assumed noise explains the\n\
-         innovations, not whether the model generating them is right."
+        "\nThe mean and median targets differ (3 against {:.3}) because the\n\
+         chi-squared distribution is right-skewed. If the two crossings agree,\n\
+         the innovations are close to Gaussian and any remaining gap to the\n\
+         lowest-error scale is model error. If the mean crossing sits well above\n\
+         the median one, the mean is being dragged by a heavy tail - multipath -\n\
+         and the median crossing is the more trustworthy of the two.",
+        med_target
     );
     Ok(())
 }

@@ -22,7 +22,7 @@ Every number here is produced by a test in this repository.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 328, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 331, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -90,12 +90,16 @@ picture is mixed, so the ranking depends on the criterion and both are shown
 rather than whichever flatters the conclusion.
 
 **The hand-picked ×300 generalises better than the consistent one**, helping on
-seven of eight filter/trace combinations against five of eight. Its mean NIS is
-0.44, so the filter claims roughly six times more uncertainty than its
-innovations show, and it is *still* the better setting. Two readings, and this
-data does not separate them: model error that extra process noise absorbs, and
-heavy-tailed multipath innovations dragging a *mean* NIS around. A median-based
-consistency criterion would put the crossing elsewhere and has not been tried.
+seven of eight filter/trace combinations against five of eight, despite a mean
+NIS of 0.44. Two explanations were possible: model error that extra process
+noise absorbs, or heavy-tailed multipath innovations dragging a *mean* NIS
+around. `drifters tune` now reports a **median** crossing too, which separates
+them — and rejects the second. The innovations are genuinely heavy-tailed
+(mean-to-median ratio 2.1–3.3 against the 1.27 a chi-squared gives), but
+correcting for it moves the consistency point the *wrong way*: ×59 for the ESKF
+and ≈×25 for the EqF, roughly doubling the distance to the accuracy optimum.
+Unmodelled error is what is left, and it is large — the filters want five to
+twelve times more process noise than consistency supports.
 
 **The honest summary is modest.** On a phone, over one-second fix intervals,
 inertial fusion buys between nothing and about 30 % depending on the trace, and

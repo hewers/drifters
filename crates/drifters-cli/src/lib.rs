@@ -339,6 +339,10 @@ pub struct GsdcReport {
     pub eqf_epochs: Vec<Epoch>,
     /// The EqF's normalised innovation squared.
     pub eqf_nis: stats::Running,
+    /// Every ESKF NIS value, and every EqF one, for order statistics.
+    pub nis_values: Vec<f64>,
+    /// See [`GsdcReport::nis_values`].
+    pub eqf_nis_values: Vec<f64>,
     /// The lever arm the EqF converged to, metres in the body frame.
     pub eqf_lever: drifters_core::math::Vec3,
     /// The GCU convergence rate the EqF ran with.
@@ -471,6 +475,8 @@ pub fn run_gsdc(
         eqf: truth::ErrorStats::new(),
         eqf_epochs: Vec::new(),
         eqf_nis: stats::Running::new(),
+        nis_values: Vec::new(),
+        eqf_nis_values: Vec::new(),
         eqf_lever: drifters_core::math::Vec3::ZERO,
         eqf_alpha: alpha,
         gnss_horizontal: Vec::new(),
@@ -512,6 +518,7 @@ pub fn run_gsdc(
             match engine.last_nis() {
                 Some(v) if Some(v) != last_nis => {
                     report.nis.push(v);
+                    report.nis_values.push(v);
                     last_nis = Some(v);
                     report.applied += 1;
                 }
@@ -548,6 +555,7 @@ pub fn run_gsdc(
     report.eqf = second.error;
     report.eqf_epochs = second.epochs;
     report.eqf_nis = second.nis;
+    report.eqf_nis_values = second.nis_values;
     report.eqf_lever = second.lever;
     report.eqf_horizontal = second.horizontal;
 
@@ -589,6 +597,8 @@ pub fn tune_gsdc(
         rows.push(eqf::TuneRow {
             scale: *scale,
             eskf_nis: r.nis.mean(),
+            eskf_nis_median: stats::median(&r.nis_values),
+            eqf_nis_median: stats::median(&r.eqf_nis_values),
             eskf_rms: r.filter.horizontal.rms(),
             eqf_nis: r.eqf_nis.mean(),
             eqf_rms: r.eqf.horizontal.rms(),

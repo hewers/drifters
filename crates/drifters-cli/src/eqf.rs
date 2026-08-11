@@ -573,6 +573,8 @@ pub struct GsdcEqf {
     pub epochs: Vec<Epoch>,
     /// Normalised innovation squared, before GCU inflation.
     pub nis: Running,
+    /// Every NIS value behind [`GsdcEqf::nis`], for order statistics.
+    pub nis_values: Vec<f64>,
     /// The lever arm the filter converged to. The phone has no antenna offset
     /// worth speaking of, so this converging to near zero is the correct answer
     /// rather than a null result.
@@ -641,6 +643,7 @@ pub fn replay_gsdc_eqf(
         error: truth::ErrorStats::new(),
         epochs: Vec::new(),
         nis: Running::new(),
+        nis_values: Vec::new(),
         lever: Vec3::ZERO,
         horizontal: Vec::new(),
     };
@@ -687,6 +690,7 @@ pub fn replay_gsdc_eqf(
 
             if let Some(nis) = nis {
                 out.nis.push(nis);
+                out.nis_values.push(nis);
             }
             let solved = filter.nav_state();
             let geodetic = anchor.to_geodetic(solved.pose.position);
@@ -727,6 +731,10 @@ pub struct TuneRow {
     pub scale: f64,
     /// Mean NIS of the ESKF, and its horizontal RMS error against truth.
     pub eskf_nis: f64,
+    /// Median NIS of the ESKF.
+    pub eskf_nis_median: f64,
+    /// Median NIS of the EqF.
+    pub eqf_nis_median: f64,
     /// See [`TuneRow::eskf_nis`].
     pub eskf_rms: f64,
     /// Mean NIS of the EqF, and its horizontal RMS error against truth.

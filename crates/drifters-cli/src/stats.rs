@@ -177,8 +177,68 @@ pub fn assess(nis: &Running, dimension: usize) -> Consistency {
     }
 }
 
+/// The median of a sample, by partial sort. Consumes a copy.
+///
+/// Used alongside [`Running::mean`] for normalised innovation squared. The two
+/// answer different questions when the innovations are heavy-tailed, which GNSS
+/// multipath makes them: a handful of large innovations move a mean a long way
+/// and a median hardly at all.
+pub fn median(values: &[F]) -> F {
+    if values.is_empty() {
+        return F::NAN;
+    }
+    let mut v: Vec<F> = values.iter().copied().filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return F::NAN;
+    }
+    v.sort_by(F::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        0.5 * (v[n / 2 - 1] + v[n / 2])
+    }
+}
+
+/// Median of the chi-squared distribution with three degrees of freedom.
+///
+/// The value a *median* NIS should take for a consistent filter on a 3-D
+/// measurement, where a *mean* NIS should take 3. The two differ because the
+/// chi-squared distribution is right-skewed, so quoting 3 for a median would
+/// build a bias into the criterion before any data arrived.
+pub const CHI2_3DOF_MEDIAN: F = 2.365_974;
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn median_handles_both_parities_and_ignores_non_finite() {
+        assert!(median(&[]).is_nan());
+        assert_eq!(median(&[4.0]), 4.0);
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), 2.5);
+        assert_eq!(median(&[1.0, f64::NAN, 3.0]), 2.0);
+    }
+
+    /// A median is what a mean is not: unmoved by a tail. This is the whole
+    /// reason both are reported for NIS.
+    #[test]
+    fn a_median_ignores_an_outlier_that_moves_a_mean() {
+        let clean = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let tailed = [1.0, 2.0, 3.0, 4.0, 500.0];
+        assert_eq!(median(&clean), median(&tailed));
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        assert!(mean(&tailed) > mean(&clean) * 30.0);
+    }
+
+    /// The median of a chi-squared with three degrees of freedom against its
+    /// mean of 3. The ratio is what carries meaning: it is the skew of the
+    /// distribution, and a transcription error in the constant moves it. A bare
+    /// bounds check on the constant would be evaluated at compile time and
+    /// assert nothing about anything.
+    #[test]
+    fn the_chi_squared_median_encodes_the_expected_skew() {
+        assert_relative_eq!(3.0 / CHI2_3DOF_MEDIAN, 1.268, epsilon = 1e-3);
+    }
     use super::*;
     use approx::assert_relative_eq;
 
