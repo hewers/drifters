@@ -128,6 +128,19 @@ Release mode is not optional here: the same run takes **503 s in debug against
 `DRIFTERS_REGRESSION_DEBUG=1` is set, so that a plain `cargo test --workspace`
 does not quietly spend eight minutes inside one test.
 
+### Seeing it rather than reading it
+
+`drifters plot` writes the per-filter diagnostic figure —
+[docs/figures/kf-gins.svg](figures/kf-gins.svg), and
+[gsdc-2023.svg](figures/gsdc-2023.svg) for the phone trace. Three panels:
+trajectory, residual, and **NIS**.
+
+The NIS panel is the one to read first, and it is the reason these figures exist
+alongside the estimator comparison in the README. Consistency means NIS
+*scattered about 3*, not NIS *small*: a filter reporting NIS ≈ 0.1 is not doing
+well, it is claiming an uncertainty ten times larger than its actual error and
+will ignore the next measurement that could correct it.
+
 ### What is measured
 
 For each fix, the filter's predicted **antenna** position immediately *before*

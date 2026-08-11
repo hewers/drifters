@@ -45,9 +45,30 @@ struct Scale {
     hi: f64,
     px0: f64,
     px1: f64,
+    /// Map through `log10` before scaling.
+    ///
+    /// Needed rather than nice-to-have: on the KF-GINS comparison the two
+    /// estimators' residuals differ by four orders of magnitude, and a linear
+    /// axis tall enough to show the worse one draws the better one as a flat
+    /// line on the floor. That is not a comparison, it is a decision about
+    /// which result to hide.
+    log: bool,
 }
 
 impl Scale {
+    /// A decade axis over `[lo, hi]`, both strictly positive.
+    fn logarithmic(lo: f64, hi: f64, px0: f64, px1: f64) -> Self {
+        let lo = lo.max(1e-9);
+        let hi = hi.max(lo * 10.0);
+        Self {
+            lo,
+            hi,
+            px0,
+            px1,
+            log: true,
+        }
+    }
+
     fn new(lo: f64, hi: f64, px0: f64, px1: f64) -> Self {
         // A degenerate range would divide by zero and produce NaN coordinates,
         // which SVG renders as nothing at all — a blank panel with no error.
@@ -56,15 +77,38 @@ impl Scale {
         } else {
             (lo, hi)
         };
-        Self { lo, hi, px0, px1 }
+        Self {
+            lo,
+            hi,
+            px0,
+            px1,
+            log: false,
+        }
     }
 
     fn at(&self, v: f64) -> f64 {
+        if self.log {
+            let (lo, hi) = (self.lo.log10(), self.hi.log10());
+            let v = v.max(self.lo).log10();
+            return self.px0 + (v - lo) / (hi - lo) * (self.px1 - self.px0);
+        }
         self.px0 + (v - self.lo) / (self.hi - self.lo) * (self.px1 - self.px0)
     }
 
     /// Round tick values covering the range, at most `max` of them.
     fn ticks(&self, max: usize) -> Vec<f64> {
+        if self.log {
+            let mut out = Vec::new();
+            let mut d = self.lo.log10().floor();
+            while d <= self.hi.log10() + 1e-9 {
+                let v = 10f64.powf(d);
+                if v >= self.lo * 0.999 {
+                    out.push(v);
+                }
+                d += 1.0;
+            }
+            return out;
+        }
         let span = self.hi - self.lo;
         let raw = span / max as f64;
         let mag = 10f64.powf(raw.log10().floor());
@@ -85,6 +129,16 @@ impl Scale {
 }
 
 fn fmt_tick(v: f64, step_hint: f64) -> String {
+    // A decade axis is signalled by a negative hint; format by magnitude.
+    if step_hint < 0.0 {
+        return if v >= 1.0 {
+            format!("{v:.0}")
+        } else if v >= 0.01 {
+            format!("{v:.2}")
+        } else {
+            format!("{v:.0e}")
+        };
+    }
     let decimals = if step_hint >= 10.0 {
         0
     } else if step_hint >= 1.0 {
@@ -92,7 +146,15 @@ fn fmt_tick(v: f64, step_hint: f64) -> String {
     } else {
         2
     };
-    format!("{v:.decimals$}")
+    // Normalise negative zero: a tick at -1e-13 formats as "-0", which reads as
+    // an axis error rather than as the origin.
+    let v = if v == 0.0 { 0.0 } else { v };
+    let out = format!("{v:.decimals$}");
+    if out.starts_with("-") && out[1..].chars().all(|c| c == '0' || c == '.') {
+        out[1..].to_string()
+    } else {
+        out
+    }
 }
 
 fn polyline(out: &mut String, pts: &[(f64, f64)], stroke: &str, width: f64, opacity: f64) {
@@ -139,7 +201,13 @@ fn frame(
     text(out, x0, top + 18.0, title, INK, 14.0, "start");
 
     let xt = x.ticks(8);
-    let xstep = if xt.len() > 1 { xt[1] - xt[0] } else { 1.0 };
+    let xstep = if x.log {
+        -1.0
+    } else if xt.len() > 1 {
+        xt[1] - xt[0]
+    } else {
+        1.0
+    };
     for v in &xt {
         let px = x.at(*v);
         if px < x0 - 0.5 || px > x1 + 0.5 {
@@ -161,7 +229,13 @@ fn frame(
     }
 
     let yt = y.ticks(5);
-    let ystep = if yt.len() > 1 { yt[1] - yt[0] } else { 1.0 };
+    let ystep = if y.log {
+        -1.0
+    } else if yt.len() > 1 {
+        yt[1] - yt[0]
+    } else {
+        1.0
+    };
     for v in &yt {
         let py = y.at(*v);
         if py < y0 - 0.5 || py > y1 + 0.5 {
@@ -202,6 +276,211 @@ fn frame(
         out,
         r#"<text x="16" y="{cy:.1}" fill="{MUTED}" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif" text-anchor="middle" transform="rotate(-90 16 {cy:.1})">{ylabel}</text>"#
     );
+}
+
+/// Colours for the estimator comparison. Distinguishable in greyscale by
+/// lightness as well as hue, because a README is read on both themes and
+/// printed by nobody in colour.
+pub const ESKF: &str = "#2563eb";
+pub const EQF: &str = "#c2410c";
+pub const BASELINE: &str = "#94a3b8";
+
+/// One named trace in a comparison figure.
+pub struct Series<'a> {
+    /// Legend label.
+    pub label: &'a str,
+    /// Stroke colour.
+    pub colour: &'a str,
+    /// Line width; a thicker line reads as the subject, thinner as context.
+    pub width: f64,
+    /// Trajectory points, east/north metres. Empty to omit from the map.
+    pub track: Vec<(f64, f64)>,
+    /// Time series, (seconds from start, metres).
+    pub error: Vec<(f64, f64)>,
+    /// Headline number for the legend, already formatted.
+    pub summary: String,
+}
+
+/// A two-panel comparison: the ground track, and one error series per estimator.
+pub struct Comparison<'a> {
+    /// Figure title.
+    pub dataset: &'a str,
+    /// One line under the title saying what is being measured.
+    pub subtitle: &'a str,
+    /// What the lower panel's y axis means.
+    pub error_label: &'a str,
+    /// Draw the error panel on a decade axis. Use it whenever the series span
+    /// more than about one order of magnitude.
+    pub log_error: bool,
+    /// Lower bound for the decade axis, in metres.
+    ///
+    /// Stated by the caller because it is a judgement about the application,
+    /// not about the data: the KF-GINS run touches `10⁻⁴ m` residuals, and an
+    /// axis honest enough to include them spends half its height on a region
+    /// where nothing is distinguishable from nothing.
+    pub error_floor: f64,
+    /// The traces, drawn in order so later ones sit on top.
+    pub series: Vec<Series<'a>>,
+}
+
+/// Render a comparison figure: ground track above, error over time below.
+///
+/// Deliberately **not** the three-panel diagnostic layout of [`render`]. That
+/// one exists to inspect a single filter, and NIS belongs there. This one exists
+/// to answer "which is closer", so it shows the two things that answer it and
+/// nothing else — and it puts both estimators on identical axes, because a
+/// comparison drawn on two different scales is not a comparison.
+pub fn render_comparison(c: &Comparison<'_>) -> String {
+    let legend = 26.0 + 18.0 * c.series.len() as f64;
+    let height = TRAJ + PANEL + 46.0 + legend;
+    let mut s = String::with_capacity(1 << 18);
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {height}" width="{W}" height="{height}" role="img">"#
+    );
+    let _ = writeln!(
+        s,
+        r##"<rect width="{W}" height="{height}" fill="#ffffff"/>"##
+    );
+
+    text(&mut s, PAD.0, 24.0, c.dataset, INK, 16.0, "start");
+    text(&mut s, PAD.0, 42.0, c.subtitle, MUTED, 12.0, "start");
+
+    // --- legend, with the headline number beside each label -----------------
+    let mut ly = 62.0;
+    for series in &c.series {
+        let _ = writeln!(
+            &mut s,
+            r#"<line x1="{:.1}" y1="{ly:.1}" x2="{:.1}" y2="{ly:.1}" stroke="{}" stroke-width="{}" stroke-linecap="round"/>"#,
+            PAD.0,
+            PAD.0 + 26.0,
+            series.colour,
+            series.width.max(2.0)
+        );
+        text(
+            &mut s,
+            PAD.0 + 34.0,
+            ly + 4.0,
+            series.label,
+            INK,
+            12.0,
+            "start",
+        );
+        text(
+            &mut s,
+            W - PAD.1,
+            ly + 4.0,
+            &series.summary,
+            series.colour,
+            12.0,
+            "end",
+        );
+        ly += 18.0;
+    }
+
+    let top = legend + 34.0;
+
+    // --- ground track, equal aspect -----------------------------------------
+    let pts: Vec<(f64, f64)> = c
+        .series
+        .iter()
+        .flat_map(|s| s.track.iter().copied())
+        .collect();
+    if !pts.is_empty() {
+        let (mut e0, mut e1) = (f64::MAX, f64::MIN);
+        let (mut n0, mut n1) = (f64::MAX, f64::MIN);
+        for (e, n) in &pts {
+            e0 = e0.min(*e);
+            e1 = e1.max(*e);
+            n0 = n0.min(*n);
+            n1 = n1.max(*n);
+        }
+        // Equal aspect: pad the shorter axis so a metre is a metre either way.
+        let span = (e1 - e0).max(n1 - n0).max(1.0) * 1.08;
+        let (ec, nc) = ((e0 + e1) / 2.0, (n0 + n1) / 2.0);
+        let inner = (W - PAD.0 - PAD.1).min(TRAJ - PAD.2 - PAD.3);
+        let cx = (PAD.0 + W - PAD.1) / 2.0;
+        let cy = top + (PAD.2 + TRAJ - PAD.3) / 2.0;
+        let x = Scale::new(
+            ec - span / 2.0,
+            ec + span / 2.0,
+            cx - inner / 2.0,
+            cx + inner / 2.0,
+        );
+        // North increases upward, so the pixel range is inverted.
+        let y = Scale::new(
+            nc - span / 2.0,
+            nc + span / 2.0,
+            cy + inner / 2.0,
+            cy - inner / 2.0,
+        );
+
+        frame(
+            &mut s,
+            top,
+            TRAJ,
+            &x,
+            &y,
+            "Ground track (equal aspect)",
+            "east, m",
+            "north, m",
+        );
+        for series in &c.series {
+            let mapped: Vec<(f64, f64)> = series
+                .track
+                .iter()
+                .map(|(e, n)| (x.at(*e), y.at(*n)))
+                .collect();
+            polyline(&mut s, &mapped, series.colour, series.width, 0.95);
+        }
+    }
+
+    // --- error over time ----------------------------------------------------
+    let errs: Vec<(f64, f64)> = c
+        .series
+        .iter()
+        .flat_map(|s| s.error.iter().copied())
+        .collect();
+    if !errs.is_empty() {
+        let t1 = errs.iter().map(|(t, _)| *t).fold(0.0, f64::max);
+        let hi = errs.iter().map(|(_, v)| *v).fold(0.0, f64::max) * 1.08;
+        let etop = top + TRAJ + 10.0;
+        let x = Scale::new(0.0, t1.max(1.0), PAD.0, W - PAD.1);
+        let y = if c.log_error {
+            // Floor at the smallest non-zero value, rounded down a decade, so
+            // an exactly-zero sample cannot drag the axis to negative infinity.
+            let lo = errs
+                .iter()
+                .map(|(_, v)| *v)
+                .filter(|v| *v > 0.0)
+                .fold(f64::MAX, f64::min);
+            let lo = 10f64.powf(lo.max(c.error_floor).log10().floor());
+            Scale::logarithmic(lo, hi, etop + PANEL - PAD.3, etop + PAD.2)
+        } else {
+            Scale::new(0.0, hi.max(1e-3), etop + PANEL - PAD.3, etop + PAD.2)
+        };
+        frame(
+            &mut s,
+            etop,
+            PANEL,
+            &x,
+            &y,
+            c.error_label,
+            "time, s",
+            "metres",
+        );
+        for series in &c.series {
+            let mapped: Vec<(f64, f64)> = series
+                .error
+                .iter()
+                .map(|(t, v)| (x.at(*t), y.at(*v)))
+                .collect();
+            polyline(&mut s, &mapped, series.colour, series.width, 0.9);
+        }
+    }
+
+    let _ = writeln!(s, "</svg>");
+    s
 }
 
 /// Summary numbers printed on the figure, so it stands alone.

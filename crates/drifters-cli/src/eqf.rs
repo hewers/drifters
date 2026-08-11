@@ -32,6 +32,7 @@ use drifters_eqf::local::{compensate_earth, Anchor};
 
 use crate::kfgins;
 use crate::stats::Running;
+use crate::truth;
 use crate::Epoch;
 
 /// What an EqF replay produced.
@@ -315,4 +316,176 @@ impl EqfReport {
             }
         );
     }
+}
+
+/// Replay the EqF over a GSDC phone trace, scored against ground truth.
+///
+/// Takes the inputs already read by [`crate::run_gsdc`] rather than re-reading
+/// them, so the two estimators see byte-identical data on identical epochs.
+/// Anything less and the comparison would be measuring the reader.
+///
+/// # Why this is the fair venue and KF-GINS is not
+///
+/// The paper assumes a flat, non-rotating Earth. On the tactical-grade KF-GINS
+/// IMU that is fatal — Earth rate is 557× the gyro's own bias stability, and the
+/// filter diverges as `t³`. A phone gyro drifts at roughly 20 °/h, so Earth rate
+/// is **0.75×** its noise floor: below it, not above. The assumption the paper
+/// makes is the right one for the hardware the paper targets, and this trace is
+/// that hardware.
+///
+/// Earth compensation is therefore *not* applied here. It is not needed, and
+/// leaving it off keeps this a test of the paper's filter as written.
+pub struct GsdcEqf {
+    /// Position error against truth.
+    pub error: truth::ErrorStats,
+    /// Per-epoch trace for plotting.
+    pub epochs: Vec<Epoch>,
+    /// Normalised innovation squared, before GCU inflation.
+    pub nis: Running,
+    /// The lever arm the filter converged to. The phone has no antenna offset
+    /// worth speaking of, so this converging to near zero is the correct answer
+    /// rather than a null result.
+    pub lever: Vec3,
+    /// Per-epoch horizontal error against truth, `(tow, metres)`.
+    pub horizontal: Vec<(f64, f64)>,
+}
+
+pub fn replay_gsdc_eqf(
+    imu: &[ImuSample],
+    fixes: &[GnssFix],
+    reference: &truth::Truth,
+    attitude: drifters_core::math::Euler,
+    imu_scale: f64,
+    alpha: f64,
+    doppler: bool,
+) -> GsdcEqf {
+    let first = fixes[0];
+    let anchor = Anchor::new(first.position);
+
+    let start = State {
+        pose: Se23::new(
+            drifters_core::math::Quat::from_euler(attitude.roll, attitude.pitch, attitude.yaw)
+                .to_dcm(),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        ),
+        bias: Se3Tangent::ZERO,
+        lever: Vec3::ZERO,
+        mag: Mat3::identity(),
+    };
+
+    // Phone-grade priors: metres of position, tens of degrees of heading. The
+    // heading number is not pessimism — a coarse alignment from two seconds of
+    // levelling fixes roll and pitch and says almost nothing about yaw.
+    let mut d = [0.0; 21];
+    for i in 0..3 {
+        d[i] = if i == 2 { 0.30 } else { 0.008 };
+        d[3 + i] = 4.0;
+        d[6 + i] = 25.0;
+        d[9 + i] = 1.0e-6;
+        d[12 + i] = 1.0e-2;
+        d[15 + i] = 0.01;
+        d[18 + i] = 1.0e-6;
+    }
+    let mut filter = EqFilter::new(&start, Matrix::from_diagonal(&d), anchor.gravity);
+    filter.alpha = alpha;
+
+    // The same datasheet-class phone figures the ESKF uses, and the same
+    // `--imu-scale` applied to them. That flag is not a fudge for one estimator:
+    // a phone IMU's real error is dominated by unmodelled vibration and
+    // quantisation, not by its datasheet noise density, and both filters need
+    // to be told so. Handing it to one and not the other would make this a
+    // comparison of tuning.
+    let s2 = |v: f64| Vec3::splat((imu_scale * v).powi(2));
+    let noise = ProcessNoise {
+        gyro: s2(0.3 * drifters_core::math::DEG_TO_RAD / 60.0),
+        accel: s2(0.2 / 60.0),
+        gyro_bias: s2(20.0 * drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC) * (2.0 / 3600.0),
+        accel_bias: s2(2000.0 * drifters_core::math::MGAL_TO_M_S2) * (2.0 / 3600.0),
+        lever: Vec3::splat(1e-12),
+        mag: Vec3::ZERO,
+    };
+
+    let mut out = GsdcEqf {
+        error: truth::ErrorStats::new(),
+        epochs: Vec::new(),
+        nis: Running::new(),
+        lever: Vec3::ZERO,
+        horizontal: Vec::new(),
+    };
+
+    let mut next = 0usize;
+    for sample in imu {
+        let t = sample.time.tow;
+        if t < first.time.tow {
+            continue;
+        }
+        // `sample.dt` and not a timestamp difference: `gyro()` and `accel()`
+        // divide the increments by `sample.dt`, so integrating over anything
+        // else silently rescales the input. The phone trace has irregular
+        // sampling, which is exactly where the two disagree.
+        let dt = sample.dt;
+        if !(dt > 0.0 && dt < 1.0) {
+            continue;
+        }
+        filter.propagate(&Input::new(sample.gyro(), sample.accel()), dt, &noise);
+
+        if next < fixes.len() && fixes[next].time.tow <= t {
+            let fix = fixes[next];
+            next += 1;
+
+            let state = filter.nav_state();
+            let predicted = state.pose.position + state.pose.rotation * state.lever;
+            let measured = anchor.to_local(fix.position);
+            let residual = predicted - measured;
+
+            let s = fix.position_std;
+            let r = Mat3::from_diagonal(&[s.x * s.x, s.y * s.y, s.z * s.z]);
+            let nis = filter.update_position(measured, &r);
+
+            // Doppler velocity is what made heading observable for the ESKF on
+            // this trace (a 1.7% gain became 34.7%). The EqF gets the same
+            // measurement or the comparison is about inputs, not estimators.
+            if doppler {
+                if let Some(v) = fix.velocity {
+                    let sv = fix.velocity_std;
+                    let rv = Mat3::from_diagonal(&[sv.x * sv.x, sv.y * sv.y, sv.z * sv.z]);
+                    filter.update_velocity(Vec3::new(v.n, v.e, v.d), sample.gyro(), &rv);
+                }
+            }
+
+            if let Some(nis) = nis {
+                out.nis.push(nis);
+            }
+            let solved = filter.nav_state();
+            let geodetic = anchor.to_geodetic(solved.pose.position);
+            out.error.push(reference, t, geodetic);
+            if let Some(r) = reference.at(t) {
+                out.horizontal
+                    .push((t, geodetic.ned_from(r).horizontal_norm()));
+            }
+            out.epochs.push(Epoch {
+                tow: t,
+                ned: (predicted.x, predicted.y, predicted.z),
+                residual: (residual.x, residual.y, residual.z),
+                nis,
+            });
+            if std::env::var("DRIFTERS_EQF_TRACE").is_ok() && out.epochs.len() % 60 == 0 {
+                let geo = anchor.to_geodetic(solved.pose.position);
+                let e = reference
+                    .at(t)
+                    .map(|r| geo.ned_from(r).horizontal_norm())
+                    .unwrap_or(f64::NAN);
+                eprintln!(
+                    "  n={:5}  range={:8.0} m  horiz_err={:9.2} m  nis={:8.2}",
+                    out.epochs.len(),
+                    measured.x.hypot(measured.y),
+                    e,
+                    nis.unwrap_or(f64::NAN)
+                );
+            }
+        }
+    }
+    out.lever = filter.nav_state().lever;
+    out
 }

@@ -449,17 +449,6 @@ transient forever — which is why both numbers are quoted. A NIS of 292 says th
 same thing from the other side: there is real unmodelled error here, and the
 filter is right to be surprised by it.
 
-### This comparison is unfair by construction, and in a knowable direction
-
-It is a flat-Earth estimator on hardware precise enough to see the Earth turn.
-The gap is an **Earth model**, not an estimator — nothing in the table
-distinguishes the EqF's linearisation from the ESKF's, because the modelling
-error is three orders of magnitude larger than either.
-
-The honest venue is consumer-grade hardware, where the paper's assumptions
-hold: a MEMS gyro at ~10 °/h sees Earth rate at 1.5× its own noise floor rather
-than 557×. That is the GSDC phone trace, and it is the next measurement to take.
-
 ### The lever arm calibrates itself, which is the part that is not a comparison
 
 Started at **zero**, with the ESKF handed `antlever` from the YAML:
@@ -481,6 +470,73 @@ never tuned for, and it is a capability the ESKF does not have at all rather
 than a better version of something it does.
 
 ---
+
+### This comparison is unfair by construction, and in a knowable direction
+
+It is a flat-Earth estimator on hardware precise enough to see the Earth turn.
+The gap is an **Earth model**, not an estimator — nothing in the table
+distinguishes the EqF's linearisation from the ESKF's, because the modelling
+error is three orders of magnitude larger than either.
+
+The honest venue is consumer-grade hardware, where the paper's assumptions hold.
+That is the next section.
+
+## Measured: the EqF on a GSDC phone trace
+
+A Samsung SM-S908B, 20 minutes of driving, ~6 m single-point GNSS, and
+**survey-grade ground truth** — so this is true position error, not a residual.
+Both estimators are run from the same reader over the same epochs, both given
+the same Doppler velocity solution, and both given the same `--imu-scale 300`
+process-noise scaling. Handing that to one and not the other would make it a
+comparison of tuning.
+
+No Earth compensation is applied. A phone gyro drifts at roughly 20 °/h, so
+Earth rate is **0.75×** its noise floor — below it, not 557× above it. The
+flat-Earth assumption is the right one for this hardware, which is the whole
+point of running here.
+
+| against survey-grade truth | horizontal RMS | vertical RMS | horizontal max |
+|---|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
+| **drifters ESKF** | **4.055 m** | 10.235 m | 12.97 m |
+| drifters EqF (α = 0) | 4.850 m | 12.044 m | 24.08 m |
+
+Both beat the phone's own solution. The ESKF is 16 % ahead, and the EqF's
+worst-case excursion is roughly twice as large.
+
+### GCU made it worse, monotonically
+
+This is the result worth keeping. Sweeping the generalised-covariance-union
+convergence rate `α` — the parameter that replaces χ² rejection, and the
+paper's own Sec. VI contribution:
+
+| α | horizontal RMS | horizontal max |
+|---|---|---|
+| **0** | **4.850 m** | 24.08 m |
+| 0.25 | 11.330 m | 92.98 m |
+| 0.5 | 18.756 m | 114.19 m |
+| 1.0 | 27.358 m | 131.71 m |
+
+At `α = 1` the EqF is four times worse than the phone's raw GNSS. The mechanism
+is visible in the trace: the run is well behaved at 1–7 m for most of its length
+and then has a single ~180-second excursion where NIS climbs to 54 and the error
+reaches 56 m, after which it recovers to 1.4 m.
+
+GCU inflates the innovation covariance **along the innovation**. That is exactly
+right when a large innovation means a bad measurement — the GNSS-shift scenario
+of the paper's Fig. 4. It is exactly wrong when a large innovation means *the
+filter has drifted* and the measurement is the only thing that can correct it,
+because the inflation then suppresses the correction in precisely the direction
+it is needed. On a phone trace through an urban stretch, it is the second.
+
+Two things follow. `α` is not a robustness dial that is safe to turn up; it
+encodes an assumption about *which side* the surprise is coming from. And the
+ESKF's χ² gate is not simply the cruder option — rejecting a measurement outright
+leaves the covariance free to grow, so the next measurement is trusted more,
+whereas GCU never rejects and never fully re-trusts.
+
+`α = 0` — isotropic inflation only, still within the paper's own range — is the
+default in `drifters gsdc`, and `--alpha` sets it.
 
 ## Uncertain observation handling (Sec. VI)
 

@@ -345,8 +345,9 @@ measured firmware budget is untouched. Specification and scoping in
       independent simulator
 - [x] Local-tangent-frame adapter, with both modelling errors quantified
 - [x] ESKF-vs-EqF on the KF-GINS dataset, `drifters eqf`
-- [ ] The same on GSDC — consumer-grade hardware, where the paper's flat-Earth
+- [x] The same on GSDC — consumer-grade hardware, where the paper's flat-Earth
       assumption actually holds and the comparison is fair
+- [x] Comparison figures for both datasets, `--compare`
 - [ ] Extract a common backend trait, once both estimators exist and their
       shapes are known
 
@@ -373,6 +374,31 @@ the final residual are quoted.
 hardware precise enough to see the Earth turn, so the gap measures an Earth
 model rather than an estimator. The fair venue is GSDC, where a phone gyro sees
 Earth rate at 1.5× its noise floor instead of 557×.
+
+### And on GSDC, where the comparison is fair
+
+Consumer MEMS, survey-grade ground truth, both estimators from the same reader
+over the same epochs with the same Doppler aiding and the same process-noise
+scaling. No Earth compensation: a phone gyro drifts at ~20 °/h, so Earth rate is
+0.75× its noise floor rather than 557× above it.
+
+| against truth | horizontal RMS | vertical RMS | horizontal max |
+|---|---|---|---|
+| phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
+| **drifters ESKF** | **4.055 m** | 10.235 m | 12.97 m |
+| drifters EqF (α = 0) | 4.850 m | 12.044 m | 24.08 m |
+
+Both beat the phone's own solution; the ESKF is 16 % ahead.
+
+**GCU made it worse, monotonically** — and that is the finding worth keeping.
+Sweeping the generalised-covariance-union rate `α`, the parameter that replaces
+χ² rejection: 4.85 m at `α = 0`, 11.3 at 0.25, 18.8 at 0.5, **27.4 m at
+`α = 1`** — four times worse than raw GNSS. GCU inflates the innovation
+covariance *along the innovation*, which is right when a large innovation means
+a bad measurement and wrong when it means the filter has drifted and the
+measurement is the only thing that can fix it. On this trace it is the second.
+`α` is not a robustness dial that is safe to turn up; it encodes an assumption
+about which side the surprise comes from.
 
 **The lever arm calibrated itself** from a zero start to `[+0.138, −0.303,
 −0.271]` against a configured `[+0.136, −0.301, −0.184]` — 2 mm on both

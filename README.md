@@ -21,43 +21,85 @@ Every number here is produced by a test in this repository.
 | **Footprint** | **9.5 KiB** peak stack (15-state), 16.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
+| **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
 | **Tests** | 324, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
 reckoning alone. Method and tolerances are in [docs/testing.md](docs/testing.md).
 
-![Trajectory, position residual and NIS over the KF-GINS demo dataset](docs/figures/kf-gins.svg)
+## Two estimators, compared
 
-Regenerate it yourself with `drifters plot` — every value on the figure comes
-from the replay, none are hand-entered. The bottom panel is the one to read
-first: filter consistency means NIS *scattered about 3*, not NIS *small*.
+The library ships an error-state Kalman filter and an
+[equivariant filter](docs/eqf.md), over shared mechanization and shared Lie
+group machinery. Both were run on the same two datasets, from the same inputs,
+scored the same way.
 
-### A second dataset, and an honest negative result
+![ESKF and EqF on the KF-GINS demo dataset: ground track and horizontal residual](docs/figures/kf-gins-comparison.svg)
 
-The KF-GINS numbers above come from a **tactical-grade** IMU with RTK GNSS. To
-see where the filter stops helping, it was also run against a
-[Google Smartphone Decimeter Challenge 2023](https://www.kaggle.com/competitions/smartphone-decimeter-2023)
-trace — a Samsung SM-S908B in a car, 100 Hz phone IMU, ~6 m single-point GNSS —
-which is the first dataset here carrying **survey-grade ground truth**, so this
-is true position error rather than a prediction residual.
+**Tactical grade, and the interesting result is a loss.** The EqF as the paper
+writes it assumes a flat, non-rotating Earth — and on an IMU this good that
+*diverges*, as `t³`, reaching 10⁶ m. Solving the growth rate back gives
+5.96 × 10⁻⁵ rad/s against an Earth rate of 7.29 × 10⁻⁵: it is the Earth turning,
+and no state in the model can represent it, because the gyro's bias prior is
+0.027 °/h and Earth rate is **557×** that.
 
-| | horizontal RMS | vertical RMS | horizontal max |
+Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
+recovers five orders of magnitude and converges to **1.5 cm**, against the ESKF's
+3.3 cm. So the gap here measures an **Earth model, not an estimator**. This
+comparison is unfair by construction, and the honest venue is the one below.
+
+The EqF also **self-calibrated the GNSS antenna lever arm from a zero start**,
+against an ESKF that was handed the answer from config: `[+0.138, −0.303]` m
+horizontally against a true `[+0.136, −0.301]` — 2 mm on both axes. That is a
+capability the ESKF does not have at all.
+
+![ESKF and EqF against ground truth on a GSDC 2023 phone trace](docs/figures/gsdc-comparison.svg)
+
+**Consumer grade — where the flat-Earth assumption is the right one.** A phone
+gyro drifts at ~20 °/h, so Earth rate sits *below* its noise floor rather than
+557× above it. No Earth compensation is applied here; this is the paper's filter
+as written.
+
+| against survey-grade truth | horizontal RMS | vertical RMS | horizontal max |
 |---|---|---|---|
 | phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
-| drifters, position-only aiding | 6.100 m | 16.249 m | 49.11 m |
-| **drifters, + Doppler velocity** | **4.055 m** | **10.235 m** | **12.97 m** |
-| | **−34.7 %** | **−43 %** | **−73 %** |
+| **drifters ESKF** | **4.055 m** | 10.235 m | 12.97 m |
+| drifters EqF | 4.850 m | 12.044 m | 24.08 m |
 
-Position-only aiding gained almost nothing here — 1.7 % — and un-tuned it was
-*worse* than GNSS alone. That was diagnosed rather than tuned away: heading is
-weakly observable from position alone, so a phone gyro's drift injects error
-faster than 1 Hz fixes remove it. Adding a **Doppler velocity solution**, solved
-from the raw pseudorange rates already in the dataset, is what makes heading
-observable — and it moved the result from 1.7 % to 34.7 %. Full diagnosis in
-[docs/gsdc.md](docs/gsdc.md).
+Both beat the phone's own solution; the ESKF is 16 % ahead of the EqF. One
+finding is worth more than the ranking: the EqF's **generalised covariance union
+turned out to be actively harmful here**. Sweeping its convergence rate α — the
+knob that replaces χ² rejection — gives 4.85 m at α = 0 and **27.4 m at α = 1**,
+monotonically worse. GCU inflates the innovation covariance *along the
+innovation*, which is right when a large innovation means a bad measurement, and
+wrong when it means the filter has drifted and the measurement is the only thing
+that can fix it. On this trace it is the second. Full sweep in
+[docs/eqf.md](docs/eqf.md).
 
-![GSDC 2023 trace: trajectory, residual and NIS](docs/figures/gsdc-2023.svg)
+Regenerate either figure yourself — every value on them comes from the replay,
+none are hand-entered:
+
+```bash
+cargo run --release -p drifters-cli -- eqf --config datasets/kf-gins/kf-gins.yaml --earth-rate --compare docs/figures/kf-gins-comparison.svg
+```
+
+The per-filter diagnostic figures, with NIS, are still there: `drifters plot`
+and `drifters gsdc --figure`. Filter consistency means NIS *scattered about 3*,
+not NIS *small*.
+
+### What made the phone result work: Doppler
+
+Worth pulling out, because the first attempt at that trace was a negative
+result. Position-only aiding gained **1.7 %** over the phone's own GNSS, and
+un-tuned it was *worse* than doing nothing.
+
+That was diagnosed rather than tuned away. Heading is weakly observable from
+position alone, so a phone gyro's drift injects error faster than 1 Hz fixes
+remove it. Solving a **Doppler velocity** from the raw pseudorange rates already
+in the dataset is what makes heading observable, and it moved the result from
+1.7 % to 34.7 %. Both estimators above are given it, or the comparison would be
+about inputs. Full diagnosis in [docs/gsdc.md](docs/gsdc.md).
 
 ## Status
 
@@ -66,23 +108,18 @@ loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
 odometer, barometric height, magnetometer heading), protobuf serialization,
 bare-metal Cortex-M, KF-GINS dataset regression.
 
-**In progress:** an equivariant filter (EqF) as a second estimator — now running
-end to end on the KF-GINS dataset via `drifters eqf`, and **self-calibrating its
-GNSS antenna lever arm from a zero start to 2 mm on both horizontal axes**, which
-is something the ESKF cannot do at all.
+**In progress:** the equivariant filter. It runs end to end on both datasets
+(see above) — symmetry group, lift, linearisation, group exponential, GCU and
+the propagate/update loop, every Jacobian checked against a numerical one. Still
+to do: a common backend trait, now that both estimators' shapes are known.
 
-The head-to-head is a more interesting result than a win or a loss. As the paper
-writes it, the EqF assumes a flat, non-rotating Earth — and on a tactical-grade
-IMU that assumption *diverges*, as `t³`, at exactly Earth rate. Compensating the
-input recovers five orders of magnitude and it converges to 1.5 cm. The gap to
-the ESKF's 3.3 cm is therefore an **Earth model, not an estimator**, and the
-honest venue for comparing the two is consumer-grade hardware, where the paper's
-assumptions hold. Numbers and reasoning in [docs/eqf.md](docs/eqf.md).
-
-That work also turned up
-[six places the source paper cannot be taken literally](docs/eqf.md). A
-transcription would have shipped all six; the last one was caught only because a
-numerical Jacobian was moved off the identity element.
+Building it from the papers rather than from notes turned up
+[six places the source cannot be taken literally](docs/eqf.md#six-places-the-source-cannot-be-taken-literally).
+A transcription would have shipped all six. The last was caught only after
+moving a numerical Jacobian **off the identity element**, where `Â = I` had been
+quietly making a body-frame rate and a global-frame rate look like the same
+expression — it showed up in closed loop as a lever arm ten times more confident
+than it was correct.
 
 **Not done:** timing on real silicon, and this has never run on a physical IMU.
 Everything is dataset replay plus emulation. See

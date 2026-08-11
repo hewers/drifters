@@ -144,13 +144,19 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let imu_scale: f64 = flag(args, "--imu-scale").unwrap_or("1").parse()?;
     let gyro_scale: f64 = flag(args, "--gyro-scale").unwrap_or("1").parse()?;
     let gnss_lag: f64 = flag(args, "--gnss-lag").unwrap_or("0").parse()?;
+    // GCU convergence rate for the EqF. Defaults to 0 because that is what this
+    // trace measures best — see docs/eqf.md for the sweep and why.
+    let alpha: f64 = flag(args, "--alpha").unwrap_or("0").parse()?;
     let report = run_gsdc(
         &dir,
-        drifters_cli::vec3(sn, se, sv),
-        imu_scale,
-        gyro_scale,
-        gnss_lag,
-        !args.iter().any(|a| a == "--no-doppler"),
+        drifters_cli::GsdcOptions {
+            sigma: drifters_cli::vec3(sn, se, sv),
+            imu_scale,
+            gyro_scale,
+            gnss_lag,
+            doppler: !args.iter().any(|a| a == "--no-doppler"),
+            alpha,
+        },
         quiet,
     )?;
 
@@ -172,7 +178,8 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     );
     for (name, e) in [
         ("phone GNSS (WLS) alone", &report.gnss_only),
-        ("drifters (GNSS + IMU)", &report.filter),
+        ("drifters ESKF", &report.filter),
+        ("drifters EqF", &report.eqf),
     ] {
         println!(
             "{name:<26} {:>9.3} {:>9.3} {:>9.3}",
@@ -212,6 +219,11 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         report.filter.count(),
         report.gnss_only.count()
     );
+    println!("\nEqF GCU convergence rate alpha = {:.2}", report.eqf_alpha);
+    println!(
+        "EqF self-calibrated lever arm: [{:+.3}, {:+.3}, {:+.3}] m (a phone has none to find)",
+        report.eqf_lever.x, report.eqf_lever.y, report.eqf_lever.z
+    );
     println!(
         "\nNIS mean {:.3} over {} fixes (expected 3.0, ratio {:.2}x — {})",
         report.nis.mean(),
@@ -239,6 +251,65 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         println!("wrote {csv}");
+    }
+    if let Some(figure) = flag(args, "--compare") {
+        // Error against ground truth, which this dataset uniquely has — so the
+        // lower panel is true error, not a prediction residual.
+        let t0 = report.epochs.first().map(|e| e.tow).unwrap_or(0.0);
+        let track =
+            |e: &[drifters_cli::Epoch]| e.iter().map(|p| (p.ned.1, p.ned.0)).collect::<Vec<_>>();
+        let series = vec![
+            plot::Series {
+                label: "phone GNSS (WLS) alone",
+                colour: plot::BASELINE,
+                width: 1.4,
+                track: Vec::new(),
+                error: report
+                    .gnss_horizontal
+                    .iter()
+                    .map(|(t, v)| (t - t0, *v))
+                    .collect(),
+                summary: format!("{:.2} m RMS", report.gnss_only.horizontal.rms()),
+            },
+            plot::Series {
+                label: "drifters ESKF (Earth-referenced, 21 states)",
+                colour: plot::ESKF,
+                width: 1.8,
+                track: track(&report.epochs),
+                error: report
+                    .filter_horizontal
+                    .iter()
+                    .map(|(t, v)| (t - t0, *v))
+                    .collect(),
+                summary: format!("{:.2} m RMS", report.filter.horizontal.rms()),
+            },
+            plot::Series {
+                label: "drifters EqF (flat Earth, self-calibrating)",
+                colour: plot::EQF,
+                width: 1.8,
+                track: track(&report.eqf_epochs),
+                error: report
+                    .eqf_horizontal
+                    .iter()
+                    .map(|(t, v)| (t - t0, *v))
+                    .collect(),
+                summary: format!("{:.2} m RMS", report.eqf.horizontal.rms()),
+            },
+        ];
+        let comparison = plot::Comparison {
+            dataset: "GSDC 2023 — Samsung SM-S908B, 20 min of driving",
+            subtitle: "Horizontal error against survey-grade ground truth. Consumer MEMS: the grade the EqF's flat-Earth model is designed for.",
+            error_label: "Horizontal position error against truth (log scale)",
+            log_error: true,
+            error_floor: 1.0e-3,
+            series,
+        };
+        let svg = plot::render_comparison(&comparison);
+        if let Some(parent) = Path::new(figure).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(figure, svg)?;
+        println!("\nwrote {figure}");
     }
     if let Some(figure) = flag(args, "--figure") {
         let caption = plot::Caption {
@@ -286,6 +357,75 @@ fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, quiet);
     report.print();
+
+    if let Some(figure) = flag(args, "--compare") {
+        // The ESKF over the same inputs, so the figure is one run of each and
+        // not two runs stitched together from different invocations.
+        let out = std::env::temp_dir().join("drifters-eqf-compare");
+        let baseline = replay(&config, &imu, &gnss, &out, true)?;
+
+        let t0 = baseline.epochs.first().map(|e| e.tow).unwrap_or(0.0);
+        let track =
+            |e: &[drifters_cli::Epoch]| e.iter().map(|p| (p.ned.1, p.ned.0)).collect::<Vec<_>>();
+        let horiz = |e: &[drifters_cli::Epoch]| {
+            e.iter()
+                .map(|p| (p.tow - t0, p.residual.0.hypot(p.residual.1)))
+                .collect::<Vec<_>>()
+        };
+        let series = vec![
+            plot::Series {
+                label: "drifters ESKF (Earth-referenced, 21 states)",
+                colour: plot::ESKF,
+                width: 1.8,
+                track: track(&baseline.epochs),
+                error: horiz(&baseline.epochs),
+                summary: format!(
+                    "{:.3} m RMS",
+                    baseline
+                        .residual_north
+                        .rms()
+                        .hypot(baseline.residual_east.rms())
+                ),
+            },
+            plot::Series {
+                label: if compensate {
+                    "drifters EqF (flat Earth + input-side Earth compensation)"
+                } else {
+                    "drifters EqF (flat Earth, as the paper writes it)"
+                },
+                colour: plot::EQF,
+                width: 1.8,
+                track: track(&report.epochs),
+                error: horiz(&report.epochs),
+                summary: format!(
+                    "{:.3} m RMS, {:.3} m at the last fix",
+                    report
+                        .residual_north
+                        .rms()
+                        .hypot(report.residual_east.rms()),
+                    report.final_residual
+                ),
+            },
+        ];
+        let comparison = plot::Comparison {
+            dataset: "KF-GINS demo — Leador-A15, 57 min of driving, RTK",
+            subtitle: if compensate {
+                "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF diverges as t^3 to 10^6 m."
+            } else {
+                "Open-loop antenna residual before each fix. Tactical grade, and the flat-Earth model diverges: this is the failure, drawn."
+            },
+            error_label: "Horizontal residual, predicted antenna position vs fix (log scale)",
+            log_error: true,
+            error_floor: 1.0e-3,
+            series,
+        };
+        let svg = plot::render_comparison(&comparison);
+        if let Some(parent) = Path::new(figure).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(figure, svg)?;
+        println!("\nwrote {figure}");
+    }
 
     if let Some(figure) = flag(args, "--figure") {
         let caption = plot::Caption {

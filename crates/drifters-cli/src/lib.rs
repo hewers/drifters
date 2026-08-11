@@ -333,6 +333,24 @@ pub struct GsdcReport {
     /// The baseline that matters: it is what the device produces unaided, so
     /// the difference is what fusing the IMU actually bought.
     pub gnss_only: truth::ErrorStats,
+    /// Error of the equivariant filter against truth, over the same epochs.
+    pub eqf: truth::ErrorStats,
+    /// Per-epoch trace from the equivariant filter.
+    pub eqf_epochs: Vec<Epoch>,
+    /// The EqF's normalised innovation squared.
+    pub eqf_nis: stats::Running,
+    /// The lever arm the EqF converged to, metres in the body frame.
+    pub eqf_lever: drifters_core::math::Vec3,
+    /// The GCU convergence rate the EqF ran with.
+    pub eqf_alpha: f64,
+    /// Per-epoch horizontal error against truth, `(tow, metres)`, for each of
+    /// the three solutions. Kept separately from [`Epoch`] because they are
+    /// scored against ground truth rather than against the fixes.
+    pub gnss_horizontal: Vec<(f64, f64)>,
+    /// See [`GsdcReport::gnss_horizontal`].
+    pub filter_horizontal: Vec<(f64, f64)>,
+    /// See [`GsdcReport::gnss_horizontal`].
+    pub eqf_horizontal: Vec<(f64, f64)>,
     /// Per-epoch trace for plotting.
     pub epochs: Vec<Epoch>,
     /// IMU samples processed.
@@ -346,15 +364,42 @@ pub struct GsdcReport {
 }
 
 /// Replay a GSDC phone-trace directory.
+/// Knobs for a GSDC replay.
+///
+/// A struct rather than eight positional arguments: most of these are
+/// diagnostics used for one sweep each, and at the call site a bare
+/// `300.0, 1.0, 0.0, true, 0.0, false` says nothing about which is which.
+#[derive(Clone, Copy, Debug)]
+pub struct GsdcOptions {
+    /// Assumed GNSS one-sigma, NED metres. Measured from the trace, not
+    /// assumed — the dataset carries no covariance for its WLS solution.
+    pub sigma: drifters_core::math::Vec3,
+    /// Multiplier on the IMU process noise. A phone's real error is dominated
+    /// by vibration and quantisation rather than datasheet noise density.
+    pub imu_scale: f64,
+    /// Diagnostic: 0 ignores rotation entirely, −1 flips the sign convention.
+    pub gyro_scale: f64,
+    /// Diagnostic: shift GNSS timestamps to sweep for a lag.
+    pub gnss_lag: f64,
+    /// Use the Doppler velocity solution as well as position.
+    pub doppler: bool,
+    /// GCU convergence rate for the EqF. See [`crate::eqf`].
+    pub alpha: f64,
+}
+
 pub fn run_gsdc(
     dir: &Path,
-    sigma: drifters_core::math::Vec3,
-    imu_scale: f64,
-    gyro_scale: f64,
-    gnss_lag: f64,
-    doppler: bool,
+    options: GsdcOptions,
     quiet: bool,
 ) -> Result<GsdcReport, Box<dyn std::error::Error>> {
+    let GsdcOptions {
+        sigma,
+        imu_scale,
+        gyro_scale,
+        gnss_lag,
+        doppler,
+        alpha,
+    } = options;
     let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
     // Diagnostic: 0 ignores rotation entirely, -1 flips the sign convention.
     if gyro_scale != 1.0 {
@@ -423,6 +468,14 @@ pub fn run_gsdc(
     let mut report = GsdcReport {
         filter: truth::ErrorStats::new(),
         gnss_only: truth::ErrorStats::new(),
+        eqf: truth::ErrorStats::new(),
+        eqf_epochs: Vec::new(),
+        eqf_nis: stats::Running::new(),
+        eqf_lever: drifters_core::math::Vec3::ZERO,
+        eqf_alpha: alpha,
+        gnss_horizontal: Vec::new(),
+        filter_horizontal: Vec::new(),
+        eqf_horizontal: Vec::new(),
         epochs: Vec::new(),
         processed: 0,
         applied: 0,
@@ -446,6 +499,11 @@ pub fn run_gsdc(
             report
                 .gnss_only
                 .push(&reference, fix.time.tow, fix.position);
+            if let Some(r) = reference.at(fix.time.tow) {
+                report
+                    .gnss_horizontal
+                    .push((fix.time.tow, fix.position.ned_from(r).horizontal_norm()));
+            }
 
             engine.add_gnss(fix);
             engine.add_imu(*sample)?;
@@ -462,6 +520,11 @@ pub fn run_gsdc(
 
             let solution = engine.nav_state().position();
             report.filter.push(&reference, t, solution);
+            if let Some(r) = reference.at(t) {
+                report
+                    .filter_horizontal
+                    .push((t, solution.ned_from(r).horizontal_norm()));
+            }
             let ned = solution.ned_from(anchor);
             let residual = engine.antenna_position().ned_from(fix.position);
             report.epochs.push(Epoch {
@@ -475,6 +538,19 @@ pub fn run_gsdc(
             report.processed += 1;
         }
     }
+
+    // The equivariant filter over the same inputs and the same epochs. Run as a
+    // second pass rather than interleaved only because the two engines keep
+    // their own state; the data they see is byte-identical.
+    let second = eqf::replay_gsdc_eqf(
+        &imu, &fixes, &reference, attitude, imu_scale, alpha, doppler,
+    );
+    report.eqf = second.error;
+    report.eqf_epochs = second.epochs;
+    report.eqf_nis = second.nis;
+    report.eqf_lever = second.lever;
+    report.eqf_horizontal = second.horizontal;
+
     Ok(report)
 }
 
