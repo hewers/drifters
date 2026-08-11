@@ -658,6 +658,13 @@ For the paper's own target it is entirely reasonable: a consumer MEMS gyro at
 flat-Earth assumption is well matched to ArduPilot's hardware and poorly matched
 to ours. That is a statement about grade of IMU, not about the paper.
 
+**Settled in [adr/0008](adr/0008-earth-model-by-sensor-grade.md).** Earth
+modelling is selected by the ratio of Earth rate to gyroscope bias stability, in
+three bands: below 1, model nothing; 1 to 1000, compensate the input; above
+1000, Earth rotation must go inside the group, because input-side compensation
+destroys the gyrocompassing channel that a navigation-grade sensor is bought
+for. `flat_earth_verdict` computes the band.
+
 **Recommendation.** Implement the paper faithfully first and compare on
 consumer-grade terms, where its assumptions hold. Treat an Earth-referenced
 equivariant filter as a separate, later investigation — starting with input-side

@@ -28,7 +28,10 @@ use drifters_eqf::filter::{EqFilter, ProcessNoise};
 use drifters_eqf::group::State;
 use drifters_eqf::lie::{Se23, Se3Tangent};
 use drifters_eqf::lift::Input;
-use drifters_eqf::local::{compensate_earth, Anchor};
+use drifters_eqf::local::{
+    compensate_earth, earth_rate_ratio, flat_earth_verdict, gyrocompass_accuracy, Anchor,
+    FlatEarthVerdict,
+};
 
 use crate::kfgins;
 use crate::stats::Running;
@@ -67,8 +70,14 @@ pub struct EqfReport {
     ///
     /// Reported next to the RMS because on a long convergence the two mean
     /// different things: the RMS carries the startup transient for the whole
-    /// run, the final residual says where the filter actually ended up.
+    /// run, the final residual says where the filter ended up.
     pub final_residual: f64,
+    /// Earth rate divided by this IMU's gyroscope bias stability.
+    pub earth_rate_ratio: f64,
+    /// Which Earth model that ratio calls for, per adr/0008.
+    pub verdict: FlatEarthVerdict,
+    /// Static heading accuracy this gyroscope could gyrocompass to, radians.
+    pub gyrocompass: f64,
 }
 
 /// Replay the EqF over the same inputs as [`crate::replay`].
@@ -105,6 +114,9 @@ pub fn replay_eqf(
 
     let mut filter = EqFilter::new(&start, initial_covariance(config), anchor.gravity);
     let noise = process_noise(config);
+    // Bias stability is per-axis in the config; the ratio is a scalar property
+    // of the part, so take the largest axis as the representative figure.
+    let bias_stability = config.options.imu_noise.gyro_bias_std.amax();
 
     let mut report = EqfReport {
         processed: 0,
@@ -121,6 +133,9 @@ pub fn replay_eqf(
         curvature_error: 0.0,
         earth_rate_compensated: compensate,
         final_residual: 0.0,
+        earth_rate_ratio: earth_rate_ratio(bias_stability),
+        verdict: flat_earth_verdict(bias_stability),
+        gyrocompass: gyrocompass_accuracy(bias_stability, anchor.origin.lat),
     };
 
     let end = config.end_time.unwrap_or(f64::INFINITY);
@@ -308,13 +323,25 @@ impl EqfReport {
             self.max_range, self.curvature_error
         );
         println!(
-            "unmodelled Earth rate : 15.04 deg/h, against a 0.027 deg/h gyro — {}",
-            if self.earth_rate_compensated {
-                "compensated at the input"
-            } else {
-                "557x the sensor's own bias stability"
+            "Earth rate / gyro bias stability : {:.0}x  ->  {}",
+            self.earth_rate_ratio,
+            match self.verdict {
+                FlatEarthVerdict::Negligible => "flat Earth is defensible, model nothing",
+                FlatEarthVerdict::CompensateInput => "compensate the input (adr/0008)",
+                FlatEarthVerdict::ModelInGroup =>
+                    "needs Earth rotation in the group; input compensation is not enough",
             }
         );
+        if !self.earth_rate_compensated && self.verdict != FlatEarthVerdict::Negligible {
+            println!("  ... and it is not compensated here, so expect divergence.");
+        }
+        if self.verdict == FlatEarthVerdict::CompensateInput && self.earth_rate_compensated {
+            println!(
+                "  cost: heading is no longer observable from Earth rate, forgoing\n\
+                 \x20 {:.1} arcmin of static gyrocompassing.",
+                self.gyrocompass.to_degrees() * 60.0
+            );
+        }
     }
 }
 

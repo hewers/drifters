@@ -5,30 +5,25 @@
 //! Earth terms would break the group-affine structure the whole argument rests
 //! on. Real GNSS is geodetic. This is the boundary between them.
 //!
-//! # The two errors this introduces, and their size
+//! # Two modelling errors, and their size
 //!
-//! Both are **modelling** errors, not implementation errors, and both must be
-//! reported as their own term in any comparison against the ESKF rather than
-//! waved away.
+//! Both belong in any comparison against the ESKF as their own term.
 //!
 //! **Tangent-plane curvature.** A plane fitted at the anchor departs from the
-//! ellipsoid by about `L²/2R` at range `L`: 0.08 m at 1 km, 2 m at 5 km, 78 m
-//! at 10 km. [`Anchor::curvature_error`] computes it, so a run can state its own
-//! number instead of assuming one.
+//! ellipsoid by about `L²/2R` at range `L`: 0.08 m at 1 km, 2 m at 5 km, 78 m at
+//! 10 km. [`Anchor::curvature_error`] computes it for a given run.
 //!
-//! **Unmodelled Earth rotation.** The bigger of the two on good hardware, and
-//! it does not shrink with a closer anchor. Earth rate is 15.04 °/h. A
-//! tactical-grade gyro with 0.027 °/h of bias stability sees it as **557×** its
-//! own noise floor, so a flat-Earth filter cannot match an Earth-referenced one
-//! on that hardware and should not be expected to. A consumer MEMS gyro at
-//! ~10 °/h sees it at 1.5×, which is why the assumption is entirely reasonable
-//! for the paper's own target and why the honest comparison is on consumer-grade
-//! terms.
+//! **Unmodelled Earth rotation.** Larger than curvature on good hardware, and it
+//! does not shrink with a closer anchor. Earth rate is 15.04 °/h; the ratio to a
+//! gyroscope's bias stability decides how much modelling is needed. See
+//! [`flat_earth_verdict`] and [adr/0008]. Measured endpoints here: 557 for the
+//! KF-GINS Leador-A15, 0.75 for a phone-grade part.
 //!
-//! [`compensate_earth_rate`] removes the first-order part of the second error by
-//! correcting the gyro input, at the cost of making the input depend on the
-//! estimate. That is offered separately and off by default: it is a deviation
-//! from the paper, and whether it helps is a measurement, not an assumption.
+//! [`compensate_earth`] removes the first-order part of the second error at the
+//! input. It is off by default, deviates from the published filter, and has a
+//! ceiling: see the gyrocompassing note on that function.
+//!
+//! [adr/0008]: https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md
 
 use drifters_core::earth::Wgs84;
 use drifters_core::frames::{Lla, Ned};
@@ -86,9 +81,9 @@ impl Anchor {
     /// The tangent-plane approximation error at horizontal range `L`, metres.
     ///
     /// `L²/2R` with `R` the mean radius of curvature at the anchor. Report this
-    /// alongside any accuracy number the flat-Earth filter produces — at the
-    /// ranges a vehicle covers it stops being negligible well before the
-    /// filter's own error does.
+    /// alongside any accuracy number the flat-Earth filter produces; at the
+    /// ranges a vehicle covers it stops being negligible before the filter's own
+    /// error does.
     pub fn curvature_error(&self, range: F) -> F {
         let (rm, rn) = Wgs84::radii(self.origin.lat);
         #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
@@ -96,6 +91,98 @@ impl Anchor {
         let r = Real::sqrt(rm * rn);
         range * range / (2.0 * r)
     }
+
+    /// The same origin with gravity re-evaluated at `local`.
+    ///
+    /// Position-dependent gravity makes `(G − N)T` state-dependent, which
+    /// forfeits the group-affine structure the EqF is built to exploit. Holding
+    /// `g` constant within a segment and re-evaluating between segments keeps
+    /// that structure and bounds the error instead of hiding it. See
+    /// [adr/0008](https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md).
+    ///
+    /// The origin is unchanged, so no state or covariance transformation is
+    /// required. Moving the origin would rotate the NED axes and require both,
+    /// which is a larger operation and is not what this does.
+    pub fn with_gravity_at(&self, local: Vec3) -> Self {
+        let here = self.to_geodetic(local);
+        Self {
+            origin: self.origin,
+            gravity: Wgs84::gravity_n(here.lat, here.height),
+        }
+    }
+}
+
+/// Earth rotation rate in degrees per hour, the unit gyroscope bias stability
+/// is quoted in.
+pub const EARTH_RATE_DEG_PER_HOUR: F = 15.041_067;
+
+/// Whether a flat, non-rotating Earth model is defensible for a given gyroscope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlatEarthVerdict {
+    /// Earth rate is at or below the sensor's own noise floor. Model nothing.
+    /// Consumer MEMS, 10–100 °/h.
+    Negligible,
+    /// Earth rate is visible but not the sensor's primary signal. Correct the
+    /// input with [`compensate_earth`]. Industrial and tactical, 0.01–10 °/h.
+    CompensateInput,
+    /// Earth rate is the measurement that determines heading. Input-side
+    /// compensation removes that capability, so this band needs Earth rotation
+    /// inside the symmetry group. Navigation grade and better, below 0.01 °/h.
+    ModelInGroup,
+}
+
+/// Earth rate divided by a gyroscope's bias stability, both in rad/s.
+///
+/// The single number that decides how much Earth modelling an estimator needs.
+/// Measured endpoints in this repository: 557 for the Leador-A15 in the KF-GINS
+/// dataset, 0.75 for a phone-grade part.
+#[inline]
+pub fn earth_rate_ratio(gyro_bias_stability: F) -> F {
+    if gyro_bias_stability <= 0.0 {
+        return F::INFINITY;
+    }
+    Wgs84::OMEGA / gyro_bias_stability
+}
+
+/// Which Earth model a gyroscope of this bias stability requires.
+///
+/// Thresholds at ratios of 1 and 1000, derived in
+/// [adr/0008](https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md).
+/// They are boundaries between regimes, not cliffs; a sensor near one should be
+/// evaluated rather than classified.
+pub fn flat_earth_verdict(gyro_bias_stability: F) -> FlatEarthVerdict {
+    let ratio = earth_rate_ratio(gyro_bias_stability);
+    if ratio < 1.0 {
+        FlatEarthVerdict::Negligible
+    } else if ratio < 1000.0 {
+        FlatEarthVerdict::CompensateInput
+    } else {
+        FlatEarthVerdict::ModelInGroup
+    }
+}
+
+/// Static heading accuracy achievable by gyrocompassing, radians.
+///
+/// The horizontal component of Earth rate points north, so a heading error
+/// `δψ` produces a north-axis rate error of `ω·cos(lat)·δψ`. A gyroscope
+/// resolves `δψ` down to its own bias stability:
+///
+/// ```text
+/// δψ = bias / (ω · cos lat)
+/// ```
+///
+/// This is what a system determines with no GNSS, no motion and no magnetometer,
+/// and it is the capability [`compensate_earth`] gives up. It degrades towards
+/// the poles, where the horizontal component vanishes and gyrocompassing fails
+/// entirely.
+pub fn gyrocompass_accuracy(gyro_bias_stability: F, latitude: F) -> F {
+    #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+    use drifters_core::math::Real;
+    let horizontal = Wgs84::OMEGA * Real::cos(latitude);
+    if horizontal <= 0.0 {
+        return F::INFINITY;
+    }
+    gyro_bias_stability / horizontal
 }
 
 /// Input-side Earth compensation: gyro for rotation, accelerometer for
@@ -106,37 +193,41 @@ impl Anchor {
 /// a' = ᴵa − R̂ᵀ[(2ω_ie + ω_en) × v̂]
 /// ```
 ///
-/// **Not part of the paper's filter, and off by default.** The paper assumes a
-/// non-rotating, flat Earth; this removes the first-order consequences of that
-/// being false, by correcting the *input* rather than the model — which is the
-/// only place they can be removed without touching the lift and forfeiting the
-/// group-affine structure the whole equivariance argument rests on.
+/// Not part of the published filter, and off by default. The paper assumes a
+/// non-rotating, flat Earth. This removes the first-order consequences of that
+/// assumption being false by correcting the input rather than the model, which
+/// is the only place they can be removed without altering the lift and
+/// forfeiting group-affineness.
 ///
-/// # Why it is not optional in practice, on good hardware
+/// # Effect on tactical-grade hardware
 ///
-/// Measured on the KF-GINS dataset — a tactical-grade Leador-A15, 57 minutes,
-/// 3 363 RTK fixes — the uncompensated filter's open-loop residual grows as
-/// **`t³`**: `7.8 × 10² m` at 200 s, `3.3 × 10⁶ m` at 3 200 s. A `t³` position
-/// error is a *constant attitude-rate* error, and solving back gives
-/// `5.96 × 10⁻⁵ rad/s` against an Earth rate of `7.29 × 10⁻⁵`. It is Earth
-/// rotation, and the filter cannot absorb it: the gyro bias prior is
-/// `0.027 °/h` and Earth rate is 557 times that, so there is no state in the
-/// model capable of representing the error.
+/// Measured on the KF-GINS dataset, a Leador-A15 over 57 minutes and 3 363 RTK
+/// fixes. Uncompensated, the open-loop residual grows as `t³`: `7.8 × 10² m` at
+/// 200 s, `3.3 × 10⁶ m` at 3 200 s. A `t³` position error is a constant
+/// attitude-rate error, and solving back gives `5.96 × 10⁻⁵ rad/s` against an
+/// Earth rate of `7.29 × 10⁻⁵`. The gyroscope's bias stability is 0.027 °/h, so
+/// Earth rate is 557 times larger and no state in the flat-Earth model can
+/// represent the error.
 ///
-/// This is the outcome [`crate::filter`]'s own scoping predicted rather than a
-/// surprise, and predicting it is the point — the flat-Earth assumption is well
-/// matched to the consumer MEMS hardware the paper targets and poorly matched
-/// to a tactical-grade unit. Compensating the gyro alone recovers four orders of
-/// magnitude; adding the Coriolis term is what closes the rest.
+/// Compensating the gyroscope alone recovers four orders of magnitude; the
+/// Coriolis term closes the rest, ending at 1.5 cm.
 ///
-/// # The cost, stated plainly
+/// # Two costs
 ///
-/// The corrected input depends on the **estimate**, which the lift's derivation
-/// does not contemplate. To first order the extra coupling enters where the
-/// gyro bias and specific force already do, so the linearisation is not
-/// obviously wrong — but "not obviously wrong" is not "verified", which is why
-/// this is a function the caller opts into rather than something
-/// [`EqFilter::propagate`] does silently.
+/// The corrected input depends on the estimate, which the lift's derivation does
+/// not cover. To first order the extra coupling enters where the gyroscope bias
+/// and specific force already do, so the linearisation is not obviously wrong,
+/// but that is not the same as verified. Hence a function the caller opts into
+/// rather than something [`EqFilter::propagate`] does silently.
+///
+/// The second cost is larger and bounds where this is usable. Subtracting
+/// `R̂ᵀω_ie` uses the filter's own attitude and hands the result to a filter
+/// whose Jacobian contains no `ω_ie` term, so heading can no longer be observed
+/// from Earth rate. The construction is circular and the circularity does not
+/// appear in the covariance. Above a ratio of roughly 1000 —
+/// [`FlatEarthVerdict::ModelInGroup`] — that discards the sensor's primary
+/// capability; see [`gyrocompass_accuracy`] and
+/// [adr/0008](https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md).
 ///
 /// [`EqFilter::propagate`]: crate::filter::EqFilter::propagate
 pub fn compensate_earth(
@@ -186,8 +277,7 @@ mod tests {
         assert_relative_eq!(a.to_local(a.origin).norm(), 0.0, epsilon = 1e-9);
     }
 
-    /// The curvature error is a real term, and these are the numbers a run
-    /// should quote rather than a hand-waved "negligible".
+    /// The numbers a run should quote instead of assuming the term is small.
     #[test]
     fn the_curvature_error_grows_quadratically() {
         let a = anchor();
@@ -205,17 +295,88 @@ mod tests {
         assert_eq!((g.x, g.y), (0.0, 0.0));
     }
 
-    /// Earth rate is what decides whether a flat-Earth filter can compete on a
-    /// given IMU. Stated as a ratio because that is the form the decision takes.
+    /// Earth rate as this crate computes it, against the published constant.
     #[test]
-    fn earth_rate_dwarfs_a_tactical_gyros_bias_stability() {
+    fn earth_rate_matches_the_published_value() {
         let rate = Wgs84::omega_ie_n(anchor().origin.lat).norm();
-        let deg_per_hour = rate.to_degrees() * 3600.0;
-        assert_relative_eq!(deg_per_hour, 15.041, epsilon = 1e-2);
-        // Leador-A15, the KF-GINS dataset's IMU.
-        assert!(deg_per_hour / 0.027 > 500.0);
-        // A consumer MEMS part, the paper's own target.
-        assert!(deg_per_hour / 10.0 < 2.0);
+        assert_relative_eq!(
+            rate.to_degrees() * 3600.0,
+            EARTH_RATE_DEG_PER_HOUR,
+            epsilon = 1e-3
+        );
+    }
+
+    fn deg_per_hour(v: F) -> F {
+        v * drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC
+    }
+
+    /// The two endpoints measured in this repository, plus a navigation-grade
+    /// part to pin the upper threshold. These are the numbers adr/0008 argues
+    /// from, so they are asserted rather than left in prose.
+    #[test]
+    fn the_grade_bands_match_the_measured_endpoints() {
+        // Phone-grade: Earth rate sits below the sensor's own noise floor.
+        let phone = deg_per_hour(20.0);
+        assert_relative_eq!(earth_rate_ratio(phone), 0.752, epsilon = 1e-3);
+        assert_eq!(flat_earth_verdict(phone), FlatEarthVerdict::Negligible);
+
+        // Leador-A15, the KF-GINS dataset. This is the run that diverged.
+        let tactical = deg_per_hour(0.027);
+        assert_relative_eq!(earth_rate_ratio(tactical), 557.1, epsilon = 0.5);
+        assert_eq!(
+            flat_earth_verdict(tactical),
+            FlatEarthVerdict::CompensateInput
+        );
+
+        // Navigation grade: input compensation would cost more than it fixes.
+        let navigation = deg_per_hour(0.003);
+        assert_relative_eq!(earth_rate_ratio(navigation), 5013.7, epsilon = 5.0);
+        assert_eq!(
+            flat_earth_verdict(navigation),
+            FlatEarthVerdict::ModelInGroup
+        );
+    }
+
+    /// What input-side compensation gives up, quantified. A navigation-grade
+    /// unit finds true north to under an arcminute with no external aid; that
+    /// is the capability adr/0008 declines to trade away.
+    #[test]
+    fn gyrocompassing_accuracy_scales_with_bias_stability() {
+        let lat = 30.0_f64.to_radians();
+        let arcmin = |rad: F| rad.to_degrees() * 60.0;
+
+        assert_relative_eq!(
+            arcmin(gyrocompass_accuracy(deg_per_hour(0.027), lat)),
+            7.1,
+            epsilon = 0.2
+        );
+        assert_relative_eq!(
+            arcmin(gyrocompass_accuracy(deg_per_hour(0.003), lat)),
+            0.79,
+            epsilon = 0.05
+        );
+
+        // The horizontal component of Earth rate vanishes at the pole, so
+        // gyrocompassing fails there regardless of sensor quality.
+        let polar = gyrocompass_accuracy(deg_per_hour(0.003), 89.999_f64.to_radians());
+        assert!(polar > gyrocompass_accuracy(deg_per_hour(0.003), lat) * 1000.0);
+    }
+
+    /// Gravity re-evaluation keeps the group-affine structure by holding `g`
+    /// constant between segments. Over the KF-GINS trajectory the change is
+    /// two orders of magnitude below the tangent-plane error already present,
+    /// which is the justification for holding it at all.
+    #[test]
+    fn re_evaluating_gravity_moves_it_very_little() {
+        let a = anchor();
+        let moved = a.with_gravity_at(Vec3::new(1_000.0, 800.0, -15.0));
+        assert_eq!(moved.origin, a.origin);
+        let delta = (moved.gravity - a.gravity).norm();
+        assert!(
+            delta > 0.0 && delta < 1e-4,
+            "gravity moved {delta:.3e} m/s² over the trajectory extent"
+        );
+        assert!(delta < a.curvature_error(1_483.0) * 1e-2);
     }
 
     #[test]
