@@ -7,6 +7,7 @@
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
+pub mod nees;
 pub mod plot;
 pub mod stats;
 pub mod truth;

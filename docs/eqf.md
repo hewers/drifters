@@ -536,6 +536,63 @@ whereas GCU never rejects and never fully re-trusts.
 `α = 0` — isotropic inflation only, still within the paper's own range — is the
 default in `drifters gsdc`, and `--alpha` sets it.
 
+## Measured: the covariance is overconfident by about 14 %
+
+Every consistency number from real data in this document is a NIS, computed
+from innovations, and NIS cannot separate a wrong covariance from a right
+covariance over a wrong model. `drifters nees` removes the second by
+construction: a synthetic trajectory, exact truth, and noise drawn from
+precisely the densities the filter is told to assume.
+
+```bash
+cargo run --release -p drifters-cli -- nees --runs 40 --seconds 120
+```
+
+40 runs, scoring after a 10 s settle. A consistent filter averages the state
+dimension, 21.
+
+| block | NEES | expected | |
+|---|---|---|---|
+| **overall** | **23.9** | **21** | **overconfident** |
+| attitude | 3.61 | 3 | overconfident |
+| velocity | 3.02 | 3 | consistent |
+| position | 2.94 | 3 | consistent |
+| gyro bias | 3.16 | 3 | overconfident |
+| accel bias | 2.87 | 3 | conservative |
+| lever arm | 2.71 | 3 | conservative |
+| mag calib | 3.68 | 3 | overconfident |
+
+**This is an implementation fault.** There is no model error in the experiment
+to attribute it to, so the covariance is simply about 14 % smaller than the
+error it is describing.
+
+**It is not a discretisation artefact.** Across a ten-fold sweep of the IMU
+interval the figure is flat — 26.0, 23.9, 24.0, 24.2 at `dt` of 0.02, 0.01,
+0.004 and 0.002. A discretisation error would fall with `dt`.
+
+**Where it is.** Attitude and the magnetometer calibration carry most of it, at
+roughly 20 % each, with the gyro bias at 5 %. Position and velocity are clean.
+The magnetometer calibration is unobservable in this experiment — no
+magnetometer update is applied — so its NEES is testing the transition matrix
+alone, and the attitude and calibration blocks are coupled through `−₃A`.
+
+**Leading hypothesis, not yet tested.** The reset does not transport the
+covariance. `X̂ ← exp(Δ) X̂` is applied without adjusting `Σ`, on the grounds
+that `ε_new = ε − Δ` holds to first order with a reset Jacobian of
+`I − ½ ad_Δ + …`. That approximation is applied at every measurement update,
+and it would be expected to bite hardest on the rotational states — which is
+where the excess is. Implementing the transport and re-running this campaign is
+the experiment that would confirm or eliminate it.
+
+**What it means for the numbers already reported.** Anything derived from the
+EqF's covariance is optimistic by roughly this margin: the NIS-based tuning of
+[gsdc.md](gsdc.md), the innovation gating, and the GCU inflation, which reads
+`Σ` directly. It does not affect the accuracy figures, which are scored against
+truth or against the fixes rather than against the covariance. The ESKF has not
+been put through the same campaign and should be.
+
+---
+
 ## Uncertain observation handling (Sec. VI)
 
 Replaces binary χ² rejection with **generalised covariance union** inflation.

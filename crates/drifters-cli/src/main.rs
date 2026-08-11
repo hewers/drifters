@@ -61,6 +61,14 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.first().map(String::as_str) == Some("tune") {
         return run_tune_command(args);
     }
+    if args.first().map(String::as_str) == Some("nees") {
+        let runs: usize = flag(args, "--runs").unwrap_or("40").parse()?;
+        let seconds: f64 = flag(args, "--seconds").unwrap_or("120").parse()?;
+        let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
+        let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
+        drifters_cli::nees::run_nees_at(runs, seconds, seed, dt).print();
+        return Ok(());
+    }
     let make_figure = match args.first().map(String::as_str) {
         Some("replay") => false,
         // `plot` is `replay` plus a figure: the diagnostics come from the run

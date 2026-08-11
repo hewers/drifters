@@ -22,7 +22,7 @@ Every number here is produced by a test in this repository.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 331, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 336, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
