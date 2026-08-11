@@ -366,11 +366,15 @@ fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         None => eqf::WarmStart::None,
     };
     if warm != eqf::WarmStart::None {
-        eprintln!(
-            "warning: --warm-start is experimental and currently diverges on this\n\
-             dataset (kilometres of horizontal error). See the WarmStart docs in\n\
-             crates/drifters-cli/src/eqf.rs for the diagnosis. Do not report\n\
-             numbers from it."
+        return Err(
+            "--warm-start needs a backward information filter, which does not \
+             exist yet. A covariance-form filter cannot be run with a negative dt: \
+             the transition becomes its own inverse and contracts the covariance \
+             faster than process noise restores it, so the gain collapses and the \
+             reverse pass free-runs. Measured on KF-GINS, the gyro-bias variance \
+             falls 170x while innovations grow to 18 km. See the WarmStart docs in \
+             crates/drifters-cli/src/eqf.rs."
+                .into(),
         );
     }
     let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, warm, quiet);

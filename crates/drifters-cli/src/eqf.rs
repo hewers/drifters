@@ -107,24 +107,36 @@ pub struct EqfReport {
 /// is a different claim. Keeping them apart is the reason this is an enum
 /// rather than a boolean.
 ///
-/// # Known issue: both warm modes diverge on KF-GINS
+/// # Not implementable in covariance form, and currently refused
 ///
-/// `Calibration` and `Full` currently produce horizontal errors of kilometres
-/// and must not be used for reported numbers. The reverse pass is not at fault
-/// in the calibration states: it recovers the lever arm to 0.088 m, against
-/// 0.087 m from the causal run, and the vertical channel is sound.
+/// `Calibration` and `Full` are rejected by the CLI. The reverse pass they need
+/// cannot be built by running this filter with a negative `dt`, and the reason
+/// is structural rather than a defect in the wiring.
 ///
-/// The remaining coupling is with [`compensate_earth`]. The reverse pass feeds
-/// its own attitude estimate into the Earth-rate correction, and that attitude
-/// starts from a 1 rad² prior at the end of the trajectory, where heading is
-/// genuinely unknown. An attitude error of that size makes `R̂ᵀω_ie` wrong by
-/// most of Earth rate, which the filter then absorbs into the gyroscope bias.
-/// The forward run inherits a corrupted bias together with a covariance
-/// confident enough to prevent correcting it.
+/// The state does reverse: `a_backward_pass_retraces_the_trajectory` returns
+/// position to `10⁻⁶ m` over 10 s. The covariance does not. With `dt < 0` the
+/// transition becomes `Φ_forward⁻¹`, which **contracts** exactly the directions
+/// the forward recursion expands, and it contracts them faster than `Q|dt|`
+/// adds. Measured over the KF-GINS trace, going backwards:
 ///
-/// Two candidate fixes, neither tried: run the reverse pass without Earth
-/// compensation and accept the flat-Earth error over it, or iterate the reverse
-/// pass so the second sweep compensates using a converged attitude.
+/// ```text
+///                       n = 300     n = 3300
+///   gyro-bias variance  6.4e-12     3.8e-14     collapses 170x
+///   attitude variance   2.6e-7      2.6e-7      pinned
+///   innovation          49 m        18 km
+/// ```
+///
+/// The gain goes to zero, the updates stop correcting, and the filter
+/// free-runs. Turning Earth compensation off makes it worse, not better, and
+/// freezes the bias estimate outright — so the earlier guess that Earth
+/// compensation was the cause is also wrong.
+///
+/// The backward arm of a two-filter smoother is an **information** filter for
+/// this reason: `Y = Σ⁻¹` transforms correctly under time reversal where `Σ`
+/// does not. Implementing one for the 21-state EqF, with the process-noise
+/// update via the matrix inversion lemma, is what this needs. The reverse pass
+/// below is otherwise sound and can be reused once that exists.
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WarmStart {
     /// No reverse pass. The only causal configuration.
@@ -179,19 +191,31 @@ fn reverse_pass(
         next_fix -= 1;
     }
 
-    // The reverse pass starts at the END of the trajectory, so it must be
-    // seeded there. Seeding it with the state at t=0 puts the filter 1.5 km
-    // from where the data says it is and it never recovers.
+    // The reverse pass starts at the END of the trajectory, so it is seeded
+    // there, from the trace rather than from the forward configuration.
     //
-    // Only the last fix is known: position. Velocity and attitude are left at
-    // the configured values as a guess, with the wide prior of
-    // `initial_covariance` to say so, and 3 363 fixes to correct them on the
-    // way back.
+    // Position comes from the last fix. Velocity and heading come from the
+    // course over the closing fixes, which is the same forward-motion
+    // assumption the non-holonomic constraint already makes for a road vehicle.
+    // Roll and pitch are carried from the configured attitude: a car is level
+    // to within a couple of degrees for the whole trace, and nothing in GNSS
+    // alone constrains them.
+    let last = next_fix.saturating_sub(1);
+    let closing = course(gnss, last, anchor, -1);
+    let opening = course(gnss, 0, anchor, 1);
+    let (rotation, velocity) = match (closing, opening) {
+        (Some((psi_end, v_end)), Some((psi_start, _))) => {
+            // Turn the configured attitude about the local vertical by the
+            // heading change across the trace, keeping its roll and pitch.
+            (yaw(psi_end - psi_start).matmul(&seed.pose.rotation), v_end)
+        }
+        _ => (seed.pose.rotation, Vec3::ZERO),
+    };
     let tail = State {
         pose: Se23::new(
-            seed.pose.rotation,
-            Vec3::ZERO,
-            gnss.get(next_fix.saturating_sub(1))
+            rotation,
+            velocity,
+            gnss.get(last)
                 .map(|f| anchor.to_local(f.position))
                 .unwrap_or(seed.pose.position),
         ),
@@ -199,23 +223,41 @@ fn reverse_pass(
         lever: Vec3::ZERO,
         mag: Mat3::identity(),
     };
-    // Deliberately wide, and not the forward run's prior. At the end of the
-    // trajectory the heading is genuinely unknown - this vehicle drives a loop -
-    // so handing the reverse pass the forward attitude prior would start it
-    // confidently wrong by most of a turn, which it never recovers from.
-    let mut wide = [0.0; 21];
-    for (i, v) in wide.iter_mut().enumerate() {
-        *v = match i {
-            0..=2 => 1.0,      // attitude, rad^2: essentially unknown
-            3..=5 => 100.0,    // velocity
-            6..=8 => 25.0,     // position, from the last fix
-            9..=11 => 1.0e-8,  // gyro bias
-            12..=14 => 1.0e-4, // accel bias
-            15..=17 => 1.0,    // lever arm
-            _ => 1.0e-6,       // magnetometer calibration, unobservable here
-        };
+
+    // The covariance has to be built in physical terms and mapped into normal
+    // coordinates, not written down diagonally.
+    //
+    // In this parameterisation `ε₁,ω` rotates the trajectory about the GLOBAL
+    // origin, so a physical position error is `δp = −p̂^ ε₁,ω + ε₁,ρ`. A
+    // diagonal Σ with an attitude variance of 1 rad² therefore asserts a
+    // position uncertainty of |p̂| — 1.5 km at the end of this trace — however
+    // the position block is set. The forward run gets away with a diagonal
+    // because it starts at the anchor, where p̂ ≈ 0 and the map is the
+    // identity. The reverse pass does not.
+    let jac_inv = |v: Vec3, p: Vec3| {
+        let mut j = Matrix::<9, 9>::identity();
+        j.set_block(3, 0, &v.skew());
+        j.set_block(6, 0, &p.skew());
+        j
+    };
+    let physical = Matrix::<9, 9>::from_diagonal(&[
+        4.0e-3, 4.0e-3, 3.0e-2, // attitude: 3.6° in roll/pitch, 10° in heading
+        4.0, 4.0, 1.0, // velocity, from a 1 Hz course estimate
+        25.0, 25.0, 100.0, // position, from one fix
+    ]);
+    let j = jac_inv(tail.pose.velocity, tail.pose.position);
+    let pose_block = j.matmul(&physical).mul_transpose(&j);
+
+    let mut sigma = Matrix::<21, 21>::zeros();
+    sigma.set_block(0, 0, &pose_block);
+    for i in 0..3 {
+        sigma[(9 + i, 9 + i)] = 1.0e-8; // gyro bias
+        sigma[(12 + i, 12 + i)] = 1.0e-4; // accel bias
+        sigma[(15 + i, 15 + i)] = 1.0; // lever arm, unknown
+        sigma[(18 + i, 18 + i)] = 1.0e-6; // magnetometer, unobservable here
     }
-    let mut filter = EqFilter::new(&tail, Matrix::from_diagonal(&wide), anchor.gravity);
+    let mut filter = EqFilter::new(&tail, sigma, anchor.gravity);
+    let mut applied = 0usize;
 
     // The increment for the gap (tow, later] belongs to the LATER sample, since
     // `dtheta` covers the interval ending at its own timestamp. Pairing a gap
@@ -258,10 +300,65 @@ fn reverse_pass(
             let fix = gnss[next_fix];
             let sigma = fix.position_std;
             let r = Mat3::from_diagonal(&[sigma.x * sigma.x, sigma.y * sigma.y, sigma.z * sigma.z]);
-            filter.update_position(anchor.to_local(fix.position), &r);
+            let measured = anchor.to_local(fix.position);
+            let st = filter.nav_state();
+            let innovation = (st.pose.position + st.pose.rotation * st.lever - measured).norm();
+            filter.update_position(measured, &r);
+            applied += 1;
+            if std::env::var("DRIFTERS_REVERSE_TRACE").is_ok() && applied % 300 == 0 {
+                eprintln!(
+                    "  rev n={applied:5}  t={:7.1}  innov={:11.3e} m  tr(S)={:11.3e}  \
+                     att_var={:10.3e}  bg_var={:10.3e}",
+                    tow - config.start_time,
+                    innovation,
+                    filter.sigma.trace(),
+                    filter.sigma[(0, 0)] + filter.sigma[(1, 1)] + filter.sigma[(2, 2)],
+                    filter.sigma[(9, 9)] + filter.sigma[(10, 10)] + filter.sigma[(11, 11)]
+                );
+            }
         }
     }
     filter
+}
+
+/// A rotation of `angle` about the local vertical, for NED axes.
+fn yaw(angle: f64) -> Mat3 {
+    let (s, c) = (angle.sin(), angle.cos());
+    Mat3::from_rows([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+}
+
+/// Course over ground and velocity near fix `from`, searching in `step`.
+///
+/// Walks outwards until the fixes are far enough apart to give a heading worth
+/// having. Returns `None` when the vehicle is too slow for course to mean
+/// anything, which is the case this must not guess at: a stationary vehicle has
+/// a heading and its GNSS track does not know it.
+fn course(gnss: &[GnssFix], from: usize, anchor: &Anchor, step: isize) -> Option<(f64, Vec3)> {
+    let here = gnss.get(from)?;
+    let base = anchor.to_local(here.position);
+    let mut i = from as isize;
+    for _ in 0..20 {
+        i += step;
+        if i < 0 || i as usize >= gnss.len() {
+            return None;
+        }
+        let other = gnss[i as usize];
+        let d = anchor.to_local(other.position) - base;
+        let dt = here.time.tow - other.time.tow;
+        if dt.abs() < 1e-6 {
+            continue;
+        }
+        // 5 m of separation keeps a metre of GNSS noise out of the heading.
+        if d.x.hypot(d.y) < 5.0 {
+            continue;
+        }
+        // `d` points from `here` towards `other`; travel is the other way when
+        // `other` is earlier.
+        let travel = if dt > 0.0 { -d } else { d };
+        let velocity = travel * (1.0 / dt.abs());
+        return Some((travel.y.atan2(travel.x), velocity));
+    }
+    None
 }
 
 /// Replay the EqF over the same inputs as [`crate::replay`].
