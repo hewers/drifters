@@ -152,6 +152,18 @@ impl Se3Tangent {
         }
     }
 
+    /// The Lie bracket `ad_self[other] = [self, other]`.
+    ///
+    /// The matrix-free form of [`ad`](Self::ad) applied to a tangent vector:
+    /// `(ω_s × ω_o,  ν_s × ω_o + ω_s × ν_o)`.
+    #[inline]
+    pub fn bracket(self, other: Self) -> Self {
+        Self {
+            omega: self.omega.cross(other.omega),
+            nu: self.nu.cross(other.omega) + self.omega.cross(other.nu),
+        }
+    }
+
     /// The `se(3)` adjoint matrix `ad_u`.
     ///
     /// For `u = (ω, ν)`, `ad_u = [[ω^, 0], [ν^, ω^]]`.

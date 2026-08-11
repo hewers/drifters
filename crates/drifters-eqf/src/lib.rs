@@ -25,5 +25,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod gcu;
 pub mod group;
 pub mod lie;
+pub mod lift;
+pub mod linear;

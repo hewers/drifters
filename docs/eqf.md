@@ -197,10 +197,19 @@ Auxiliary maps: `Γ: SE₂(3) → SO(3)` takes the rotation block; `χ: SE₂(3)
 takes rotation plus the first translation column; `Π: se₂(3) → se(3)` drops the
 third column.
 
-### Two things the source leaves ambiguous
+### Five places the source cannot be taken literally
 
-Both were resolved from first principles rather than guessed, and both have a
-test that would have caught the other reading.
+Every one was resolved from first principles rather than guessed, and every one
+has a test that fails under the other reading. Three of them
+([`₂A`](#the-linearisation), [`C*_m`](#the-linearisation) and
+[`C*_v`](#the-linearisation)) are recorded further down, next to the equations
+they belong to. The two structural ones are here.
+
+None of this is a complaint about the paper. Two are almost certainly artefacts
+of extracting block matrices from a PDF, one is a notational slip, and two are
+places where the paper is stating something narrower than a first reading
+suggests. What matters is that a transcription would have shipped all five, and
+a numerical Jacobian catches four of them in the first run.
 
 **The product's adjoint is over `SE(3)`, not `SE₂(3)`.** Table II writes
 `γ_X + Ad_{C_X}[γ_Y]`, which does not type-check: `γ ∈ se(3)` is a 6-vector and
@@ -235,31 +244,133 @@ therefore in the linearised `C*` of (11)–(13), not in a composition law. `h_m`
 Λ₄(ξ,u) = Sᵀ(ω − b_ω)
 ```
 
+`Λ₁` collapses. `G − N` is non-zero only in the two columns that meet `T`'s
+identity corner, so `T⁻¹(G − N)T = (0, Rᵀg, Rᵀv)^ − N`, the two `N`s cancel, and
+
+```text
+Λ₁(ξ,u) = (ω − b_ω,  a − b_a + Rᵀg,  Rᵀv)^
+```
+
+with no `5 × 5` arithmetic left. The implementation ships that form and keeps
+the literal one as a test; `N`'s only job is to supply `ṗ = v`, which no `se₂(3)`
+element can, and it then leaves.
+
+The other three exist to *cancel*. `Λ₁` alone would drag the bias, lever arm and
+magnetometer calibration around through the state action; (1) says all three are
+constant, so the lift must move them at exactly zero rate. Setting each
+requirement to zero recovers (7), (8) and (9) uniquely — there is no freedom in
+them at all.
+
+### The lift is not an equivariant lift
+
+Worth stating because it is easy to assume otherwise, and because it explains a
+later shape. An equivariant lift would satisfy
+`Λ(φ(X,ξ), ψ_X(u)) = Ad_{X⁻¹}[Λ(ξ,u)]` for some action `ψ` on inputs. Two thirds
+of it does: input and bias enter only through `u − b`, so the input has to
+transform exactly as the bias does,
+
+```text
+ψ(X, u) = Ad^∨_{B⁻¹}(u − γ)
+```
+
+and with that the rotational and velocity columns of `Λ₁` transport correctly.
+The position column does not — it would additionally need
+`a_C = (ω − b_ω) × b_C`, a condition on the group element rather than an
+identity.
+
+Theorem 4.1 claims only that `Λ` *is a lift*, never that it is equivariant, so
+nothing is wrong. But it is the reason `A_t⁰` depends on `X̂` at all instead of
+being a constant matrix.
+
 ## Linearisation
 
-Origin at the identity, normal coordinates `ε = ϑ(e) = log(φ_ξ̂⁻¹(e))^∨ ∈ R²¹`.
+Origin at the identity, normal coordinates `ε = ϑ(e) = log(φ_ξ̂⁻¹(e))^∨ ∈ R²¹`,
+ordered `(attitude, velocity, position | gyro bias, accel bias | lever | mag)`.
 
-State matrix `A_t⁰` (10) is block sparse, built from
-
-```text
-₁A = [[0, 0, 0], [g^, 0, 0], [0, I₃, 0]]                  ∈ R⁹ˣ⁹
-₂A = ad^∨_{(Π(Ad_Ĉ[W] + G))^∨}                            ∈ R⁶ˣ⁶
-₃A = (Â ω + γ̂_ω)^                                        ∈ R³ˣ³
-```
-
-Output matrices (11)–(13):
+With the equivariant error `e = φ(X̂⁻¹, ξ)`, the working definition is
 
 ```text
-C*_m = G_m^ [ 0₃ₓ₁₅   ½(G_m + Ê y_d)^   0₃ₓ₃ ]
-C*_p = [ ½(y_p + b̂ − d̂)^   0₃ₓ₃   −I₃   0₃ₓ₆   I₃   0₃ₓ₃ ]
-C*_v = [ ½(y_v + â − ω^ d̂)^   −I₃   0₃ₓ₉   ω^   0₃ₓ₃ ]
+ε̇ = A_t⁰ ε + O(|ε|²),   A_t⁰ = Ad_X̂ · ∂/∂ε [ Λ(φ(X̂, ψ(ε)), u) ]|₀
 ```
 
-> The exact column offsets in (10)–(13) must be re-derived against the paper
-> when implementing, not copied from this summary: the PDF's matrix layout does
-> not survive text extraction cleanly, and a mis-placed block is precisely the
-> kind of error that produces a plausible-looking but wrong filter. Each block
-> gets a test that checks it against a numerical Jacobian.
+which is directly differentiable numerically, and is what every block below was
+checked against — column by column, all 21.
+
+```text
+        ⎡ 0₃ₓ₃  0₃ₓ₃  0₃ₓ₃ ┃ I₃    0₃ₓ₃ ┃ 0₃ₓ₃ ┃ 0₃ₓ₃ ⎤
+        ⎢ g^    0₃ₓ₃  0₃ₓ₃ ┃ 0₃ₓ₃  I₃   ┃ 0₃ₓ₃ ┃ 0₃ₓ₃ ⎥
+        ⎢ 0₃ₓ₃  I₃    0₃ₓ₃ ┃ p̂^    0₃ₓ₃ ┃ 0₃ₓ₃ ┃ 0₃ₓ₃ ⎥
+A_t⁰ =  ⎢ 0₆ₓ₉             ┃ ₂A         ┃ 0₆ₓ₃ ┃ 0₆ₓ₃ ⎥
+        ⎢ 0₃ₓ₉             ┃ 0₃ₓ₆       ┃ ₃A   ┃ 0₃ₓ₃ ⎥
+        ⎣ −₃A  0₃ₓ₃  0₃ₓ₃  ┃ I₃    0₃ₓ₃ ┃ 0₃ₓ₃ ┃ ₃A   ⎦
+
+₁A = [[0, 0, 0], [g^, 0, 0], [0, I₃, 0]]        (the top-left 9×9)
+₂A = ad_{γ̂ + Π(Ad_Ĉ[W] + G)} = ad_{Ad_B̂[Π(Λ̂₁)]}
+₃A = (Â ω + γ̂_ω)^ = (Â(ω − b̂_ω))^
+```
+
+`₁A`, `₃A` and `b̂^` come out exactly as printed. `b̂^` is the skew of `Ĉ`'s
+**position** column — the estimated position `p̂` — not of the bias, which is
+six-dimensional and could not fit a `3 × 3` slot. The bias rows really do see
+nothing but `₂A`: the pose coupling cancels identically, because
+`γ̂ + Ad_B̂ b̂ = 0` by the definition of the estimated bias.
+
+**`₂A` (10) is missing the bias correction.** As printed it is
+`ad^∨_{(Π(Ad_Ĉ[W] + G))^∨}`, built from the raw input `W = (ω, a, 0)`. The
+derivation adds `γ̂`, which is exactly what turns the raw input into a corrected
+one — the second form above says it plainly: `₂A` is the `se(3)` part of the
+lift *at the estimate*, carried into the global frame. The two agree only when
+the observer's bias component is zero, which holds at initialisation and never
+again.
+
+The paper's own `₃A` is what settles it. `₃A = Âω + γ̂_ω` **is** the
+bias-corrected rate; one filter cannot apply that correction in `₃A` and skip it
+in `₂A`. The numerical Jacobian disagrees with the printed form by exactly
+`ad_γ̂`, which is how this was found rather than assumed.
+
+### Output matrices (11)–(13)
+
+```text
+C*_m = ᴳm^ [ 0₃ₓ₁₈   ½(ᴳm + Ê y_d)^ ]
+C*_p = [ ½(y_p + b̂ − δ̂)^          0₃ₓ₃   −I₃   0₃ₓ₆   I₃    0₃ₓ₃ ]
+C*_v = [ ½(y_v + â − (Â ᴵω)^ δ̂)^  −I₃    0₃ₓ₉         ᴵω^   0₃ₓ₃ ]
+```
+
+The `½` average is between the output at the error origin and the raw
+measurement transported into the error frame by `ρ(X̂⁻¹, ·)`. The two coincide
+when the estimate is consistent — that is the identity the whole construction
+rests on, and it is what buys the third-order output error of van Goor et al.'s
+Lemma 5.3 in place of the usual second-order.
+
+`C*_p` is reproduced symbol for symbol, `b̂ − δ̂` included: it is
+`ρ_p(X̂⁻¹, 0) = p̂ + R̂ t̂`, the predicted antenna position, so `C*_p ε` is
+`−(measured − predicted)`. The leading `ᴳm^` of `C*_m` is not decoration either
+— it is the chart, `δ(y) = ᴳm^ y`, carrying a neighbourhood of `ᴳm` on `S²` into
+its tangent plane.
+
+**`C*_m`'s block belongs on the magnetometer columns.** As extracted, (11) reads
+`[0₃ₓ₁₅ ½(…)^ 0₃ₓ₃]`, putting the only non-zero block on the GNSS lever arm.
+A magnetometer cannot observe an antenna offset; (12) and (13) both place the
+lever arm at 15..18 and use it there, so the ordering is not in question; and
+the error output is `h_m(e) = ᴳm + ᴳm^ ε₄` exactly — the attitude terms cancel
+against the calibration terms — so the derivative is non-zero in `ε₄` and
+nowhere else. Most likely the trailing two blocks swapped during extraction
+rather than an error in the paper.
+
+**`C*_v`'s skew argument needs the rate in the global frame.** The paper prints
+`½(y_v + â − ᴵω^ δ̂)^`. The trailing `ᴵω^` block genuinely is the body-frame rate
+— that one comes from `ρ_v`'s own `δ^ ᴵω` term and the Jacobian confirms it —
+but the skew's argument is `ρ_v(X̂⁻¹, 0, ω)`, and evaluating that action gives
+`â − (Â ᴵω)^ δ̂`. One identity decides it: at consistency `â = v̂` and
+`δ̂ = −R̂ t̂`, so
+
+```text
+â − (Â ᴵω)^ δ̂ = v̂ + (R̂ ᴵω) × (R̂ ᴵt) = v̂ + R̂ ᴵω^ ᴵt = ᴳν = y_v   ✓
+```
+
+whereas `â − ᴵω^ δ̂ = v̂ + ᴵω × R̂ t̂` does not reduce to `ᴳν` — it crosses a
+body-frame rate with a global-frame lever arm. Without the `Â` the `½` average
+is a bias rather than a second-order refinement.
 
 ## Uncertain observation handling (Sec. VI)
 
@@ -274,6 +385,21 @@ S' = β (C* Σ C*ᵀ + α ỹ ỹᵀ) + R
 
 `α ∈ [0,1]` sets the convergence rate — the paper shows `α = 0`, `0.5` and `1`
 giving smooth through to sharp transitions after a GNSS shift (Fig. 4).
+
+The stated goal is that after inflation `ỹᵀ S'⁻¹ ỹ < 1`: the measurement is, by
+construction, no longer surprising. Sherman–Morrison gives the condition —
+writing `A = β C*ΣC*ᵀ + R`,
+
+```text
+ỹᵀ S'⁻¹ ỹ = q / (1 + αβ q) < 1/(αβ),     q = ỹᵀ A⁻¹ ỹ
+```
+
+so it holds whenever `αβ ≥ 1`, which covers `α = 1` everywhere and `α = 0.5`
+everywhere the bound is needed (`β = 2` for all `r ≥ 1`). **At `α = 0` it does
+not hold**, and cannot: with no `ỹỹᵀ` term the inflation is capped at `β = 2`,
+and `β` scales only `C*ΣC*ᵀ` and not `R`, so `r` at best halves and generally
+does less. That is a property of the parameter rather than a defect, and it is
+pinned by a test so it cannot later be mistaken for one.
 
 This is **not** the same as this project's existing recovery. Ours gates
 per-measurement and inflates `P` after repeated rejection; theirs never rejects,
@@ -380,19 +506,28 @@ rather than assuming it is free.
 `crates/drifters-eqf`, separate from `drifters-filter`, so the ESKF's dependency
 footprint and measured firmware budget are untouched.
 
-1. **Lie machinery** — `SO(3)`, `SE₂(3)`, `se(3)`/`se₂(3)`, wedge/vee, exp/log,
-   `Ad`/`ad`, `Γ`/`χ`/`Π`, and the composite group `G`. Verified against the
-   defining identities: `X exp(u) X⁻¹ = exp(Ad_X u)`, `Ad_X ad_u Ad_X⁻¹ =
-   ad_{Ad_X u}` (the paper states this commuting relation in Sec. II),
-   exp/log round trips, group axioms.
-2. **State, actions, lift** — `φ`, `ρ_*`, `Λ₁…Λ₄`, each tested against the group
-   action axioms.
-3. **Filter** — `A_t⁰`, `C*_*`, propagation and update, with every Jacobian
-   block checked against a numerical Jacobian of the corresponding map.
-4. **GCU inflation** — self-contained, testable in isolation.
-5. **Backend trait** — extract the common interface once both estimators exist
+1. **Lie machinery** — done, `lie.rs`. `SO(3)`, `SE₂(3)`, `se(3)`/`se₂(3)`,
+   wedge/vee, exp/log, `Ad`/`ad`, `Γ`/`χ`/`Π`. Verified against the defining
+   identities: `X exp(u) X⁻¹ = exp(Ad_X u)`, `Ad_X ad_u Ad_X⁻¹ = ad_{Ad_X u}`
+   (the paper states this commuting relation in Sec. II), exp/log round trips,
+   group axioms.
+2. **Symmetry group, state, actions** — done, `group.rs`. The composite `G`, its
+   product, inverse and `21 × 21` Adjoint, `φ` and `ρ_*`, and the three output
+   maps. The Adjoint is checked against a numerical conjugation of
+   `X exp(su) X⁻¹`, all 21 columns, which is what makes it usable as ground
+   truth for the linearisation.
+3. **Lift** — done, `lift.rs`. `Λ₁…Λ₄` against the defining property
+   `D_E|_id φ_ξ(E)[Λ] = f_u(ξ)`, plus the three "this state must not move"
+   checks and a mutation test that each of `Λ₂`, `Λ₃`, `Λ₄` is load-bearing.
+4. **Linearisation** — done, `linear.rs`. `A_t⁰` and `C*_m`/`C*_p`/`C*_v`, every
+   block against a central-difference Jacobian of the map it linearises.
+5. **GCU inflation** — done, `gcu.rs`. Self-contained, including where the
+   paper's `ỹᵀS'⁻¹ỹ < 1` bound stops holding.
+6. **Filter** — next. Needs a genuine group exponential (the `γ` component wants
+   `∫₀¹ Ad_{χ(exp(s u_c))} ds`, not `u_γ`), then propagation, update and reset.
+7. **Backend trait** — extract the common interface once both estimators exist
    and their shapes are known, rather than guessing it in advance.
-6. **Comparison** — local-tangent-frame adapter, then ESKF vs EqF on the same
+8. **Comparison** — local-tangent-frame adapter, then ESKF vs EqF on the same
    data, reporting the flat-Earth modelling error as its own term.
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no

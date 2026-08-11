@@ -333,10 +333,15 @@ measured firmware budget is untouched. Specification and scoping in
       `Γ`/`χ`/`Π`
 - [x] Symmetry group `G = (SE₂(3) × se(3)) ⋉ R³ × SO(3)`: product, inverse,
       actions `φ`, `ρ_m`, `ρ_p`, `ρ_v`, and the magnetometer output `h_m`
-- [ ] Lift `Λ₁…Λ₄` (Thm 4.1)
-- [ ] Linearised `A_t⁰` (10) and outputs `C*_m`, `C*_p`, `C*_v` (11–13), each
+- [x] Group Adjoint `Ad_X`, checked against a numerical conjugation of
+      `X exp(su) X⁻¹` — the ground truth the linearisation is measured against
+- [x] Lift `Λ₁…Λ₄` (Thm 4.1), against `D_E|_id φ_ξ(E)[Λ] = f_u(ξ)`
+- [x] Linearised `A_t⁰` (10) and outputs `C*_m`, `C*_p`, `C*_v` (11–13), each
       block checked against a numerical Jacobian
-- [ ] GCU innovation inflation (Sec. VI)
+- [x] GCU innovation inflation (Sec. VI)
+- [ ] Group exponential — `exp` on `G` needs `∫₀¹ Ad_{χ(exp(s u_c))} ds` for the
+      `γ` component, not the naive `u_γ`
+- [ ] Propagation, update and reset — the filter itself
 - [ ] Local-tangent-frame adapter, and the ESKF-vs-EqF comparison
 - [ ] Extract a common backend trait, once both estimators exist and their
       shapes are known
@@ -347,11 +352,13 @@ information and produces a confident wrong attitude — is the same class of
 problem M6 hit here. Held states constrained the symptom; the EqF addresses why
 the linearisation is wrong.
 
-### Two ambiguities in the source, resolved from first principles
+### Five places the source cannot be taken literally
 
-Working from the paper rather than a summary surfaced two places where the
-printed form cannot be taken literally. Both are recorded in [eqf.md](eqf.md),
-and each has a test that would have caught the wrong reading.
+Working from the paper rather than a summary surfaced five. All are recorded in
+[eqf.md](eqf.md), and each has a test that fails under the other reading. Two
+are almost certainly artefacts of extracting block matrices from a PDF, one is a
+notational slip, and two are places where the paper says something narrower than
+a first reading suggests.
 
 - **Table II's `Ad_{C_X}` must be `Ad_{χ(C_X)}`.** As printed it does not
   type-check — `γ ∈ se(3)` is a 6-vector against a `9 × 9` adjoint — and the
@@ -361,6 +368,41 @@ and each has a test that would have caught the wrong reading.
   defect is exactly `A_Yᵀ[δ_Y × (A_Xᵀω) − δ_Y × ω]`, and the test asserts that
   term rather than merely asserting inequality — a check on the analysis, not
   just on the code.
+- **`₂A` in (10) omits the bias correction.** It is built from the raw input
+  `W`, where the derivation gives `ad_{γ̂ + Π(Ad_Ĉ[W] + G)} = ad_{Ad_B̂[Π(Λ̂₁)]}`
+  — the `se(3)` part of the lift *at the estimate*. The paper's own `₃A` is the
+  argument: `₃A = Âω + γ̂_ω` **is** the bias-corrected rate, and one filter
+  cannot apply the correction in one block and skip it in the other.
+- **`C*_m`'s block belongs on the magnetometer columns**, not the lever-arm
+  ones. A magnetometer cannot observe a GNSS antenna offset, and the error
+  output is `ᴳm + ᴳm^ ε₄` exactly — the attitude terms cancel against the
+  calibration terms.
+- **`C*_v`'s skew argument needs `(Â ᴵω)^ δ̂`**, not `ᴵω^ δ̂`. The trailing
+  `ᴵω^` block *is* body-frame and is confirmed as such; the skew's argument is
+  `ρ_v(X̂⁻¹, 0, ω)`, which only reduces to `ᴳν` at consistency with the `Â`
+  present. Without it the `½` average is a bias rather than a second-order
+  refinement.
+
+**How they were found.** Nothing here was transcribed. Each matrix was derived
+from its definition and then checked, entry by entry, against a
+central-difference Jacobian of the map it claims to linearise — two independent
+routes, one algebra and one arithmetic, over the actual group actions. `₂A`
+failed on the first run by exactly `ad_γ̂`. Three of the five were caught that
+way; the other two do not type-check or do not compose, which is its own kind of
+test.
+
+### A sixth thing that is not an error: the lift is not equivariant
+
+Easy to assume otherwise. An equivariant lift would satisfy
+`Λ(φ(X,ξ), ψ_X(u)) = Ad_{X⁻¹}[Λ(ξ,u)]`, and two thirds of it does — input and
+bias enter only through `u − b`, so the input must transform exactly as the bias
+does, `ψ(X, u) = Ad^∨_{B⁻¹}(u − γ)`. The position column does not, and would
+need `a_C = (ω − b_ω) × b_C`, a condition on the group element rather than an
+identity.
+
+Theorem 4.1 claims only that `Λ` *is* a lift, so nothing is wrong. But it is
+the reason `A_t⁰` depends on `X̂` instead of being constant, which is worth
+having pinned rather than assumed.
 
 ### Note: the small-angle branch
 

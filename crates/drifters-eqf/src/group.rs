@@ -32,8 +32,9 @@
 //! check that the mapping is the right way round.
 
 use drifters_core::math::{Mat3, Vec3};
+use drifters_core::F;
 
-use crate::lie::{Se23, Se3, Se3Tangent};
+use crate::lie::{Se23, Se23Tangent, Se3, Se3Tangent};
 
 /// An element of the symmetry group.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,6 +104,109 @@ impl Symmetry {
     }
 }
 
+/// A tangent vector of the symmetry group at the identity — the Lie algebra
+/// `g ≅ R²¹`.
+///
+/// The component order is the one every matrix in [`crate::linear`] is written
+/// in, and it is the paper's:
+///
+/// ```text
+///  0.. 9   se₂(3), paired with C   — (attitude, velocity, position)
+///  9..15   se(3),  paired with γ   — (gyro bias, accel bias)
+/// 15..18   R³,     paired with δ   — GNSS lever arm
+/// 18..21   so(3),  paired with E   — magnetometer calibration
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Algebra {
+    /// `se₂(3)` part, the extended pose.
+    pub c: Se23Tangent,
+    /// `se(3)` part, the IMU biases.
+    pub gamma: Se3Tangent,
+    /// `R³` part, the lever arm.
+    pub delta: Vec3,
+    /// `so(3)` part as a rotation vector, the magnetometer calibration.
+    pub e: Vec3,
+}
+
+impl Algebra {
+    /// The zero element.
+    pub const ZERO: Self = Self {
+        c: Se23Tangent::ZERO,
+        gamma: Se3Tangent::ZERO,
+        delta: Vec3::ZERO,
+        e: Vec3::ZERO,
+    };
+
+    /// Pack into 21 elements in the order documented on the type.
+    pub fn to_array(self) -> [F; 21] {
+        let mut out = [0.0; 21];
+        out[0..9].copy_from_slice(&self.c.to_array());
+        out[9..15].copy_from_slice(&self.gamma.to_array());
+        out[15..18].copy_from_slice(&self.delta.to_array());
+        out[18..21].copy_from_slice(&self.e.to_array());
+        out
+    }
+
+    /// Unpack from 21 elements.
+    pub fn from_array(v: &[F; 21]) -> Self {
+        let mut c = [0.0; 9];
+        c.copy_from_slice(&v[0..9]);
+        let mut g = [0.0; 6];
+        g.copy_from_slice(&v[9..15]);
+        Self {
+            c: Se23Tangent::from_array(c),
+            gamma: Se3Tangent::from_array(g),
+            delta: Vec3::new(v[15], v[16], v[17]),
+            e: Vec3::new(v[18], v[19], v[20]),
+        }
+    }
+}
+
+impl Symmetry {
+    /// The group Adjoint `Ad_X : g → g`, applied without forming a `21 × 21`.
+    ///
+    /// Derived from the product of Table II by differentiating
+    /// `X exp(s u) X⁻¹` at `s = 0`:
+    ///
+    /// ```text
+    /// Ad_X[u] = ( Ad_C u_c,
+    ///             ad_γ[Ad_B Π(u_c)] + Ad_B u_γ,
+    ///             δ × (A u_c,ω) + A u_δ,
+    ///             E u_e )
+    /// ```
+    ///
+    /// The cross-terms in the second and third components are the semi-direct
+    /// product showing itself: `γ` and `δ` are carried by `C`, so a `C`-direction
+    /// perturbation moves them.
+    pub fn adjoint_apply(&self, u: Algebra) -> Algebra {
+        let a = self.a();
+        let b = self.b();
+        Algebra {
+            c: self.c.adjoint_apply(u.c),
+            gamma: self.gamma.bracket(b.adjoint_apply(u.c.pi())) + b.adjoint_apply(u.gamma),
+            delta: self.delta.cross(a * u.c.omega) + a * u.delta,
+            e: self.e * u.e,
+        }
+    }
+}
+
+/// A smooth curve through the identity with `dE/dh|₀ = u`.
+///
+/// This is **not** the group exponential — the `γ` component of a genuine
+/// `exp` needs `∫₀¹ Ad_{χ(exp(s u_c))} ds`, not `h u_γ`. It is exact to first
+/// order at `h = 0`, which is all a derivative depends on, so it is what the
+/// numerical-Jacobian tests differentiate along. Using it for a filter update
+/// would be a first-order retraction and is deliberately not offered.
+#[cfg(test)]
+pub(crate) fn curve(u: Algebra, h: F) -> Symmetry {
+    Symmetry {
+        c: Se23::exp(u.c.scaled(h)),
+        gamma: Se3Tangent::new(u.gamma.omega * h, u.gamma.nu * h),
+        delta: u.delta * h,
+        e: drifters_core::math::Quat::from_rotation_vector(u.e * h).to_dcm(),
+    }
+}
+
 /// A point of the state manifold `M = SO(3) × R³ × R³ × R³ × R³ × R³ × SO(3)`.
 ///
 /// Grouped as the paper does: the extended pose, the IMU biases, the GNSS lever
@@ -162,6 +266,47 @@ pub fn output_direction(xi: &State, magnetic_north: Vec3) -> Vec3 {
 #[inline]
 pub fn act_direction(x: &Symmetry, y: Vec3) -> Vec3 {
     x.e.transpose() * y
+}
+
+/// The GNSS position configuration output `h_p(ξ) = Rᵀ(π − (p + R t))`,
+/// equation (3).
+///
+/// `pi` is the *constructed* measurement `ᴳπ = ᴳp + ᴳR ᴵt` — that is, the raw
+/// GNSS antenna position. The output is identically zero at the true state, so
+/// what the filter actually observes is how far this is from zero at the
+/// estimate.
+///
+/// Holding `pi` fixed, this is equivariant with [`act_position`]:
+/// `h_p(φ(X,ξ)) = ρ_p(X, h_p(ξ))`, which
+/// `the_position_output_is_equivariant` checks.
+#[inline]
+pub fn output_position(xi: &State, pi: Vec3) -> Vec3 {
+    xi.pose.rotation.transpose() * (pi - (xi.pose.position + xi.pose.rotation * xi.lever))
+}
+
+/// The GNSS velocity configuration output `h_v(ξ) = Rᵀ(ν − (v + R ω^ t))`,
+/// equation (4).
+///
+/// `nu` is the constructed measurement `ᴳν = ᴳv + ᴳR ᴵω^ ᴵt`. Extending the
+/// configuration output to velocity is one of the paper's three contributions
+/// and is what makes the linearisation error of the output map third order
+/// rather than second.
+///
+/// # Equivariant only where it needs to be
+///
+/// Unlike [`output_position`], this is *not* equivariant with [`act_velocity`]
+/// for a general group element: the two differ by `Aᵀ[(Aω − ω)^(t − δ)]`, and
+/// no redefinition of `ρ_v` removes it — the same input-dependence documented
+/// on [`act_velocity`], seen from the output side.
+///
+/// It does not need to be. The linearisation is taken at the identity, where
+/// `A = I` and the obstruction vanishes identically, and the transported
+/// measurement agrees with the predicted output whenever the estimate is
+/// consistent — which is all `C*_v` asks of it.
+#[inline]
+pub fn output_velocity(xi: &State, nu: Vec3, omega: Vec3) -> Vec3 {
+    xi.pose.rotation.transpose()
+        * (nu - (xi.pose.velocity + xi.pose.rotation * omega.cross(xi.lever)))
 }
 
 /// The position output action `ρ_p(X, y) = Aᵀ(y − b + δ)`.
@@ -496,6 +641,65 @@ mod tests {
         let v = act_velocity(&x, Vec3::ZERO, Vec3::ZERO);
         assert_relative_eq!(v.x, -7.0, epsilon = 1e-12);
         assert_relative_eq!(v.y, 0.0, epsilon = 1e-12);
+    }
+
+    /// `Ad_X[u] = d/ds|₀ X exp(su) X⁻¹`, against central differences.
+    ///
+    /// Worth having on its own rather than only implicitly through
+    /// [`crate::linear`]: the two cross-terms — `γ` being carried by `C`, and
+    /// `δ` by `A` — are exactly the parts a hand derivation drops, and this
+    /// catches that without any of the filter's machinery in the way.
+    #[test]
+    fn the_adjoint_matches_a_numerical_conjugation() {
+        let g = sample();
+        let x = g[1];
+        let h = 1e-6;
+
+        for k in 0..21 {
+            let mut basis = [0.0; 21];
+            basis[k] = 1.0;
+            let u = Algebra::from_array(&basis);
+
+            let step = |s: F| {
+                let p = x.compose(&curve(u, s)).compose(&x.inverse());
+                // Read the tangent back off the curve. The C and E components
+                // are group elements, so they log; γ and δ are already linear.
+                Algebra {
+                    c: p.c.log(),
+                    gamma: p.gamma,
+                    delta: p.delta,
+                    e: Quat::from_dcm(&p.e).to_rotation_vector(),
+                }
+                .to_array()
+            };
+            let (fwd, back) = (step(h), step(-h));
+            let analytic = x.adjoint_apply(u).to_array();
+            for i in 0..21 {
+                let numeric = (fwd[i] - back[i]) / (2.0 * h);
+                assert!(
+                    (numeric - analytic[i]).abs() <= 1e-6 * (1.0 + analytic[i].abs()),
+                    "Ad[{i},{k}]: numeric {numeric} vs analytic {}",
+                    analytic[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_position_output_is_equivariant() {
+        // h_p(φ(X,ξ)) = ρ_p(X, h_p(ξ)), holding the constructed measurement
+        // fixed. Unlike the velocity output this one holds exactly, so it is
+        // asserted rather than bounded.
+        let pi = Vec3::new(180.4, -260.6, -35.2);
+        for xi in states() {
+            for x in sample() {
+                let via_state = output_position(&act_state(&x, &xi), pi);
+                let via_output = act_position(&x, output_position(&xi, pi));
+                for i in 0..3 {
+                    assert_relative_eq!(via_state[i], via_output[i], epsilon = 1e-9);
+                }
+            }
+        }
     }
 
     #[test]
