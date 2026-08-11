@@ -180,6 +180,22 @@ impl core::ops::Sub for Se3Tangent {
     }
 }
 
+impl core::ops::Neg for Se3Tangent {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self::new(-self.omega, -self.nu)
+    }
+}
+
+impl core::ops::Neg for Se23Tangent {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self::new(-self.omega, -self.nu, -self.rho)
+    }
+}
+
 impl core::ops::Add for Se23Tangent {
     type Output = Self;
     #[inline]

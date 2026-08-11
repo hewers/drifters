@@ -197,6 +197,35 @@ Auxiliary maps: `Γ: SE₂(3) → SO(3)` takes the rotation block; `χ: SE₂(3)
 takes rotation plus the first translation column; `Π: se₂(3) → se(3)` drops the
 third column.
 
+### Two things the source leaves ambiguous
+
+Both were resolved from first principles rather than guessed, and both have a
+test that would have caught the other reading.
+
+**The product's adjoint is over `SE(3)`, not `SE₂(3)`.** Table II writes
+`γ_X + Ad_{C_X}[γ_Y]`, which does not type-check: `γ ∈ se(3)` is a 6-vector and
+`Ad_{SE₂(3)}` is `9 × 9`. The inverse in the same table uses `Ad_{B⁻¹}`, and the
+group axioms settle it — `X X⁻¹ = e` requires `Ad_? Ad_{B⁻¹} = I`, so
+`Ad_? = Ad_B = Ad_{χ(C)}`.
+
+**`ρ_v` is not a single group action.** It depends on the angular-rate input,
+which the group does not transform, so
+
+```text
+ρ_v(Y, ρ_v(X, y, ω), ω) − ρ_v(X·Y, y, ω) = A_Yᵀ[δ_Y × (A_Xᵀω) − δ_Y × ω]
+```
+
+which vanishes only when `A_X` fixes `ω`. It is a family of actions
+parameterised by the input. `ρ_m` and `ρ_p` have no input dependence and do
+compose.
+
+This is not a defect in the paper. What the filter needs is **equivariance of
+the output map**, `h(φ(X, ξ)) = ρ(X, h(ξ))`, and Sec. III sets
+`h_p(ξ) = h_v(ξ) = 0` by folding the raw measurement into the constructed
+vectors `π` and `ν`. The content of the position and velocity measurements is
+therefore in the linearised `C*` of (11)–(13), not in a composition law. `h_m`
+*is* a genuine map to `S²`, and its equivariance is checked directly.
+
 ## Lift (Thm 4.1, equations 6–9)
 
 ```text

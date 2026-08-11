@@ -331,8 +331,8 @@ measured firmware budget is untouched. Specification and scoping in
       stated
 - [x] Lie machinery: `SE₂(3)`, `se(3)`/`se₂(3)`, wedge/vee, exp/log, `Ad`/`ad`,
       `Γ`/`χ`/`Π`
-- [ ] Symmetry group `G = (SE₂(3) × se(3)) ⋉ R³ × SO(3)`: product, inverse,
-      actions `φ`, `ρ_m`, `ρ_p`, `ρ_v`
+- [x] Symmetry group `G = (SE₂(3) × se(3)) ⋉ R³ × SO(3)`: product, inverse,
+      actions `φ`, `ρ_m`, `ρ_p`, `ρ_v`, and the magnetometer output `h_m`
 - [ ] Lift `Λ₁…Λ₄` (Thm 4.1)
 - [ ] Linearised `A_t⁰` (10) and outputs `C*_m`, `C*_p`, `C*_v` (11–13), each
       block checked against a numerical Jacobian
@@ -346,6 +346,21 @@ observability* under prolonged static conditions, where an EKF gains spurious
 information and produces a confident wrong attitude — is the same class of
 problem M6 hit here. Held states constrained the symptom; the EqF addresses why
 the linearisation is wrong.
+
+### Two ambiguities in the source, resolved from first principles
+
+Working from the paper rather than a summary surfaced two places where the
+printed form cannot be taken literally. Both are recorded in [eqf.md](eqf.md),
+and each has a test that would have caught the wrong reading.
+
+- **Table II's `Ad_{C_X}` must be `Ad_{χ(C_X)}`.** As printed it does not
+  type-check — `γ ∈ se(3)` is a 6-vector against a `9 × 9` adjoint — and the
+  group axioms fix the intended operator uniquely.
+- **`ρ_v` is a family of actions, not one action.** It depends on the
+  angular-rate input, which the group does not transform. The composition
+  defect is exactly `A_Yᵀ[δ_Y × (A_Xᵀω) − δ_Y × ω]`, and the test asserts that
+  term rather than merely asserting inequality — a check on the analysis, not
+  just on the code.
 
 ### Note: the small-angle branch
 

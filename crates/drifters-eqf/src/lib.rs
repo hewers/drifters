@@ -25,4 +25,5 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod group;
 pub mod lie;
