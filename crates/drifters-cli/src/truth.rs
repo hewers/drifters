@@ -2,10 +2,9 @@
 //!
 //! Every accuracy number this project reports so far is a **prediction
 //! residual**: the filter's predicted antenna position against the GNSS fix it
-//! is about to consume. That is an honest open-loop check, and it is not the
-//! same thing as error against truth — the fixes carry their own error, and a
-//! filter that tracked them perfectly would report zero residual while still
-//! being wrong by however much the fixes were.
+//! is about to consume. That is a valid open-loop check but not error against
+//! truth: the fixes carry their own error, so a filter tracking them perfectly
+//! would report zero residual while being wrong by whatever the fixes were.
 //!
 //! This module closes that gap. It is deliberately **not** tied to any one
 //! dataset: a truth trajectory is a time-ordered sequence of geodetic positions,

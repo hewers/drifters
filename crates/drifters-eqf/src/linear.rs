@@ -2,19 +2,18 @@
 //!
 //! # Everything here is checked against a numerical Jacobian
 //!
-//! The matrices in the source are printed as block arrays, and block arrays do
-//! not survive extraction from a PDF: a `0₃ₓ₆` and a `0₆ₓ₆` are one glyph
-//! apart, and a misplaced block produces a filter that runs, converges on easy
-//! data and is quietly wrong on hard data. So none of these were transcribed.
+//! The matrices in the source are printed as block arrays, which do not survive
+//! extraction from a PDF: `0₃ₓ₆` and `0₆ₓ₆` differ by one glyph, and a misplaced
+//! block yields a filter that runs, converges on easy data and is wrong on hard
+//! data. None of these were transcribed.
 //!
-//! Each was derived from the definition and then checked, entry by entry,
-//! against a central-difference Jacobian of the map it claims to linearise. The
-//! two routes are independent — one is algebra on paper, the other is arithmetic
-//! on the actual [`crate::group`] actions — and the tests fail if they disagree.
+//! Each was derived from its definition and then checked entry by entry against
+//! a central-difference Jacobian of the map it linearises. The two routes are
+//! independent, one algebraic and one arithmetic over the actual
+//! [`crate::group`] actions, and the tests fail if they disagree.
 //!
-//! Where the derivation and the printed equation agree, that agreement is
-//! itself worth something, and it is noted below. Where they do not, the
-//! disagreement is stated with the argument that settles it.
+//! Agreements with the printed equation are noted below, as are the
+//! disagreements, each with the argument that settles it.
 //!
 //! # Coordinates
 //!
@@ -36,10 +35,10 @@
 //! ε̇ = A_t⁰ ε + O(|ε|²),   A_t⁰ = Ad_X̂ · ∂/∂ε [ Λ(φ(X̂, ψ(ε)), u) ]|₀
 //! ```
 //!
-//! where `ψ(ε)` is the state at normal coordinates `ε`. That form is what
-//! `the_state_matrix_matches_a_numerical_jacobian` differentiates. It also says
-//! plainly why `A_t⁰` depends on `X̂` — see the note on the lift not being
-//! equivariant in [`crate::lift`].
+//! where `ψ(ε)` is the state at normal coordinates `ε`. This is the form
+//! `the_state_matrix_matches_a_numerical_jacobian` differentiates, and it shows
+//! why `A_t⁰` depends on `X̂`: see the note on the lift not being equivariant in
+//! [`crate::lift`].
 
 use drifters_core::math::{Mat3, Matrix, Vec3};
 
@@ -417,7 +416,7 @@ mod tests {
     /// The true state is `ξ(ε) = φ(X̂, ψ(ε))`, the measurement is what a real
     /// sensor would return from it, and the innovation is however that sensor's
     /// update forms it. Nothing about the output map's own coordinates enters,
-    /// which is the point: this is the definition the filter needs.
+    /// which is the definition the filter requires.
     ///
     /// The observer is deliberately **not** the identity. At the identity a
     /// body-frame rate and a global-frame rate are the same thing, and a

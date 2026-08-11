@@ -8,8 +8,8 @@
 //! A plotting crate would pull in font handling, colour management and often a
 //! rasteriser to draw three panels. SVG text and polylines are a few dozen
 //! lines, the output is diffable in review, it scales on a README, and the
-//! dependency count of this workspace stays honest. If the plots ever need to
-//! be interactive or publication-grade, that is the point to reconsider.
+//! workspace dependency count is unaffected. Reconsider if the plots ever need
+//! to be interactive or publication-grade.
 
 use std::fmt::Write as _;
 
@@ -314,10 +314,10 @@ pub struct Comparison<'a> {
     pub log_error: bool,
     /// Lower bound for the decade axis, in metres.
     ///
-    /// Stated by the caller because it is a judgement about the application,
-    /// not about the data: the KF-GINS run touches `10⁻⁴ m` residuals, and an
-    /// axis honest enough to include them spends half its height on a region
-    /// where nothing is distinguishable from nothing.
+    /// Supplied by the caller because it is a judgement about the application
+    /// rather than about the data: the KF-GINS run touches `10⁻⁴ m` residuals,
+    /// and an axis extending that far spends half its height on a region where
+    /// the traces are indistinguishable.
     pub error_floor: f64,
     /// The traces, drawn in order so later ones sit on top.
     pub series: Vec<Series<'a>>,

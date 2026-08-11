@@ -18,8 +18,8 @@ Equation numbers below are APEqF's.
 
 ## What the EqF actually changes
 
-Worth stating before the mechanics, because it is the reason any of this is
-worth implementing.
+Stated before the mechanics, since it is the reason for implementing any of
+it.
 
 **The linearisation origin is fixed, not the moving estimate.** An EKF
 linearises about wherever the estimate currently is, so an estimate that has
@@ -44,7 +44,7 @@ position-dependent gravity is what would forfeit it.
 **It works on homogeneous spaces, not only Lie groups.** That is what allows a
 magnetometer output living on `S²` to be handled in the same framework.
 
-## Why it is worth having
+## Motivation
 
 The paper's motivating experiment is the failure mode this project already hit
 from the other direction. Under prolonged static conditions an EKF suffers
@@ -56,7 +56,7 @@ M6 found the same class of problem here — accelerometer bias and tilt trading
 places along an unobservable direction — and fixed it by *constraining* the
 direction with held states. The EqF attacks the reason the linearisation is
 wrong in the first place. That makes it a genuinely different point in the
-design space rather than a re-implementation, which is why it is worth the work.
+design space rather than a re-implementation.
 
 ---
 
@@ -226,7 +226,7 @@ which vanishes only when `A_X` fixes `ω`. It is a family of actions
 parameterised by the input. `ρ_m` and `ρ_p` have no input dependence and do
 compose.
 
-This is not a defect in the paper. What the filter needs is **equivariance of
+The paper is not at fault here. What the filter requires is **equivariance of
 the output map**, `h(φ(X, ξ)) = ρ(X, h(ξ))`, and Sec. III sets
 `h_p(ξ) = h_v(ξ) = 0` by folding the raw measurement into the constructed
 vectors `π` and `ν`. The content of the position and velocity measurements is
@@ -261,8 +261,8 @@ them at all.
 
 ### The lift is not an equivariant lift
 
-Worth stating because it is easy to assume otherwise, and because it explains a
-later shape. An equivariant lift would satisfy
+Easy to assume otherwise, and it explains a later result. An equivariant lift
+would satisfy
 `Λ(φ(X,ξ), ψ_X(u)) = Ad_{X⁻¹}[Λ(ξ,u)]` for some action `ψ` on inputs. Two thirds
 of it does: input and bias enter only through `u − b`, so the input has to
 transform exactly as the bias does,
@@ -341,8 +341,7 @@ C* = ∂(innovation)/∂ε,    ξ(ε) = φ(X̂, ψ(ε))
 ```
 
 — differentiate the innovation the update is handed, as a function of the true
-state, at a **non-identity** `X̂`. That last condition is not a detail; see
-below.
+state, at a **non-identity** `X̂`. The last condition matters; see below.
 
 The `½` average is between the output at the error origin and the raw
 measurement transported into the error frame by `ρ(X̂⁻¹, ·)`. The two coincide
@@ -396,8 +395,8 @@ Those tests differentiated the output map at the **identity** observer — where
 `Â = I` and a body-frame rate is indistinguishable from a global-frame one. The
 printed form passed. It surfaced instead in the closed loop, as a lever arm
 converging to `0.44 m` of error while its own covariance claimed `0.045 m`: an
-estimate that was not merely wrong but confidently wrong, which is the exact
-failure mode the EqF exists to avoid.
+an estimate that was confidently wrong, which is the failure mode the EqF
+exists to avoid.
 
 The fix to the tests is to differentiate the **innovation the update is
 handed**, as a function of the true state, at a non-identity `X̂` — the
@@ -405,11 +404,10 @@ definition above. Correcting the matrix moved the 300-second closed-loop
 position error from `0.45 m` to `4.6 mm` and the lever arm from `0.44 m` to
 `5 mm`, with the covariance consistent afterwards.
 
-Two lessons worth keeping. A numerical Jacobian is only as good as the point it
-is evaluated at, and identity elements are the worst possible choice precisely
-because they make distinct expressions agree. And a filter whose covariance
-disagrees with its own error by a factor of ten is reporting a modelling bug,
-not bad luck.
+Two conclusions. A numerical Jacobian is only as good as the point it is
+evaluated at, and identity elements are the worst available choice because they
+make distinct expressions agree. And a filter whose covariance disagrees with
+its own error by a factor of ten is reporting a modelling error, not noise.
 
 ## Measured: the EqF on the KF-GINS dataset
 
@@ -449,7 +447,7 @@ transient forever — which is why both numbers are quoted. A NIS of 292 says th
 same thing from the other side: there is real unmodelled error here, and the
 filter is right to be surprised by it.
 
-### The lever arm calibrates itself, which is the part that is not a comparison
+### Lever-arm self-calibration, which is not a comparison
 
 Started at **zero**, with the ESKF handed `antlever` from the YAML:
 
@@ -478,7 +476,7 @@ The gap is an **Earth model**, not an estimator — nothing in the table
 distinguishes the EqF's linearisation from the ESKF's, because the modelling
 error is three orders of magnitude larger than either.
 
-The honest venue is consumer-grade hardware, where the paper's assumptions hold.
+The appropriate venue is consumer-grade hardware, where the assumptions hold.
 That is the next section.
 
 ## Measured: the EqF on a GSDC phone trace
@@ -506,7 +504,7 @@ worst-case excursion is roughly twice as large.
 
 ### GCU made it worse, monotonically
 
-This is the result worth keeping. Sweeping the generalised-covariance-union
+This is the substantive result. Sweeping the generalised-covariance-union
 convergence rate `α` — the parameter that replaces χ² rejection, and the
 paper's own Sec. VI contribution:
 
@@ -529,7 +527,7 @@ filter has drifted* and the measurement is the only thing that can correct it,
 because the inflation then suppresses the correction in precisely the direction
 it is needed. On a phone trace through an urban stretch, it is the second.
 
-Two things follow. `α` is not a robustness dial that is safe to turn up; it
+Two consequences. `α` is not a robustness dial that is safe to turn up; it
 encodes an assumption about *which side* the surprise is coming from. And the
 ESKF's χ² gate is not simply the cruder option — rejecting a measurement outright
 leaves the covariance free to grow, so the next measurement is trusted more,
@@ -601,7 +599,7 @@ Note what the paper spends those six dimensions on instead: GNSS lever arm and
 magnetometer rotation. That is a deliberate allocation — extrinsics are constant
 and observable under ordinary motion; scale factors drift and are not.
 
-If they are wanted later, the honest way is to append them as **explicitly
+If they are wanted later, the defensible route is to append them as **explicitly
 non-equivariant** states with a trivial group action, forfeiting the guarantee
 for those states while keeping it for the navigation states, and then measure
 whether they earn their place. Not first.
@@ -627,7 +625,7 @@ top-left block of `B`, which supplies `−ω_ie^ v` where `−2 ω_ie^ v` is req
 The naive embedding does not fit. In an **inertial frame there is no Coriolis
 term at all**, and the dynamics recover the paper's structure exactly — which
 says the difficulty is the rotating frame rather than Earth rotation itself.
-Whether a clean ECEF construction exists in the literature is worth checking
+Whether a clean ECEF construction exists in the literature should be checked
 against refs [11]–[14] and Barrau & Bonnabel before either adopting or
 dismissing it.
 
@@ -635,7 +633,7 @@ dismissing it.
 gravity enters as `(G − N)T` with `G` fixed. Position-dependent gravity `g(p)`
 makes that term depend on the state, so it is no longer of the form `T·A + B·T`
 and group-affineness is lost. Since exactness is the entire reason to build an
-EqF, that is not a trade to make casually.
+EqF, this trade should not be made casually.
 
 The practical route keeps the structure: hold gravity **piecewise constant**,
 re-evaluated at low rate outside the filter. Over the KF-GINS trajectory —

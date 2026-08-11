@@ -98,7 +98,7 @@ prediction was that heading was the missing constraint; adding a velocity
 observation is precisely what makes heading observable, and it moved the result
 from 1.7 % to 34.7 %.
 
-### A tension worth stating
+### A tension between the two tunings
 
 The most *accurate* setting is not the most statistically *consistent* one. At
 `--imu-scale 100` the NIS ratio is 0.89 — nearly ideal — but horizontal error is

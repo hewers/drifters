@@ -27,9 +27,9 @@ The single ratio that separates those two outcomes is
 Earth rate / gyroscope bias stability,     Earth rate = 15.04 °/h
 ```
 
-The question this ADR settles is where the thresholds fall, and what changes at
-each one. It is not simply "model more at higher grade": the *mechanism* by
-which Earth rotation enters the estimator changes at navigation grade.
+This ADR settles where the thresholds fall and what changes at each one. The
+answer is not monotonic in sensor quality: at navigation grade the *mechanism*
+by which Earth rotation enters the estimator changes, not just the magnitude.
 
 ## Decision
 
@@ -60,8 +60,9 @@ that accommodates a rotating frame natively, which is a re-derivation rather
 than an extension, and is out of scope for M10.
 
 For gravity, in every band: **normal gravity, held piecewise constant and
-re-evaluated outside the filter.** `Anchor::rebase` performs the re-evaluation.
-Deflection of the vertical is not modelled in either estimator; see
+re-evaluated outside the filter.** `Anchor::with_gravity_at` performs the
+re-evaluation, keeping the origin fixed so no state or covariance transformation
+is needed. Deflection of the vertical is not modelled in either estimator; see
 Consequences.
 
 ## Why input-side compensation cannot be extended upward
@@ -95,17 +96,17 @@ just subtracted out, and the linearisation does not know the subtraction
 happened. The construction is circular, and the circularity is invisible in the
 covariance.
 
-At tactical grade this is an acceptable trade — 7 arcmin of static heading is
-not the reason anyone buys a Leador-A15, and GNSS motion supplies heading
-anyway. At navigation grade it discards the primary capability.
+At tactical grade this is an acceptable trade: 7 arcmin of static heading is not
+the reason a Leador-A15 is specified, and vehicle motion under GNSS supplies
+heading. At navigation grade it discards the primary capability.
 
 ## Consequences
 
-**A grade check is available and cheap.** `earth_rate_ratio` and
-`FlatEarthVerdict` in `drifters_eqf::local` compute the ratio and return which
-band a sensor falls in, so the threshold is a function call rather than
-folklore. Both endpoints measured in this repository are pinned as tests: 557×
-for the Leador-A15, 0.75× for a phone-grade part.
+**The grade check is a function call.** `earth_rate_ratio` and
+`flat_earth_verdict` in `drifters_eqf::local` return the ratio and the band, so
+the thresholds are not carried in prose. Both endpoints measured in this
+repository are pinned as tests: 557× for the Leador-A15, 0.75× for a phone-grade
+part. `drifters eqf` prints the verdict for the configured IMU.
 
 **Deflection of the vertical is the ceiling for both estimators.** The real
 gravity vector departs from the ellipsoid normal by 5–50 arcsec in ordinary
@@ -135,10 +136,10 @@ than the `0.173 m` tangent-plane error already present at that range.
 
 ## Alternatives considered
 
-**Extend `compensate_earth` with higher-order terms.** Rejected. The problem at
-navigation grade is not accuracy of the correction, it is that the correction
-occupies the channel the estimator needs. More terms make the circularity more
-precise, not less circular.
+**Extend `compensate_earth` with higher-order terms.** Rejected. The failure at
+navigation grade is structural rather than numerical: the correction occupies
+the channel the estimator needs. Additional terms improve the accuracy of the
+subtraction without removing the circularity.
 
 **Add `ω_ie` to the EqF's lift and linearisation directly.** This is the
 re-derivation, not an increment. The lift (6)–(9) and the linearised `A_t⁰` are
@@ -148,13 +149,13 @@ not report. If it is done, it is done from the group up.
 
 **Adopt a two-frame group.** Barrau and Bonnabel's work on the geometry of
 navigation problems addresses rotating-frame navigation with an extended group
-construction, which is the shape of what this band needs. Not adopted here
-because it has not been read closely enough to commit to, and asserting that it
-solves this is not the same as having checked. It is the first thing to read if
-the navigation-grade band is ever taken on.
+construction, which matches the shape of this requirement. Not adopted: it has
+not been read closely enough to commit to, and this ADR does not assert that it
+solves the problem. It is the starting point if the navigation-grade band is
+taken on.
 
-**Use the ESKF above tactical grade and stop there.** This is the current
-answer, and it is a reasonable permanent answer. The ESKF already models Earth
-rotation correctly and carries the gyrocompassing channel. The EqF's advantages
-— fixed linearisation origin, self-calibrating extrinsics — are real but do not
-outweigh losing true-north determination on hardware that can do it.
+**Use the ESKF above tactical grade and stop there.** The current answer, and
+defensible as a permanent one. The ESKF models Earth rotation correctly and
+carries the gyrocompassing channel. The EqF's advantages, a fixed linearisation
+origin and self-calibrating extrinsics, do not outweigh losing true-north
+determination on hardware capable of it.

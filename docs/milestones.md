@@ -211,7 +211,7 @@ of real driving, with per-axis bias below 1 mm. See
 
 ### Notes
 
-`nav-types` turned out to be worth more as a **cross-check** than as a
+`nav-types` proved more useful as a **cross-check** than as a
 dependency: its geodetic conversions are an independent implementation, and
 `drifters-core`'s agree with them to the millimetre in both directions. Those
 assertions live in `crates/drifters-interop/src/nav_types.rs` and are the
@@ -390,7 +390,7 @@ scaling. No Earth compensation: a phone gyro drifts at ~20 °/h, so Earth rate i
 
 Both beat the phone's own solution; the ESKF is 16 % ahead.
 
-**GCU made it worse, monotonically** — and that is the finding worth keeping.
+**GCU made it worse, monotonically.** That is the substantive finding.
 Sweeping the generalised-covariance-union rate `α`, the parameter that replaces
 χ² rejection: 4.85 m at `α = 0`, 11.3 at 0.25, 18.8 at 0.5, **27.4 m at
 `α = 1`** — four times worse than raw GNSS. GCU inflates the innovation
@@ -405,7 +405,7 @@ about which side the surprise comes from.
 horizontal axes. That is the paper's headline capability on data it was never
 tuned for, and something the ESKF cannot do at all.
 
-**Why it is worth having.** The paper's motivating failure — *false
+**Motivation.** The paper's motivating failure — *false
 observability* under prolonged static conditions, where an EKF gains spurious
 information and produces a confident wrong attitude — is the same class of
 problem M6 hit here. Held states constrained the symptom; the EqF addresses why
@@ -502,7 +502,7 @@ everything needed; it just aggregates it away.
 - [x] Figure generated from the KF-GINS run, committed, shown in the README
 
 SVG rather than PNG, and hand-emitted rather than via a plotting library: it
-keeps the dependency count honest, the output diffable in review, and it scales
+leaves the dependency count unchanged, keeps the output diffable in review, and scales
 on a README. No plotting crate earns its place for three panels.
 
 ---
@@ -551,7 +551,7 @@ time-ordered sequence of geodetic positions, whether it came from Kaggle,
 post-processed RTK, a total station or a simulator. That makes it more useful
 than a GSDC-specific path, and it is fully testable without any dataset at all.
 
-Two properties worth calling out, both tested:
+Two properties, both tested:
 
 - **It refuses to extrapolate.** Outside the truth span the query returns
   `None` and the epoch is *counted as skipped*, not silently dropped.
@@ -609,7 +609,7 @@ negated velocity that looks completely plausible — so it is tested closed-loop
 against synthetic epochs with known velocity and known clock drift, plus a
 separate check that clock drift does not leak into the velocity estimate.
 
-**A tension worth keeping visible:** the most accurate tuning is not the most
+**A tension to keep visible:** the most accurate tuning is not the most
 statistically consistent one. NIS assumes zero-mean white measurement error, and
 these fixes carry a +2.87 m north / +13.30 m up *bias*, so the consistent tuning
 over-trusts it. See [gsdc.md](gsdc.md).

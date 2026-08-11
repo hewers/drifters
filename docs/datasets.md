@@ -84,7 +84,7 @@ equation number — including the
 
 ## Why none of it is committed
 
-Three separate reasons, and it is worth keeping them apart.
+Three separate reasons, with different consequences.
 
 **Licence.** The KF-GINS dataset belongs to its authors and the GSDC data is
 distributed under Kaggle competition rules; neither grants this repository the

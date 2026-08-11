@@ -1,9 +1,9 @@
 //! Local-tangent-frame adapter: geodetic in, geodetic out.
 //!
-//! [`EqFilter`] works in a flat, non-rotating Cartesian frame, because that is
-//! the system the paper's lift and linearisation are derived for and adding
-//! Earth terms would break the group-affine structure the whole argument rests
-//! on. Real GNSS is geodetic. This is the boundary between them.
+//! [`EqFilter`](crate::filter::EqFilter) works in a flat, non-rotating Cartesian
+//! frame: that is the system the paper's lift and linearisation are derived for,
+//! and adding Earth terms would break the group-affine structure the derivation
+//! depends on. GNSS is geodetic. This module is the boundary between them.
 //!
 //! # Two modelling errors, and their size
 //!

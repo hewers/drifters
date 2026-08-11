@@ -161,7 +161,7 @@ mod size_tests {
         assert_eq!(size_of::<StateMatrix>(), 1_800, "15x15 f64 covariance");
         assert_eq!(size_of::<StateVector>(), 120, "15 f64 error state");
         assert_eq!(size_of::<NoiseMatrix>(), 1_440, "15x12 f64 noise mapping");
-        // Roughly half the 21-state covariance, which is the whole point.
+        // Roughly half the 21-state covariance, which is what the feature buys.
         assert!(size_of::<StateMatrix>() * 2 < 3_528 + 300);
     }
 

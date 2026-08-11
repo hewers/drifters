@@ -444,9 +444,9 @@ impl Se3 {
 /// [`left_jacobian`] for no gain — this is called once per filter update, not
 /// once per IMU sample.
 ///
-/// Argument reduction keeps the series honest: halve `v` until the series
-/// converges to machine precision in a fixed number of terms, then walk back up
-/// with `ψ(2M) = ½(I + Ad_{exp(v)}) ψ(M)`, using the *exact* `Ad_{exp(v)}` at
+/// Argument reduction bounds the truncation: halve `v` until the series
+/// converges to machine precision in a fixed number of terms, then double back
+/// up with `ψ(2M) = ½(I + Ad_{exp(v)}) ψ(M)`, using the exact `Ad_{exp(v)}` at
 /// each level rather than a second series.
 pub fn integrated_adjoint(v: Se3Tangent) -> Matrix<6, 6> {
     // amax of ad_v is max(|ω|∞, |ν|∞); at 1/16 the 16-term truncation is below

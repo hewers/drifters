@@ -7,28 +7,26 @@
 //! Λ₄(ξ,u) = Sᵀ(ω − b_ω)                      (9)
 //! ```
 //!
-//! # What a lift is for
+//! # The defining property
 //!
-//! The whole EqF rests on being able to write the system's velocity field as a
-//! group action rather than as motion on a manifold:
+//! The EqF requires the system's velocity field to be expressible as a group
+//! action rather than as motion on a manifold:
 //!
 //! ```text
 //! D_E|_id φ_ξ(E)[Λ(ξ,u)] = f_u(ξ)
 //! ```
 //!
-//! Read left to right: push the identity of `G` along `Λ`, and the state moves
-//! exactly as the physics says it does. That is one equation, it is checkable
-//! numerically, and [`the_lift_reproduces_the_system_dynamics`] is that check.
-//! Every sign in this module is pinned by it.
+//! Pushing the identity of `G` along `Λ` moves the state exactly as (1) says it
+//! moves. The equation is checkable numerically, and
+//! `the_lift_reproduces_the_system_dynamics` is that check. Every sign in this
+//! module follows from it.
 //!
-//! Only `Λ₁` carries the navigation dynamics. `Λ₂`, `Λ₃` and `Λ₄` exist to
-//! *cancel* the drag that `Λ₁` would otherwise exert on the bias, lever arm and
-//! magnetometer calibration through the state action — those states are
-//! constant in (1), and the lift has to reproduce that too. Their tests are the
-//! three "stays constant" assertions, which is why a sign error in any of them
-//! shows up as motion in a state that should not move.
-//!
-//! [`the_lift_reproduces_the_system_dynamics`]: crate::lift
+//! `Λ₁` carries the navigation dynamics. `Λ₂`, `Λ₃` and `Λ₄` cancel the drag
+//! `Λ₁` would otherwise exert on the bias, lever arm and magnetometer
+//! calibration through the state action; those states are constant in (1) and
+//! the lift must reproduce that. Their tests are the three "stays constant"
+//! assertions, so a sign error in any of them appears as motion in a state that
+//! should not move.
 
 use drifters_core::math::{Matrix, Vec3};
 
@@ -65,8 +63,7 @@ pub fn lift(xi: &State, u: &Input, gravity: Vec3) -> Algebra {
     //     T⁻¹(G − N)T = (0, Rᵀg, Rᵀv)^ − N
     //
     // so the two N's cancel and no 5×5 arithmetic survives. `lambda1_literal`
-    // in the tests evaluates the matrix form and asserts they agree, which is
-    // what keeps this simplification honest.
+    // evaluates the matrix form and the tests assert the two agree.
     let r_t = xi.pose.rotation.transpose();
     let rate = u.omega - xi.bias.omega;
     let c = Se23Tangent::new(
@@ -100,8 +97,7 @@ pub fn lambda1_literal(xi: &State, u: &Input, gravity: Vec3) -> Matrix<5, 5> {
     let g = Se23Tangent::new(Vec3::ZERO, gravity, Vec3::ZERO).wedge();
 
     // N is not in se₂(3): its single 1 sits at (3, 4), below the wedge's block.
-    // That is the point of it — it supplies ṗ = v, which a pure se₂(3) element
-    // cannot, and it cancels out of Λ₁ entirely.
+    // It supplies ṗ = v, which no se₂(3) element can, and cancels out of Λ₁.
     let mut n = Matrix::<5, 5>::zeros();
     n[(3, 4)] = 1.0;
 
@@ -166,9 +162,9 @@ mod tests {
     /// D_E|_id φ_ξ(E)[Λ(ξ,u)] = f_u(ξ)
     /// ```
     ///
-    /// The curve differentiated along is only first-order accurate, which is
-    /// exactly enough — a derivative at the identity depends on nothing else —
-    /// and the central difference removes the second-order term as well.
+    /// The curve differentiated along is first-order accurate, which suffices:
+    /// a derivative at the identity depends on nothing beyond the tangent, and
+    /// the central difference cancels the second-order term.
     #[test]
     fn the_lift_reproduces_the_system_dynamics() {
         let (xi, u) = (state(), input());
@@ -297,10 +293,9 @@ mod tests {
     /// `a_C = (ω − b_ω) × b_C`, which is a condition on the group element, not
     /// an identity.
     ///
-    /// Theorem 4.1 claims only that `Λ` *is a lift*, never that it is
-    /// equivariant, so this is not a defect — but it is the reason `A_t⁰`
-    /// depends on `X̂` at all instead of being a constant matrix, and it is
-    /// worth having pinned rather than assumed.
+    /// Theorem 4.1 claims only that `Λ` is a lift, not that it is equivariant,
+    /// so nothing here contradicts the paper. It does explain why `A_t⁰` depends
+    /// on `X̂` rather than being constant.
     #[test]
     fn the_lift_transports_by_the_adjoint_except_in_the_position_column() {
         let (xi, u) = (state(), input());

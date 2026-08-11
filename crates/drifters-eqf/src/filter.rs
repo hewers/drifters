@@ -1,38 +1,39 @@
 //! The equivariant filter: propagation, update and reset.
 //!
-//! # The error convention, stated once
+//! # Error convention
 //!
-//! Everything in this crate is built on a **right** action, `φ(Y, φ(X, ξ)) =
-//! φ(X·Y, ξ)`, with the equivariant error
+//! This crate uses a **right** action, `φ(Y, φ(X, ξ)) = φ(X·Y, ξ)`, with the
+//! equivariant error
 //!
 //! ```text
 //! e = φ(X̂⁻¹, ξ),      ε = ϑ(e),      ξ̂ = φ(X̂, ξ°)
 //! ```
 //!
-//! Two consequences follow, and both are easy to get backwards:
+//! Two consequences, both easy to invert by accident:
 //!
 //! - the observer integrates by **right** translation, `X̂ ← X̂ · exp(dt Λ̂)`,
-//!   because `Q̇ = dL_Q Λ` puts the algebra element on the far side;
-//! - the reset is a **left** multiplication, `X̂ ← exp(Δ) · X̂`. Writing
+//!   since `Q̇ = dL_Q Λ` places the algebra element on the far side;
+//! - the reset is a **left** multiplication, `X̂ ← exp(Δ) · X̂`. With
 //!   `Z = Q X̂⁻¹`, driving `Z` to the identity means `X̂ ← Z X̂`, and `Z = exp(ε)`.
 //!
-//! Papers that use a left action write the reset the other way round. Mixing
-//! the two produces a filter that converges on easy data and diverges when the
-//! attitude error is large, which is the worst possible failure to debug, so
-//! `the_reset_removes_the_error_it_estimates` pins it directly.
+//! Papers using a left action write the reset the other way round. Mixing the
+//! two conventions gives a filter that converges on easy data and diverges once
+//! the attitude error is large; `the_reset_removes_the_error_it_estimates`
+//! covers it.
 //!
-//! # What is approximated, deliberately
+//! # Approximations
 //!
-//! - **The transition matrix** is `I + A dt + ½(A dt)²`. `A` carries `g^`, so
-//!   `A dt` is order `10⁻¹` at 100 Hz and the second-order term is not
-//!   negligible; the third is.
+//! - **Transition matrix** `I + A dt + ½(A dt)²`. `A` carries `g^`, so `A dt` is
+//!   order `10⁻¹` at 100 Hz and the second-order term is not negligible. The
+//!   third is.
 //! - **The reset does not transport the covariance.** `ε_new = ε − Δ` holds to
-//!   first order — the reset Jacobian is `I − ½ ad_Δ + …` — and the correction
-//!   is the same one every EKF drops at its own reset.
-//! - **`A` is evaluated at the start of the interval**, not the midpoint.
+//!   first order, the reset Jacobian being `I − ½ ad_Δ + …`. This is the same
+//!   term an EKF drops at its own reset.
+//! - **`A` and `Λ` are evaluated at the interval midpoint**, not the left edge.
+//!   See [`EqFilter::propagate`].
 //!
-//! None of these is what makes an EqF an EqF. The linearisation origin is still
-//! fixed at `ξ°`, which is the actual claim.
+//! None of these affects the property the EqF is built for: the linearisation
+//! origin remains fixed at `ξ°`.
 
 use drifters_core::math::{Cholesky, Mat3, Matrix, Vec3, Vector};
 use drifters_core::F;
@@ -48,8 +49,8 @@ use crate::linear::{
 
 /// Continuous-time process noise, as power spectral densities per axis.
 ///
-/// Split by physical source rather than by state block, because that is how a
-/// datasheet is written and how the values are actually obtained.
+/// Split by physical source rather than by state block, matching how a
+/// datasheet quotes them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProcessNoise {
     /// Gyroscope white noise, `(rad/s)²/Hz`.
@@ -60,7 +61,7 @@ pub struct ProcessNoise {
     pub gyro_bias: Vec3,
     /// Accelerometer bias random walk, `(m/s³)²/Hz`.
     pub accel_bias: Vec3,
-    /// GNSS lever-arm random walk. Usually zero — the antenna is bolted on.
+    /// GNSS lever-arm random walk. Usually zero; the antenna is fixed.
     pub lever: Vec3,
     /// Magnetometer calibration random walk. Usually zero.
     pub mag: Vec3,
@@ -68,10 +69,9 @@ pub struct ProcessNoise {
 
 /// The equivariant filter.
 ///
-/// Carries a group element and a covariance, never a state — the estimate is
-/// [`nav_state`](Self::nav_state), recovered by acting on the fixed origin.
-/// That is not a storage detail: it is the reason the linearisation point never
-/// moves.
+/// Carries a group element and a covariance rather than a state; the estimate
+/// is [`nav_state`](Self::nav_state), recovered by acting on the fixed origin.
+/// This is what keeps the linearisation point stationary.
 #[derive(Clone, Debug)]
 pub struct EqFilter {
     /// The observer state `X̂ ∈ G`.
@@ -87,9 +87,9 @@ pub struct EqFilter {
 impl EqFilter {
     /// Start from an initial estimate and covariance.
     ///
-    /// The paper's headline result initialises `lever` at zero and `mag` at the
-    /// identity and lets both self-calibrate, which is what
-    /// `the_lever_arm_converges_from_zero` reproduces.
+    /// The paper initialises `lever` at zero and `mag` at the identity and lets
+    /// both self-calibrate; `the_lever_arm_converges_from_zero` reproduces
+    /// that.
     pub fn new(initial: &State, sigma: Matrix<DIM, DIM>, gravity: Vec3) -> Self {
         Self {
             x: Symmetry::from_state(initial),
@@ -111,16 +111,15 @@ impl EqFilter {
     ///
     /// `Λ` is not constant across the interval even when the IMU sample is.
     /// `Λ₁`'s velocity column is `a − b_a + Rᵀg`, and `Rᵀg` rotates in the body
-    /// frame at the gyro rate, so holding `Λ̂` at the left edge is a first-order
-    /// scheme. Measured, at 100 Hz and 0.12 rad/s, that is a standing
-    /// acceleration error of `5.6 × 10⁻⁴ m/s²` — which integrates to metres
-    /// over a minute and is indistinguishable from a small accelerometer bias,
-    /// so the filter would quietly absorb it into `b_a` and report a converged,
-    /// wrong bias.
+    /// frame at the gyro rate, so holding `Λ̂` at the left edge gives a
+    /// first-order scheme. Measured at 100 Hz and 0.12 rad/s, that is a standing
+    /// acceleration error of `5.6 × 10⁻⁴ m/s²`, which integrates to metres over
+    /// a minute. It is indistinguishable from a small accelerometer bias, so the
+    /// filter absorbs it into `b_a` and reports a converged but incorrect bias.
     ///
     /// One midpoint evaluation removes it and makes the scheme second order.
-    /// Attitude and the calibration states were already exact to `10⁻¹⁵` either
-    /// way, since their part of `Λ` genuinely is constant here.
+    /// Attitude and the calibration states were exact to `10⁻¹⁵` either way,
+    /// their part of `Λ` being constant over the interval.
     pub fn propagate(&mut self, u: &Input, dt: F, q: &ProcessNoise) {
         let estimate = self.nav_state();
 
@@ -130,8 +129,8 @@ impl EqFilter {
         let midpoint = lift(&act_state(&half, &State::default()), u, self.gravity);
         self.x = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
 
-        // The transition matrix is likewise better centred than left-edged, and
-        // the midpoint observer state is already paid for.
+        // The transition matrix is centred for the same reason, and the
+        // midpoint observer state has already been computed.
         let a = state_matrix(&half, u, self.gravity);
         let a_dt = a * dt;
         let phi = Matrix::<DIM, DIM>::identity() + a_dt + a_dt.matmul(&a_dt) * 0.5;
@@ -142,17 +141,17 @@ impl EqFilter {
 
     /// `G Q Gᵀ`, the process noise mapped into normal coordinates.
     ///
-    /// Two different mechanisms, and they inject differently:
+    /// Two mechanisms, injecting differently:
     ///
-    /// - **Input noise** rides the lift. `Λ` is affine in `u`, so its linear
-    ///   part is just `Λ(ξ̂, n) − Λ(ξ̂, 0)` — the lift's own tested code,
-    ///   evaluated twice, rather than a hand-written Jacobian to keep in sync.
-    ///   `Ad_X̂` then carries it into error coordinates.
-    /// - **Random walks** are state disturbances, which the lift cannot see.
-    ///   Solving `D_E|_id φ_ξ(E)[ν] = d` for each gives `ν = (0, −w_b, −w_t,
-    ///   w_S)`, and `Ad_X̂` reduces those to `−Ad_B̂ w_b`, `−Â w_t` and `Ê w_S`
-    ///   on their own blocks. Signs are carried through even though `G Q Gᵀ`
-    ///   cannot see them.
+    /// - **Input noise** enters through the lift. `Λ` is affine in `u`, so its
+    ///   linear part is `Λ(ξ̂, n) − Λ(ξ̂, 0)`: the lift's own tested code
+    ///   evaluated twice, rather than a separate hand-written Jacobian to keep
+    ///   in sync. `Ad_X̂` carries the result into error coordinates.
+    /// - **Random walks** are state disturbances, which the lift does not
+    ///   represent. Solving `D_E|_id φ_ξ(E)[ν] = d` for each gives
+    ///   `ν = (0, −w_b, −w_t, w_S)`, which `Ad_X̂` reduces to `−Ad_B̂ w_b`,
+    ///   `−Â w_t` and `Ê w_S` on their own blocks. Signs are carried through
+    ///   even though `G Q Gᵀ` is insensitive to them.
     fn process_noise(&self, estimate: &State, q: &ProcessNoise) -> Matrix<DIM, DIM> {
         let mut g = Matrix::<DIM, 18>::zeros();
         let quiet = lift(estimate, &Input::default(), self.gravity);

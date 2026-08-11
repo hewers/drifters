@@ -8,41 +8,38 @@
 //!
 //! # What this replaces
 //!
-//! A χ² gate answers "is this measurement plausible?" with yes or no, and a
-//! filter that answers no learns nothing from it. That is the wrong shape for
-//! GNSS: outages and multipath do not arrive as isolated outliers, they arrive
-//! as a shift that lasts, and a gate tuned to reject them keeps rejecting long
+//! A χ² gate is a binary decision, and a rejected measurement contributes
+//! nothing. GNSS outages and multipath do not arrive as isolated outliers but
+//! as a sustained shift, so a gate tuned to reject them continues rejecting
 //! after the measurement has become the best information available.
 //!
-//! GCU never rejects. It *widens* the innovation covariance — and widens it
-//! preferentially along the innovation itself, via the `α ỹ ỹᵀ` term — so a
-//! surprising measurement is used with correspondingly little weight, and the
-//! weight recovers on its own as the estimate moves to meet it. `α` sets how
-//! fast: `0` is pure isotropic inflation, `1` is sharpest.
+//! GCU does not reject. It widens the innovation covariance, preferentially
+//! along the innovation itself via the `α ỹ ỹᵀ` term, so a surprising
+//! measurement is applied with proportionally little weight and that weight
+//! recovers as the estimate moves to meet it. `α` sets the rate: `0` is
+//! isotropic inflation only, `1` is sharpest.
 //!
-//! This project's ESKF already has recovery logic, and it is the other kind: a
-//! per-measurement gate plus a covariance bump after repeated rejection. The
-//! two are a natural ablation against each other on the same data, which is the
-//! reason this is written to stand alone rather than being folded into an
-//! update routine.
+//! The ESKF in this workspace uses the other approach, a per-measurement gate
+//! plus covariance inflation after repeated rejection. The two are directly
+//! comparable on the same data, which is why this is written as a standalone
+//! function rather than folded into an update routine.
 //!
 //! # The bound, and where it stops holding
 //!
-//! The stated design goal is that after inflation `ỹᵀ S'⁻¹ ỹ < 1` — the
-//! measurement is, by construction, no longer surprising. That follows from
-//! Sherman–Morrison: writing `A = β C*ΣC*ᵀ + R`,
+//! The design goal is that after inflation `ỹᵀ S'⁻¹ ỹ < 1`, so the measurement
+//! is by construction no longer surprising. From Sherman–Morrison, writing
+//! `A = β C*ΣC*ᵀ + R`,
 //!
 //! ```text
 //! ỹᵀ S'⁻¹ ỹ = q / (1 + αβ q) < 1/(αβ),     q = ỹᵀ A⁻¹ ỹ
 //! ```
 //!
-//! so it holds whenever `αβ ≥ 1`. Since `β ≥ 1` always and `β = 2` for every
-//! `r ≥ 1`, that covers `α = 1` everywhere and `α = 0.5` everywhere the bound
-//! is needed. At `α = 0` there is no `ỹỹᵀ` term at all and the bound genuinely
-//! does not hold — inflation is then bounded by `β ≤ 2`, so a sufficiently
-//! surprising measurement stays surprising. That is a property of the
-//! parameter, not a defect, and `the_bound_fails_at_alpha_zero` pins it so it
-//! cannot be mistaken for one later.
+//! so the bound holds whenever `αβ ≥ 1`. Since `β ≥ 1` always and `β = 2` for
+//! every `r ≥ 1`, that covers `α = 1` everywhere and `α = 0.5` everywhere the
+//! bound is needed. At `α = 0` there is no `ỹỹᵀ` term and the bound does not
+//! hold: inflation is capped at `β ≤ 2`, so a sufficiently surprising
+//! measurement remains surprising. This is a property of the parameter rather
+//! than a defect, and `the_bound_fails_at_alpha_zero` records it.
 
 use drifters_core::math::{Cholesky, Matrix, Vector};
 use drifters_core::F;
@@ -82,8 +79,8 @@ pub fn inflate<const M: usize>(
 /// The inflation factor `β(r)`.
 ///
 /// Rises smoothly from `1` at `r = 0` to `2` at `r = 1`, and holds at `2`
-/// beyond. Continuity at the join is not incidental — it is the whole point of
-/// the construction, and is what a threshold test does not have.
+/// beyond. Continuity at the join is the property a threshold test lacks: a
+/// measurement crossing `r = 1` changes weight gradually rather than stepping.
 #[inline]
 pub fn beta(r: F) -> F {
     if r < 1.0 {
@@ -147,8 +144,8 @@ mod tests {
     #[test]
     fn inflation_never_sharpens() {
         // β ≥ 1 and the ỹỹᵀ term is positive semi-definite, so S' ⪰ S for every
-        // input. A filter that gained confidence from a surprise would be the
-        // failure this exists to prevent.
+        // input. Gaining confidence from a surprising measurement is the
+        // failure mode this guards against.
         let s = projected() + noise();
         for scale in [0.0, 0.5, 2.0, 20.0] {
             for alpha in [0.0, 0.5, 1.0] {
