@@ -52,8 +52,26 @@ a single trace so that `datasets/gsdc2023/` holds `device_imu.csv`,
 `device_gnss.csv` and `ground_truth.csv`:
 
 ```bash
-unzip -j smartphone-decimeter-2023.zip 'train/2023-09-07-18-59-us-ca-routebc1/sm-s908b/*' -d datasets/gsdc2023
+unzip -j smartphone-decimeter-2023.zip 'sdc2023/train/2023-05-19-20-10-us-ca-mtv-ie2/sm-s908b/*' -d datasets/gsdc2023
 ```
+
+Note the `sdc2023/` prefix inside the archive, and that only `train/` traces
+carry `ground_truth.csv` — `test/` is the competition's hidden split.
+
+### Held-out traces
+
+Tuning fitted on one trace does not transfer well (see the table in the
+[README](../README.md)), so accuracy claims use a holdout. Three more traces
+from the same phone, chosen so hardware is held constant and only route and
+conditions vary:
+
+```bash
+for t in 2023-05-23-19-16-us-ca-mtv-ie2:b 2023-05-25-19-10-us-ca-sjc-be2:c 2023-09-06-22-49-us-ca-routebb1:d; do \
+  unzip -j smartphone-decimeter-2023.zip "sdc2023/train/${t%%:*}/sm-s908b/*" -d "datasets/gsdc2023-${t##*:}"; done
+```
+
+Fit on `datasets/gsdc2023` with `drifters tune`, then report on the other three.
+There are seven `sm-s908b` traces in the train split if more are wanted.
 
 Then:
 

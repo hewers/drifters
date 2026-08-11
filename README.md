@@ -61,32 +61,55 @@ gyro drifts at ~20 °/h, so Earth rate sits *below* its noise floor rather than
 557× above it. No Earth compensation is applied here; this is the paper's filter
 as written.
 
-| against survey-grade truth | horizontal RMS | mean NIS |
-|---|---|---|
-| phone GNSS (WLS) alone | 6.209 m | — |
-| ESKF, at its consistent tuning (×95) | 5.71 m | 3.16 |
-| **EqF, at its consistent tuning (×74)** | **4.39 m** | **3.00** |
-| ESKF, at the hand-picked ×300 | 4.055 m | 0.47 |
-| EqF, at the hand-picked ×300 | 4.850 m | 1.58 |
+Horizontal RMS against survey-grade truth, in metres. The process-noise scale
+was fitted on **trace A only** and applied unchanged to three held-out traces
+from the same phone, so B, C and D are out-of-sample. Bold marks the rows that
+beat doing nothing.
 
-Both beat the phone's own solution. The ordering between them depends entirely
-on how the IMU process noise is set, so it is set by measurement rather than by
-hand — `drifters tune` sweeps the scale and reports where mean NIS reaches 3,
-the point at which the assumed noise explains the observed innovations.
+| | A *(fitted)* | B | C | D |
+|---|---|---|---|---|
+| phone GNSS (WLS) alone | 6.21 | 3.78 | 2.82 | 4.03 |
+| ESKF, consistent tuning ×95 | **5.71** | 5.51 | 3.41 | **3.55** |
+| EqF, consistent tuning ×74 | **4.39** | 4.49 | **2.46** | **3.51** |
+| ESKF, hand-picked ×300 | **4.06** | 4.11 | **2.09** | **3.32** |
+| EqF, hand-picked ×300 | **4.85** | **3.22** | **2.21** | **3.49** |
 
-**At that tuning the EqF leads, by 22 %.** The earlier ESKF win needed ×300,
-where its NIS is 0.47: the filter is claiming roughly six times more uncertainty
-than its own innovations support. Across the whole consistent region, scale 60
-to 130, the EqF stays at 4.2–4.6 m and the ESKF at 5.0–5.7 m.
+The holdout was worth running, because it contradicts the headline this table
+replaced.
 
-A second finding, larger than the ranking: the EqF's **generalised covariance
-union is actively harmful on this trace**. Sweeping its convergence rate α — the
-knob that replaces χ² rejection — gives 4.85 m at α = 0 and **27.4 m at α = 1**,
-monotonically worse. GCU inflates the innovation covariance *along the
-innovation*, which is right when a large innovation means a bad measurement and
-wrong when it means the filter has drifted and the measurement is the only thing
-that can correct it. Here it is the second. Full sweeps in
-[docs/eqf.md](docs/eqf.md).
+**Trace A is the easy case, and fitting on it overstates everything.** Its GNSS
+is the worst of the four by a wide margin — 6.21 m against 2.8 to 4.0 — which
+leaves the most room for an IMU to help. The tuning fitted there does not
+transfer: at ×95 and ×74, fusion is **worse than raw GNSS** on trace B for both
+filters, and worse for the ESKF on C. Fitting on the most improvable trace and
+generalising to harder ones is exactly what a holdout is for.
+
+**The EqF still leads the ESKF, and that part does generalise.** At the A-fitted
+tuning it is ahead on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 the
+picture is mixed, so the ranking depends on the criterion and both are shown
+rather than whichever flatters the conclusion.
+
+**The hand-picked ×300 generalises better than the consistent one**, helping on
+seven of eight filter/trace combinations against five of eight. Its mean NIS is
+0.44, so the filter claims roughly six times more uncertainty than its
+innovations show, and it is *still* the better setting. Two readings, and this
+data does not separate them: model error that extra process noise absorbs, and
+heavy-tailed multipath innovations dragging a *mean* NIS around. A median-based
+consistency criterion would put the crossing elsewhere and has not been tried.
+
+**The honest summary is modest.** On a phone, over one-second fix intervals,
+inertial fusion buys between nothing and about 30 % depending on the trace, and
+a tuning fitted on one trace can make it negative on another. The earlier "EqF
+leads by 22 %" was a single-trace, fitted-on-test number and should not have
+been stated that way.
+
+Separately, the EqF's **generalised covariance union is actively harmful here**.
+Sweeping its convergence rate α — the knob that replaces χ² rejection — gives
+4.85 m at α = 0 and **27.4 m at α = 1**, monotonically worse. GCU inflates the
+innovation covariance *along the innovation*, which is right when a large
+innovation means a bad measurement and wrong when it means the filter has
+drifted and the measurement is the only thing that can correct it. Sweeps in
+[docs/eqf.md](docs/eqf.md) and [docs/gsdc.md](docs/gsdc.md).
 
 Regenerate either figure yourself — every value on them comes from the replay,
 none are hand-entered:

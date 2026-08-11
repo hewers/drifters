@@ -152,23 +152,42 @@ cargo run --release -p drifters-cli -- tune --dir datasets/gsdc2023
 | 300 | 0.47 | 4.055 m | 1.58 | 4.850 m |
 | 3000 | 0.19 | 5.484 m | 0.42 | 5.710 m |
 
-The consistency crossing is ×95 for the ESKF and ×74 for the EqF. Two things
-follow.
+The consistency crossing is ×95 for the ESKF and ×74 for the EqF.
 
-**The ranking depended on the tuning.** At ×300 the ESKF leads, 4.055 m against
-4.850 m. Anywhere in the consistent region, 60 to 130, the EqF leads: 4.2–4.6 m
-against 5.0–5.7 m. The ×300 figure is not wrong as a number, but its NIS of 0.47
-says the ESKF is claiming about six times more uncertainty than its innovations
-support, and a filter tuned that far from consistency is being fitted to this
-trace rather than characterised on it.
+### Held out: the fitted tuning does not transfer
 
-**Consistency and accuracy do not coincide.** The ESKF's lowest error sits near
-×170–300, well past its crossing. That gap is model error, not tuning: NIS can
-only report whether the assumed noise explains the innovations, not whether the
-model that generated them is right. A filter that needs more process noise than
-its sensors justify is compensating for something it does not model — here,
-almost certainly the phone's mount flexing and the unmodelled scale factors on a
-part that has never been calibrated.
+Fitting and reporting on one trace is fitting to the test set, so the tuning
+above was carried unchanged onto three held-out traces from the same phone
+(routes and conditions vary, hardware does not). Horizontal RMS in metres:
+
+| | A *(fitted)* | B | C | D |
+|---|---|---|---|---|
+| phone GNSS (WLS) alone | 6.21 | 3.78 | 2.82 | 4.03 |
+| ESKF ×95 | 5.71 | 5.51 | 3.41 | 3.55 |
+| EqF ×74 | 4.39 | 4.49 | 2.46 | 3.51 |
+| ESKF ×300 | 4.06 | 4.11 | 2.09 | 3.32 |
+| EqF ×300 | 4.85 | 3.22 | 2.21 | 3.49 |
+
+**Trace A is unrepresentative.** Its GNSS is the worst of the four by a wide
+margin, which leaves the most room for an IMU to help, so anything fitted there
+overstates what fusion buys. At the A-fitted tuning, fusion is *worse than raw
+GNSS* on trace B for both filters and on C for the ESKF.
+
+**The hand-picked ×300 generalises better than the consistent tuning**, helping
+on seven of eight filter/trace combinations against five of eight, despite a
+mean NIS of 0.44. That is the more useful result: consistency and accuracy
+disagree, and they disagree in the same direction on every trace.
+
+**The EqF's lead over the ESKF does generalise** at the A-fitted tuning — ahead
+on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 it is mixed.
+
+Consistency and accuracy diverging systematically points at unmodelled error
+that extra process noise absorbs — most likely the phone's mount flexing and the
+uncalibrated scale factors. A second candidate has not been tested: multipath
+gives heavy-tailed innovations, and a *mean* NIS is not robust to them, so the
+crossing this sweep reports is pulled by the tail. Computing the crossing from a
+median NIS instead is the obvious next experiment, and the per-epoch NIS is
+already carried in the report to do it with.
 
 The sweep uses one scalar over all four IMU noise densities rather than fitting
 them separately. With one 20-minute trace and one measurement type there is not
