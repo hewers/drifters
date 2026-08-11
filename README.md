@@ -21,7 +21,7 @@ Every number here is produced by a test in this repository.
 | **Footprint** | **9.5 KiB** peak stack (15-state), 16.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
-| **Tests** | 317, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 324, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -66,13 +66,20 @@ loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
 odometer, barometric height, magnetometer heading), protobuf serialization,
 bare-metal Cortex-M, KF-GINS dataset regression.
 
-**In progress:** an equivariant filter (EqF) as a second estimator. The filter
-runs — symmetry group, lift, linearisation, group exponential, GCU inflation and
-the propagate/update loop — and converges closed-loop against an independent
-simulator, self-calibrating its GNSS lever arm from zero. Still to do: the
-local-tangent-frame adapter and the head-to-head against the ESKF on real data.
+**In progress:** an equivariant filter (EqF) as a second estimator — now running
+end to end on the KF-GINS dataset via `drifters eqf`, and **self-calibrating its
+GNSS antenna lever arm from a zero start to 2 mm on both horizontal axes**, which
+is something the ESKF cannot do at all.
 
-That work turned up
+The head-to-head is a more interesting result than a win or a loss. As the paper
+writes it, the EqF assumes a flat, non-rotating Earth — and on a tactical-grade
+IMU that assumption *diverges*, as `t³`, at exactly Earth rate. Compensating the
+input recovers five orders of magnitude and it converges to 1.5 cm. The gap to
+the ESKF's 3.3 cm is therefore an **Earth model, not an estimator**, and the
+honest venue for comparing the two is consumer-grade hardware, where the paper's
+assumptions hold. Numbers and reasoning in [docs/eqf.md](docs/eqf.md).
+
+That work also turned up
 [six places the source paper cannot be taken literally](docs/eqf.md). A
 transcription would have shipped all six; the last one was caught only because a
 numerical Jacobian was moved off the identity element.

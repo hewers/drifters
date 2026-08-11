@@ -425,6 +425,7 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "drifters-core",
+ "drifters-eqf",
  "drifters-filter",
 ]
 

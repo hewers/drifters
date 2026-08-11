@@ -343,9 +343,41 @@ measured firmware budget is untouched. Specification and scoping in
       not the naive `u_γ`; pinned by the one-parameter subgroup property
 - [x] Propagation, update and reset — the filter itself, closed-loop against an
       independent simulator
-- [ ] Local-tangent-frame adapter, and the ESKF-vs-EqF comparison
+- [x] Local-tangent-frame adapter, with both modelling errors quantified
+- [x] ESKF-vs-EqF on the KF-GINS dataset, `drifters eqf`
+- [ ] The same on GSDC — consumer-grade hardware, where the paper's flat-Earth
+      assumption actually holds and the comparison is fair
 - [ ] Extract a common backend trait, once both estimators exist and their
       shapes are known
+
+### Measured on the KF-GINS dataset
+
+| | horizontal RMS | at the last fix |
+|---|---|---|
+| ESKF (Earth-referenced) | **0.033 m** | — |
+| EqF, flat Earth as written | 1.5 × 10⁶ m | diverged |
+| EqF, + input-side Earth compensation | 14.7 m | **0.015 m** |
+
+The flat-Earth filter diverges as `t³`, which is a constant attitude-rate error;
+solving back gives `5.96 × 10⁻⁵ rad/s` against an Earth rate of `7.29 × 10⁻⁵`.
+The gyro bias prior for this IMU is `0.027 °/h` and Earth rate is **557×** that,
+so no state in the model can represent it. That is the number this milestone's
+scoping predicted before any of it was written.
+
+Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
+recovers five orders of magnitude. The converged accuracy is then competitive;
+the convergence is slow, taking about 40 minutes, which is why both the RMS and
+the final residual are quoted.
+
+**The comparison is unfair by construction.** It is a flat-Earth estimator on
+hardware precise enough to see the Earth turn, so the gap measures an Earth
+model rather than an estimator. The fair venue is GSDC, where a phone gyro sees
+Earth rate at 1.5× its noise floor instead of 557×.
+
+**The lever arm calibrated itself** from a zero start to `[+0.138, −0.303,
+−0.271]` against a configured `[+0.136, −0.301, −0.184]` — 2 mm on both
+horizontal axes. That is the paper's headline capability on data it was never
+tuned for, and something the ESKF cannot do at all.
 
 **Why it is worth having.** The paper's motivating failure — *false
 observability* under prolonged static conditions, where an EKF gains spurious

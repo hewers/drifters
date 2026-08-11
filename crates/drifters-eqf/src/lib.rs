@@ -31,3 +31,4 @@ pub mod group;
 pub mod lie;
 pub mod lift;
 pub mod linear;
+pub mod local;

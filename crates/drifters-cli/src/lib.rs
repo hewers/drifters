@@ -4,6 +4,7 @@
 //! Exposed as a library so the regression test can drive a replay directly
 //! rather than shelling out to the binary and parsing its output.
 
+pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
 pub mod plot;

@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use drifters_cli::{kfgins, plot, replay, run_gsdc};
+use drifters_cli::{eqf, kfgins, plot, replay, run_gsdc};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,8 +38,10 @@ fn usage() {
         "usage: drifters <replay|plot> --config <path> [--imu <path>] [--gnss <path>]\n\
          \x20         [--out <dir>] [--week <n>] [--quiet] [--figure <svg>] [--name <str>]\n\
          \n\
-         \x20 replay  run the filter and report statistics\n\
-         \x20 plot    the same, and write an SVG figure"
+         \x20 replay  run the ESKF and report statistics\n\
+         \x20 plot    the same, and write an SVG figure\n\
+         \x20 eqf     run the equivariant filter on the same data\n\
+         \x20 gsdc    replay a GSDC phone trace against ground truth"
     );
 }
 
@@ -51,6 +53,9 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.first().map(String::as_str) == Some("gsdc") {
         return run_gsdc_command(args);
+    }
+    if args.first().map(String::as_str) == Some("eqf") {
+        return run_eqf_command(args);
     }
     let make_figure = match args.first().map(String::as_str) {
         Some("replay") => false,
@@ -240,6 +245,56 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             dataset: flag(args, "--name").unwrap_or("GSDC 2023 phone trace"),
             horizontal_rms: report.filter.horizontal.rms(),
             vertical_rms: report.filter.down.rms(),
+            nis_mean: report.nis.mean(),
+            fixes: report.applied,
+        };
+        let svg = plot::render(&report.epochs, &caption);
+        if let Some(parent) = Path::new(figure).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(figure, svg)?;
+        println!("\nwrote {figure}");
+    }
+    Ok(())
+}
+
+/// Replay the equivariant filter over the KF-GINS formats.
+///
+/// Separate from `replay` rather than a flag on it: the two report different
+/// things. The EqF quotes its own modelling error, and pretending the outputs
+/// are interchangeable would hide exactly the term that matters.
+fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = PathBuf::from(flag(args, "--config").ok_or("--config is required")?);
+    let quiet = args.iter().any(|a| a == "--quiet");
+    let week: u32 = flag(args, "--week").unwrap_or("0").parse()?;
+    let compensate = args.iter().any(|a| a == "--earth-rate");
+
+    let config = kfgins::Config::read(&config_path)?;
+    let base = config_path.parent().unwrap_or(Path::new("."));
+    let imu_path = flag(args, "--imu")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| base.join("Leador-A15.txt"));
+    let gnss_path = flag(args, "--gnss")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| base.join("GNSS-RTK.txt"));
+
+    let imu = kfgins::read_imu(&imu_path, week)?;
+    let gnss = kfgins::read_gnss(&gnss_path, week)?;
+    if !quiet {
+        eprintln!("{} IMU samples, {} GNSS fixes", imu.len(), gnss.len());
+    }
+
+    let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, quiet);
+    report.print();
+
+    if let Some(figure) = flag(args, "--figure") {
+        let caption = plot::Caption {
+            dataset: flag(args, "--name").unwrap_or("KF-GINS demo dataset — EqF"),
+            horizontal_rms: report
+                .residual_north
+                .rms()
+                .hypot(report.residual_east.rms()),
+            vertical_rms: report.residual_down.rms(),
             nis_mean: report.nis.mean(),
             fixes: report.applied,
         };

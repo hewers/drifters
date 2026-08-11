@@ -411,6 +411,77 @@ because they make distinct expressions agree. And a filter whose covariance
 disagrees with its own error by a factor of ten is reporting a modelling bug,
 not bad luck.
 
+## Measured: the EqF on the KF-GINS dataset
+
+57 minutes of real driving, a tactical-grade Leador-A15 at 200 Hz, 3 363 RTK
+fixes. Same inputs and same scoring as the ESKF's own regression — the open-loop
+antenna residual *before* each fix is applied — so the two are directly
+comparable. Run it with `drifters eqf --config <kf-gins.yaml> [--earth-rate]`.
+
+| | horizontal RMS | vertical RMS | residual at the last fix |
+|---|---|---|---|
+| ESKF (Earth-referenced) | **0.033 m** | 0.018 m | — |
+| EqF, flat Earth as written | 1.5 × 10⁶ m | 7.4 × 10⁴ m | diverged |
+| EqF, + input-side Earth compensation | 14.7 m | 57.6 m | **0.015 m** |
+
+Three things to read out of that, in order.
+
+**The flat-Earth filter diverges, and it diverges in exactly the predicted way.**
+The residual grows as `t³` — `7.8 × 10² m` at 200 s, `3.3 × 10⁶ m` at 3 200 s. A
+`t³` position error is a *constant attitude-rate* error, and solving back gives
+`5.96 × 10⁻⁵ rad/s` against an Earth rate of `7.29 × 10⁻⁵`. It is Earth
+rotation, and the filter has no state that can represent it: the gyro bias prior
+for this IMU is `0.027 °/h`, and Earth rate is **557×** that. This is the number
+["Can we assume an ellipsoidal, rotating Earth?"](#can-we-assume-an-ellipsoidal-rotating-earth)
+predicted before any of it was written, and predicting it was the point.
+
+**Compensating the input recovers five orders of magnitude.** Correcting the
+gyro by `R̂ᵀ(ω_ie + ω_en)` alone gets to ~500 m; adding the Coriolis correction
+`R̂ᵀ[(2ω_ie + ω_en) × v̂]` to the accelerometer closes the rest. Both are
+deviations from the paper, both are opt-in, and both make the input depend on
+the estimate — which the lift's derivation does not contemplate. See
+[`local.rs`](../crates/drifters-eqf/src/local.rs).
+
+**The converged accuracy is competitive; the convergence is slow.** The filter
+ends at `0.015 m`, against the ESKF's `0.033 m` RMS. But it takes roughly 40
+minutes of driving to get there, and an RMS over the whole run keeps that
+transient forever — which is why both numbers are quoted. A NIS of 292 says the
+same thing from the other side: there is real unmodelled error here, and the
+filter is right to be surprised by it.
+
+### This comparison is unfair by construction, and in a knowable direction
+
+It is a flat-Earth estimator on hardware precise enough to see the Earth turn.
+The gap is an **Earth model**, not an estimator — nothing in the table
+distinguishes the EqF's linearisation from the ESKF's, because the modelling
+error is three orders of magnitude larger than either.
+
+The honest venue is consumer-grade hardware, where the paper's assumptions
+hold: a MEMS gyro at ~10 °/h sees Earth rate at 1.5× its own noise floor rather
+than 557×. That is the GSDC phone trace, and it is the next measurement to take.
+
+### The lever arm calibrates itself, which is the part that is not a comparison
+
+Started at **zero**, with the ESKF handed `antlever` from the YAML:
+
+```text
+estimated  [+0.138, -0.303, -0.271] m
+configured [+0.136, -0.301, -0.184] m
+```
+
+Horizontally that is 2 mm and 2 mm — the filter recovered an antenna offset it
+was never told, to millimetres, from GNSS and an IMU alone. Vertically it is
+8.7 cm out, and that is where the residual Earth-model error ends up: the
+vertical channel is the weakest one and the lever arm is the freest state left
+to absorb it. Uncompensated, the same run lands the whole vector within 1.9 cm —
+better, because there the error is going somewhere else entirely.
+
+This is the paper's headline capability (Sec. VII-A) reproduced on data it was
+never tuned for, and it is a capability the ESKF does not have at all rather
+than a better version of something it does.
+
+---
+
 ## Uncertain observation handling (Sec. VI)
 
 Replaces binary χ² rejection with **generalised covariance union** inflation.
