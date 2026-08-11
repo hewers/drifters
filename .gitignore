@@ -2,8 +2,10 @@
 **/*.rs.bk
 .DS_Store
 
-# Local validation datasets (see docs/testing.md for how to fetch them).
+# Local validation datasets and their archives — see docs/datasets.md for how
+# to fetch them, and adr/0007 for why none of it belongs in git.
 /datasets/
+*.zip
 /fuzz/target
 /fuzz/corpus
 /fuzz/artifacts
@@ -11,4 +13,4 @@
 
 # Source papers: fetched locally, not redistributed. Neither is clearly
 # redistributable by a third party — see docs/papers/README.md.
-docs/papers/*.pdf
+*.pdf

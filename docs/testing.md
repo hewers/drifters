@@ -107,7 +107,10 @@ the result. Implemented in `crates/drifters-cli/tests/kf_gins_regression.rs`.
 ### Getting the data
 
 It is **not committed**: 67 MB, and it belongs to the KF-GINS authors, so its
-licence stays with upstream. `datasets/` is git-ignored. To fetch it:
+licence stays with upstream. `datasets/` is git-ignored — see
+[datasets.md](datasets.md) for every external artefact this repository expects,
+and [adr/0007](adr/0007-no-binaries-in-history.md) for why none of it is in git.
+To fetch it:
 
 ```bash
 mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done

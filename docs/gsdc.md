@@ -131,9 +131,11 @@ GNSS *outages*, which this trace does not contain.
 
 ## Reproducing
 
-The dataset is ~3.7 GB and lives on Kaggle behind authentication; it is not
-committed. Extract one phone-trace into `datasets/gsdc2023/` so the directory
-holds `device_imu.csv`, `device_gnss.csv` and `ground_truth.csv`, then:
+The dataset is ~3.7 GB, lives on Kaggle behind a competition-rules acceptance,
+and is **not committed** — see [datasets.md](datasets.md#gsdc-2023-phone-trace)
+for the fetch and the one-line `unzip` that pulls out a single trace. With
+`datasets/gsdc2023/` holding `device_imu.csv`, `device_gnss.csv` and
+`ground_truth.csv`:
 
 ```bash
 cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale 300

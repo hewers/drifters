@@ -119,8 +119,9 @@ engine.add_gnss(gnss_fix);
 let solution = engine.nav_state();
 ```
 
-Reproduce the accuracy number yourself — the dataset is not committed, so fetch
-it first (67 MB, from the KF-GINS authors):
+Reproduce the accuracy number yourself — no dataset is committed, so fetch it
+first (67 MB, from the KF-GINS authors; the full index is
+[docs/datasets.md](docs/datasets.md)):
 
 ```bash
 mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done
@@ -159,6 +160,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [testing.md](docs/testing.md) — eleven layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
+- [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
 - [milestones.md](docs/milestones.md) — roadmap and measured outcomes
 - [adr/](docs/adr/) — decisions and why, including the ones reversed later
 - [papers/](docs/papers/) — the source papers: citations, DOIs and how to fetch them

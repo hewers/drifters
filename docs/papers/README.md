@@ -1,6 +1,8 @@
 # Source papers
 
-The papers this project implements. **The PDFs are not committed** — see
+The papers this project implements. Part of the wider index of external data in
+[`../datasets.md`](../datasets.md); the history purge that removed the PDFs from
+git is [`../adr/0007`](../adr/0007-no-binaries-in-history.md). **The PDFs are not committed** — see
 [Why not stored](#why-not-stored) — so this file is the index, and fetching a
 local copy is one command for one of them and one click for the other.
 
