@@ -359,7 +359,21 @@ fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("{} IMU samples, {} GNSS fixes", imu.len(), gnss.len());
     }
 
-    let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, quiet);
+    let warm = match flag(args, "--warm-start") {
+        Some(v) => {
+            eqf::WarmStart::parse(v).ok_or("--warm-start must be none, calibration or full")?
+        }
+        None => eqf::WarmStart::None,
+    };
+    if warm != eqf::WarmStart::None {
+        eprintln!(
+            "warning: --warm-start is experimental and currently diverges on this\n\
+             dataset (kilometres of horizontal error). See the WarmStart docs in\n\
+             crates/drifters-cli/src/eqf.rs for the diagnosis. Do not report\n\
+             numbers from it."
+        );
+    }
+    let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, warm, quiet);
     report.print();
 
     if let Some(figure) = flag(args, "--compare") {

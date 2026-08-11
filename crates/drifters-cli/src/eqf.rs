@@ -66,6 +66,8 @@ pub struct EqfReport {
     pub curvature_error: f64,
     /// Whether Earth-rate compensation was applied to the gyro input.
     pub earth_rate_compensated: bool,
+    /// Which reverse-pass seeding the forward run used.
+    pub warm_start: WarmStart,
     /// The residual at the last fix, metres.
     ///
     /// Reported next to the RMS because on a long convergence the two mean
@@ -80,12 +82,195 @@ pub struct EqfReport {
     pub gyrocompass: f64,
 }
 
+/// How much of a reverse pass to carry into the forward run.
+///
+/// # These produce different claims, not different accuracies
+///
+/// A reverse pass sees the whole dataset. Anything it carries forward was
+/// derived from measurements the forward run is then scored against, so the
+/// result stops being a causal filtering number.
+///
+/// - [`WarmStart::None`] is the only causal result. It is what a library
+///   accuracy claim should quote.
+/// - [`WarmStart::Calibration`] carries back the bias, lever arm, magnetometer
+///   calibration and the covariance, and resets position, velocity and attitude
+///   to the configured start. The trajectory is still tracked causally; only the
+///   IMU arrives pre-calibrated. This is what a deployment does after a
+///   calibration run, and it isolates steady-state accuracy from convergence.
+/// - [`WarmStart::Full`] carries the entire state and covariance. The forward
+///   run then begins from an estimate that already saw every fix it will be
+///   scored on. This is **smoothing**, and its number is not comparable with
+///   the other two.
+///
+/// GNSS post-processing competitions score a trajectory offline, so smoothing
+/// is legitimate there and widely used. A navigation library's headline number
+/// is a different claim. Keeping them apart is the reason this is an enum
+/// rather than a boolean.
+///
+/// # Known issue: both warm modes diverge on KF-GINS
+///
+/// `Calibration` and `Full` currently produce horizontal errors of kilometres
+/// and must not be used for reported numbers. The reverse pass is not at fault
+/// in the calibration states: it recovers the lever arm to 0.088 m, against
+/// 0.087 m from the causal run, and the vertical channel is sound.
+///
+/// The remaining coupling is with [`compensate_earth`]. The reverse pass feeds
+/// its own attitude estimate into the Earth-rate correction, and that attitude
+/// starts from a 1 rad² prior at the end of the trajectory, where heading is
+/// genuinely unknown. An attitude error of that size makes `R̂ᵀω_ie` wrong by
+/// most of Earth rate, which the filter then absorbs into the gyroscope bias.
+/// The forward run inherits a corrupted bias together with a covariance
+/// confident enough to prevent correcting it.
+///
+/// Two candidate fixes, neither tried: run the reverse pass without Earth
+/// compensation and accept the flat-Earth error over it, or iterate the reverse
+/// pass so the second sweep compensates using a converged attitude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WarmStart {
+    /// No reverse pass. The only causal configuration.
+    #[default]
+    None,
+    /// Carry back calibration states and covariance; re-anchor the pose.
+    Calibration,
+    /// Carry back everything. Smoothed, not filtered.
+    Full,
+}
+
+impl WarmStart {
+    /// Parse the `--warm-start` argument.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "calibration" | "calib" => Some(Self::Calibration),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    /// One line for the report, naming what the number that follows means.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::None => "none (causal: the forward run knows nothing of the future)",
+            Self::Calibration => "calibration (IMU pre-calibrated; trajectory still causal)",
+            Self::Full => "full (SMOOTHED: initial state saw every fix it is scored on)",
+        }
+    }
+}
+
+/// Run the filter backwards over the whole dataset, ending at `start_time`.
+///
+/// Time reversal is `dt < 0` in [`EqFilter::propagate`], which inverts the state
+/// step and the transition matrix while still accumulating process noise. The
+/// measurement updates are unchanged: an update has no notion of time direction.
+fn reverse_pass(
+    config: &kfgins::Config,
+    imu: &[ImuSample],
+    gnss: &[GnssFix],
+    anchor: &Anchor,
+    seed: &State,
+    noise: &ProcessNoise,
+    compensate: bool,
+) -> EqFilter {
+    let end = config.end_time.unwrap_or(f64::INFINITY);
+
+    // Walk the fixes downwards alongside the samples.
+    let mut next_fix = gnss.len();
+    while next_fix > 0 && gnss[next_fix - 1].time.tow > end {
+        next_fix -= 1;
+    }
+
+    // The reverse pass starts at the END of the trajectory, so it must be
+    // seeded there. Seeding it with the state at t=0 puts the filter 1.5 km
+    // from where the data says it is and it never recovers.
+    //
+    // Only the last fix is known: position. Velocity and attitude are left at
+    // the configured values as a guess, with the wide prior of
+    // `initial_covariance` to say so, and 3 363 fixes to correct them on the
+    // way back.
+    let tail = State {
+        pose: Se23::new(
+            seed.pose.rotation,
+            Vec3::ZERO,
+            gnss.get(next_fix.saturating_sub(1))
+                .map(|f| anchor.to_local(f.position))
+                .unwrap_or(seed.pose.position),
+        ),
+        bias: Se3Tangent::ZERO,
+        lever: Vec3::ZERO,
+        mag: Mat3::identity(),
+    };
+    // Deliberately wide, and not the forward run's prior. At the end of the
+    // trajectory the heading is genuinely unknown - this vehicle drives a loop -
+    // so handing the reverse pass the forward attitude prior would start it
+    // confidently wrong by most of a turn, which it never recovers from.
+    let mut wide = [0.0; 21];
+    for (i, v) in wide.iter_mut().enumerate() {
+        *v = match i {
+            0..=2 => 1.0,      // attitude, rad^2: essentially unknown
+            3..=5 => 100.0,    // velocity
+            6..=8 => 25.0,     // position, from the last fix
+            9..=11 => 1.0e-8,  // gyro bias
+            12..=14 => 1.0e-4, // accel bias
+            15..=17 => 1.0,    // lever arm
+            _ => 1.0e-6,       // magnetometer calibration, unobservable here
+        };
+    }
+    let mut filter = EqFilter::new(&tail, Matrix::from_diagonal(&wide), anchor.gravity);
+
+    // The increment for the gap (tow, later] belongs to the LATER sample, since
+    // `dtheta` covers the interval ending at its own timestamp. Pairing a gap
+    // with the earlier sample's rate offsets the whole integration by one step.
+    let mut later: Option<&ImuSample> = None;
+    for sample in imu.iter().rev() {
+        let tow = sample.time.tow;
+        if tow > end {
+            later = Some(sample);
+            continue;
+        }
+        if tow < config.start_time {
+            break;
+        }
+        let Some(next) = later else {
+            later = Some(sample);
+            continue;
+        };
+        let dt = next.time.tow - tow;
+        later = Some(sample);
+        if !(dt > 0.0 && dt < 1.0) {
+            continue;
+        }
+
+        let mut input = Input::new(next.gyro(), next.accel());
+        if compensate {
+            let st = filter.nav_state();
+            input = compensate_earth(
+                &input,
+                st.pose.rotation,
+                st.pose.velocity,
+                anchor.origin.lat,
+                anchor.origin.height,
+            );
+        }
+        filter.propagate(&input, -dt, noise);
+
+        while next_fix > 0 && gnss[next_fix - 1].time.tow >= tow {
+            next_fix -= 1;
+            let fix = gnss[next_fix];
+            let sigma = fix.position_std;
+            let r = Mat3::from_diagonal(&[sigma.x * sigma.x, sigma.y * sigma.y, sigma.z * sigma.z]);
+            filter.update_position(anchor.to_local(fix.position), &r);
+        }
+    }
+    filter
+}
+
 /// Replay the EqF over the same inputs as [`crate::replay`].
 pub fn replay_eqf(
     config: &kfgins::Config,
     imu: &[ImuSample],
     gnss: &[GnssFix],
     compensate: bool,
+    warm: WarmStart,
     quiet: bool,
 ) -> EqfReport {
     let mut next_fix = 0usize;
@@ -112,8 +297,25 @@ pub fn replay_eqf(
         mag: Mat3::identity(),
     };
 
-    let mut filter = EqFilter::new(&start, initial_covariance(config), anchor.gravity);
     let noise = process_noise(config);
+    let mut filter = EqFilter::new(&start, initial_covariance(config), anchor.gravity);
+
+    // A reverse pass, then seed the forward run from it. See `WarmStart` for
+    // what each mode does to the meaning of the result.
+    if warm != WarmStart::None {
+        let back = reverse_pass(config, imu, gnss, &anchor, &start, &noise, compensate);
+        let learned = back.nav_state();
+        let seeded = match warm {
+            WarmStart::Full => learned,
+            // Keep the configured pose, take everything the reverse pass
+            // learned about the sensors.
+            _ => State {
+                pose: start.pose,
+                ..learned
+            },
+        };
+        filter = EqFilter::new(&seeded, back.sigma, anchor.gravity);
+    }
     // Bias stability is per-axis in the config; the ratio is a scalar property
     // of the part, so take the largest axis as the representative figure.
     let bias_stability = config.options.imu_noise.gyro_bias_std.amax();
@@ -132,6 +334,7 @@ pub fn replay_eqf(
         max_range: 0.0,
         curvature_error: 0.0,
         earth_rate_compensated: compensate,
+        warm_start: warm,
         final_residual: 0.0,
         earth_rate_ratio: earth_rate_ratio(bias_stability),
         verdict: flat_earth_verdict(bias_stability),
@@ -276,6 +479,7 @@ impl EqfReport {
         println!("\n--- EqF replay (flat-Earth, local tangent frame) ---");
         println!("IMU samples processed : {}", self.processed);
         println!("GNSS fixes applied    : {}", self.applied);
+        println!("warm start           : {}", self.warm_start.describe());
         println!(
             "Earth-rate input compensation: {}",
             if self.earth_rate_compensated {
