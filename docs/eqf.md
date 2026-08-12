@@ -553,40 +553,35 @@ dimension, 21.
 
 | block | NEES | expected | |
 |---|---|---|---|
-| **overall** | **23.9** | **21** | **overconfident** |
-| attitude | 3.61 | 3 | overconfident |
-| velocity | 3.02 | 3 | consistent |
-| position | 2.94 | 3 | consistent |
-| gyro bias | 3.16 | 3 | overconfident |
-| accel bias | 2.87 | 3 | conservative |
+| **overall** | **23.62** | **21** | **overconfident** |
+| attitude | 3.55 | 3 | overconfident |
+| velocity | 2.97 | 3 | consistent |
+| position | 2.91 | 3 | consistent |
+| gyro bias | 3.13 | 3 | overconfident |
+| accel bias | 2.88 | 3 | conservative |
 | lever arm | 2.71 | 3 | conservative |
 | mag calib | 3.68 | 3 | overconfident |
 
 **This is an implementation fault.** There is no model error in the experiment
-to attribute it to, so the covariance is simply about 14 % smaller than the
-error it is describing.
+to attribute it to, so the covariance is about 12 % smaller than the error it is
+describing.
 
-**It is not a discretisation artefact.** Across a ten-fold sweep of the IMU
-interval the figure is flat — 26.0, 23.9, 24.0, 24.2 at `dt` of 0.02, 0.01,
-0.004 and 0.002. A discretisation error would fall with `dt`.
+**It is invariant in both the step and the error magnitude.** Across a ten-fold
+sweep of the IMU interval it is flat, and across a *hundred*-fold sweep of error
+magnitude — `--strength`, sigmas by `s` and densities by `s²`, leaving the
+error-to-covariance ratio unchanged — it moves by 0.2 %: 23.63, 23.64, 23.65,
+23.66, 23.67 at `s` of 1, 0.3, 0.1, 0.03, 0.01. A scale-invariant fault.
 
-Scaling every error magnitude instead (`--strength`, sigmas by `s` and noise
-densities by `s²`, leaving the error-to-covariance ratio unchanged) shows the
-harness has a floor of its own: 23.9, 26.4, 47.5, 287 at `s` of 1, 0.3, 0.1,
-0.03. NEES *rising* as the errors shrink means a fixed term that does not scale
-with the noise, and it is the truth propagator — first order in specific force
-where the filter is second order. At `s = 0.03` it dominates and falls with
-`dt`: 291, 37.2, 27.2 at 0.01, 0.002, 0.0005.
-
-That floor does not account for the nominal figure. At `s = 1, dt = 0.002` it is
-roughly twenty-five times smaller and NEES is still 24.2. Two separate effects;
-one is the harness, one is the filter. Giving the truth propagator the Simpson
-quadrature already used in `filter.rs` would remove the first and leave the
-second measurable at any strength.
+That flatness only appeared after the harness was fixed. With a first-order
+truth propagator the same sweep ran 23.9, 26.4, 47.5, **287** — the harness's own
+discretisation error, fixed in magnitude and so dominating as the injected noise
+fell. Giving the truth propagator Simpson quadrature removed it, and left the
+filter's term measurable at any strength. Two effects, and the first was
+masking how cleanly the second could be measured.
 
 **Where it is.** Attitude and the magnetometer calibration carry most of it, at
-roughly 20 % each, with the gyro bias at 5 %. Position and velocity are clean.
-The magnetometer calibration is unobservable in this experiment — no
+roughly 18 % and 23 %, with the gyro bias at 4 %. Position and velocity are
+clean. The magnetometer calibration is unobservable in this experiment — no
 magnetometer update is applied — so its NEES is testing the transition matrix
 alone, and the attitude and calibration blocks are coupled through `−₃A`.
 

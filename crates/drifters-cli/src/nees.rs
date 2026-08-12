@@ -357,15 +357,29 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
             let accel = truth.pose.rotation.transpose()
                 * (Vec3::new(0.4 * (0.19 * t).sin(), 0.3 * (0.11 * t).cos(), 0.0) - GRAVITY);
 
-            // Advance truth exactly as the filter's model says the world works.
-            let force = truth.pose.rotation * accel + GRAVITY;
+            // Advance truth to fourth order. The body rate is constant across
+            // the step, so R(s) = R₀ exp(ω^s) is exact and only the specific
+            // force needs quadrature.
+            //
+            // A first-order stepper here is not good enough, and the reason is
+            // worth stating: its disagreement with the filter's midpoint scheme
+            // is a fixed error that does not scale with the injected noise, so
+            // it dominates NEES as the noise is reduced. Measured with the old
+            // stepper, NEES ran 23.9, 26.4, 47.5, 287 as `strength` fell from 1
+            // to 0.03 — the harness measuring itself.
+            let r0 = truth.pose.rotation;
+            let force = |s: f64| {
+                r0.matmul(&Quat::from_rotation_vector(omega * s).to_dcm()) * accel + GRAVITY
+            };
+            let simpson = |a: f64, b: f64| {
+                (force(a) + force(0.5 * (a + b)) * 4.0 + force(b)) * ((b - a) / 6.0)
+            };
+            let dv = simpson(0.0, dt);
+            let half = simpson(0.0, 0.5 * dt);
             truth.pose.position =
-                truth.pose.position + truth.pose.velocity * dt + force * (0.5 * dt * dt);
-            truth.pose.velocity += force * dt;
-            truth.pose.rotation = truth
-                .pose
-                .rotation
-                .matmul(&Quat::from_rotation_vector(omega * dt).to_dcm());
+                truth.pose.position + truth.pose.velocity * dt + (half * 4.0 + dv) * (dt / 6.0);
+            truth.pose.velocity += dv;
+            truth.pose.rotation = r0.matmul(&Quat::from_rotation_vector(omega * dt).to_dcm());
             // Bias random walk, at the density the filter is given.
             truth.bias = truth.bias
                 + Se3Tangent::new(
@@ -527,23 +541,19 @@ mod tests {
         }
     }
 
-    /// At nominal error magnitudes the overconfidence does not shrink with the
-    /// step: 26.0, 23.9, 24.0, 24.2 at `dt` of 0.02, 0.01, 0.004, 0.002.
+    /// The overconfidence is invariant in both the step and the error
+    /// magnitude, which is what a scale-invariant fault in the filter looks
+    /// like and rules out most alternatives.
     ///
-    /// # This holds at `strength = 1` and not below it
+    /// Scaling every error by `strength` — sigmas by `s`, densities by `s²` —
+    /// leaves the error-to-covariance ratio unchanged, so NEES should not move.
+    /// It does not: 23.63, 23.64, 23.65, 23.66, 23.67 across `s` from 1 down to
+    /// 0.01, a hundred-fold range.
     ///
-    /// The harness has a discretisation floor of its own. The truth propagator
-    /// here is first order in the specific force where the filter is second
-    /// order, so the two disagree by a fixed amount that does not scale with the
-    /// noise. At `strength = 0.03` that term dominates and NEES runs 291, 37.2,
-    /// 27.2 at `dt` of 0.01, 0.002, 0.0005 — clearly discretisation.
-    ///
-    /// It does not explain the nominal result. At `strength = 1, dt = 0.002` the
-    /// floor is some twenty-five times smaller and NEES is still 24.2. Two
-    /// separate effects, and only one of them is the filter's.
-    ///
-    /// Fixing the harness means giving the truth propagator the same Simpson
-    /// quadrature the EqF's own simulator uses in `filter.rs`.
+    /// That flatness only appeared once the truth propagator was given Simpson
+    /// quadrature. With the earlier first-order stepper the same sweep ran 23.9,
+    /// 26.4, 47.5, 287 — the harness's own discretisation error, fixed in
+    /// magnitude and therefore dominating as the injected noise fell.
     #[test]
     fn the_overconfidence_is_not_a_discretisation_artefact() {
         let coarse = run_nees_at(8, 60.0, 4242, 0.02).overall.mean();
