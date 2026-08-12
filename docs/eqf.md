@@ -608,8 +608,31 @@ both filters, a fault in `G` only for this one.
 EqF's covariance is optimistic by roughly this margin: the NIS-based tuning of
 [gsdc.md](gsdc.md), the innovation gating, and the GCU inflation, which reads
 `Σ` directly. It does not affect the accuracy figures, which are scored against
-truth or against the fixes rather than against the covariance. The ESKF has not
-been put through the same campaign and should be.
+truth or against the fixes rather than against the covariance.
+
+**The ESKF has now been through the same campaign, in its own Earth-referenced
+world** — `drifters nees --eskf`, with the trajectory prescribed in closed form
+and the IMU derived by inverting the navigation equations, so there is no
+integration error to disagree about. It is also overconfident, by more, and with
+a completely different signature:
+
+| | NEES | expected |
+|---|---|---|
+| **overall (15 states)** | **38.2** | **15** |
+| position | 2.91 | 3 |
+| velocity | 2.95 | 3 |
+| attitude | 2.61 | 3 |
+| gyro bias | 2.96 | 3 |
+| accel bias | 2.59 | 3 |
+
+Every marginal is consistent or conservative while the joint is 2.5× too small,
+which localises the fault to the **cross-covariances** rather than to any one
+state. The EqF's excess is the opposite shape — marginals wrong in attitude and
+calibration, and a much smaller overall factor.
+
+Two filters written independently, two different failure signatures, from one
+harness. That is the answer to whether the EqF's 12 % was an artefact of the
+measuring apparatus: it was not.
 
 ---
 

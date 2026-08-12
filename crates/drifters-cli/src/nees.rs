@@ -216,7 +216,7 @@ impl NeesReport {
     }
 }
 
-fn verdict(value: f64, lo: f64, hi: f64) -> &'static str {
+pub(crate) fn verdict(value: f64, lo: f64, hi: f64) -> &'static str {
     if value > hi {
         "OVERCONFIDENT"
     } else if value < lo {
@@ -567,5 +567,279 @@ mod tests {
             fine > 22.0,
             "fine-step NEES {fine:.2} is no longer overconfident"
         );
+    }
+}
+
+/// Monte Carlo NEES for the ESKF, in an Earth-referenced world.
+///
+/// # Why this needs its own world
+///
+/// NEES is only a covariance test if the data comes from the filter's own
+/// model. The EqF's world above is flat and non-rotating; the ESKF's is not. It
+/// carries `ω_ie`, transport rate and normal gravity, and models bias as
+/// first-order Gauss-Markov rather than a random walk. Feeding it the EqF's
+/// world would measure that mismatch, which [adr/0008](../../docs/adr/0008-earth-model-by-sensor-grade.md)
+/// already covers, rather than the covariance.
+///
+/// # The truth is chosen, not integrated
+///
+/// Fixing the EqF harness taught the lesson: a truth propagator that disagrees
+/// with the filter's integrator contributes a fixed error that swamps NEES at
+/// low noise. Here the trajectory is prescribed in closed form — constant NED
+/// velocity, constant attitude — and the IMU is *derived* from it by inverting
+/// the navigation equations:
+///
+/// ```text
+/// ω_ib^b = C_bn (ω_ie + ω_en)
+/// f^b    = C_bn ((2ω_ie + ω_en) × v − g)
+/// ```
+///
+/// so there is no integration error to disagree about.
+///
+/// A constant attitude leaves the scale factors unobservable, which is not a
+/// defect: an unobservable state should hold its prior, and NEES checks that it
+/// does.
+pub mod eskf {
+    use super::{verdict, Rng, BLOCKS};
+    use crate::stats::{self, Running};
+    use drifters_core::earth::Wgs84;
+    use drifters_core::frames::{Lla, Ned};
+    use drifters_core::math::{Cholesky, Matrix, Quat, Vec3};
+    use drifters_core::time::GpsTime;
+    use drifters_core::types::{GnssFix, ImuSample};
+    use drifters_filter::config::GinsOptions;
+    use drifters_filter::engine::GinsEngine;
+    use drifters_filter::state::N_STATE;
+
+    /// Run the campaign. Returns the same shape of report as the EqF's.
+    pub fn run(runs: usize, seconds: f64, seed: u64, dt: f64, strength: f64) -> super::NeesReport {
+        let origin = Lla::from_degrees(30.44, 114.47, 20.0);
+        let velocity = Ned {
+            n: 8.0,
+            e: 3.0,
+            d: 0.0,
+        };
+        let attitude = drifters_core::math::Euler {
+            roll: 0.02,
+            pitch: -0.01,
+            yaw: 0.6,
+        };
+        let r_nb = Quat::from_euler(attitude.roll, attitude.pitch, attitude.yaw).to_dcm();
+        let tau = 3600.0;
+
+        // Per-axis one-sigma, scaled together with the noise so the
+        // error-to-covariance ratio is invariant. See `run_nees_scaled`.
+        let s = strength;
+        let gyro_arw = 3.0e-4 * s;
+        let accel_vrw = 3.0e-3 * s;
+        let gyro_bias_sigma = 2.0e-5 * s;
+        let accel_bias_sigma = 2.0e-3 * s;
+        let gnss_sigma = Vec3::new(0.5, 0.5, 1.0) * s;
+
+        let noise = drifters_core::types::ImuNoise {
+            gyro_arw: Vec3::splat(gyro_arw),
+            accel_vrw: Vec3::splat(accel_vrw),
+            gyro_bias_std: Vec3::splat(gyro_bias_sigma),
+            accel_bias_std: Vec3::splat(accel_bias_sigma),
+            gyro_scale_std: Vec3::splat(1.0e-9),
+            accel_scale_std: Vec3::splat(1.0e-9),
+            correlation_time: tau,
+        };
+        let prior = [
+            0.5 * s,
+            0.2 * s,
+            2.0e-3 * s,
+            gyro_bias_sigma,
+            accel_bias_sigma,
+        ];
+
+        let mut report = super::NeesReport {
+            runs,
+            overall: Running::new(),
+            blocks: core::array::from_fn(|_| Running::new()),
+            singular: 0,
+        };
+
+        for run in 0..runs {
+            let mut rng = Rng::new(seed.wrapping_add(run as u64).wrapping_mul(0x9E37_79B9));
+
+            // Gauss-Markov bias, started at its stationary distribution so the
+            // filter's steady-state prior is correct from the first sample.
+            let mut bg = rng.normal_vec3(Vec3::splat(gyro_bias_sigma));
+            let mut ba = rng.normal_vec3(Vec3::splat(accel_bias_sigma));
+
+            let start = Lla {
+                lat: origin.lat,
+                lon: origin.lon,
+                height: origin.height,
+            };
+            let options = GinsOptions {
+                imu_noise: noise,
+                initial_position_std: Vec3::splat(prior[0]),
+                initial_velocity_std: Vec3::splat(prior[1]),
+                initial_attitude_std: Vec3::splat(prior[2]),
+                initial_gyro_bias_std: Vec3::splat(prior[3]),
+                initial_accel_bias_std: Vec3::splat(prior[4]),
+                antenna_lever_arm: Vec3::ZERO,
+                ..GinsOptions::default()
+            }
+            .with_initial_state(
+                start.shifted(Ned {
+                    n: rng.normal() * prior[0],
+                    e: rng.normal() * prior[0],
+                    d: rng.normal() * prior[0],
+                }),
+                Ned {
+                    n: velocity.n + rng.normal() * prior[1],
+                    e: velocity.e + rng.normal() * prior[1],
+                    d: velocity.d + rng.normal() * prior[1],
+                },
+                attitude,
+            );
+            let Ok(mut engine) = GinsEngine::new(options) else {
+                report.singular += 1;
+                continue;
+            };
+
+            let steps = (seconds / dt) as usize;
+            let decay = (-dt / tau).exp();
+            let walk = (2.0 * dt / tau).sqrt();
+
+            for k in 1..=steps {
+                let t = k as f64 * dt;
+                let truth_pos = start.shifted(Ned {
+                    n: velocity.n * t,
+                    e: velocity.e * t,
+                    d: velocity.d * t,
+                });
+
+                // Invert the navigation equations for the IMU that produces
+                // this trajectory exactly.
+                let w_ie = Wgs84::omega_ie_n(truth_pos.lat);
+                let w_en = Wgs84::omega_en_n(truth_pos.lat, truth_pos.height, velocity.to_vec3());
+                let g = Wgs84::gravity_n(truth_pos.lat, truth_pos.height);
+                let bn = r_nb.transpose();
+                let omega = bn * (w_ie + w_en);
+                let force = bn * ((w_ie * 2.0 + w_en).cross(velocity.to_vec3()) - g);
+
+                bg = bg * decay + rng.normal_vec3(Vec3::splat(gyro_bias_sigma * walk));
+                ba = ba * decay + rng.normal_vec3(Vec3::splat(accel_bias_sigma * walk));
+
+                let sample = ImuSample {
+                    time: GpsTime { week: 0, tow: t },
+                    dt,
+                    dtheta: (omega + bg) * dt + rng.normal_vec3(Vec3::splat(gyro_arw * dt.sqrt())),
+                    dvel: (force + ba) * dt + rng.normal_vec3(Vec3::splat(accel_vrw * dt.sqrt())),
+                };
+
+                if k % (1.0 / dt).round() as usize == 0 {
+                    let jitter = rng.normal_vec3(gnss_sigma);
+                    engine.add_gnss(GnssFix::position_only(
+                        GpsTime { week: 0, tow: t },
+                        truth_pos.shifted(Ned {
+                            n: jitter.x,
+                            e: jitter.y,
+                            d: jitter.z,
+                        }),
+                        gnss_sigma,
+                    ));
+                }
+                if engine.add_imu(sample).is_err() {
+                    report.singular += 1;
+                    break;
+                }
+
+                if t < 10.0 || k % (1.0 / dt).round() as usize != 0 {
+                    continue;
+                }
+                let nav = engine.nav_state();
+                let est = nav.position();
+                let d = est.ned_from(truth_pos);
+                let dv = nav.velocity().to_vec3() - velocity.to_vec3();
+                let phi = Quat::from_dcm(&nav.pva.attitude.dcm.matmul(&r_nb.transpose()))
+                    .to_rotation_vector();
+                let e_bg = nav.imu_error.gyro_bias - bg;
+                let e_ba = nav.imu_error.accel_bias - ba;
+
+                let mut e = [0.0; N_STATE];
+                for i in 0..3 {
+                    e[i] = [d.n, d.e, d.d][i];
+                    e[3 + i] = dv[i];
+                    e[6 + i] = phi[i];
+                    e[9 + i] = e_bg[i];
+                    e[12 + i] = e_ba[i];
+                }
+                // Score the 15 states this world exercises, as a proper
+                // marginal: the leading sub-block of P *is* the marginal
+                // covariance over them.
+                //
+                // The scale factors are excluded rather than zeroed. The truth
+                // here has no scale error at all while the filter carries a
+                // prior for it, so including them feeds the quadratic form a
+                // state the model says is impossible — with the full 21 that
+                // read 57.6 while every marginal block was consistent, which is
+                // the signature of exactly this mistake.
+                let p = engine.covariance().block::<15, 15>(0, 0);
+                let Some(chol) = Cholesky::new(&p) else {
+                    report.singular += 1;
+                    break;
+                };
+                let mut col = Matrix::<15, 1>::zeros();
+                for i in 0..15 {
+                    col[(i, 0)] = e[i];
+                }
+                let solved = chol.solve(&col);
+                report
+                    .overall
+                    .push((0..15).map(|i| e[i] * solved[(i, 0)]).sum());
+
+                for (slot, (_, base)) in report.blocks.iter_mut().zip(BLOCKS.iter()).take(5) {
+                    let block = p.block::<3, 3>(*base, *base);
+                    if let Some(bc) = Cholesky::new(&block) {
+                        let mut v = Matrix::<3, 1>::zeros();
+                        for i in 0..3 {
+                            v[(i, 0)] = e[base + i];
+                        }
+                        let sv = bc.solve(&v);
+                        slot.push((0..3).map(|i| e[base + i] * sv[(i, 0)]).sum());
+                    }
+                }
+            }
+        }
+        report
+    }
+
+    /// Print, with the ESKF's own state names and dimension.
+    pub fn print(r: &super::NeesReport) {
+        println!("\n--- Monte Carlo NEES, ESKF, {} runs ---", r.runs);
+        if r.singular > 0 {
+            println!("{} run(s) abandoned", r.singular);
+        }
+        let (lo, hi) = stats::nis_interval(15, r.overall.count());
+        println!(
+            "\noverall  {:>8.3}   expected 15 (scale factors excluded), \
+             95 % interval [{lo:.2}, {hi:.2}]  {}",
+            r.overall.mean(),
+            verdict(r.overall.mean(), lo, hi)
+        );
+        let (blo, bhi) = stats::nis_interval(3, r.blocks[0].count().max(1));
+        println!("\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]");
+        // The ESKF orders position first; the EqF orders attitude first.
+        for (name, slot) in [
+            "position",
+            "velocity",
+            "attitude",
+            "gyro bias",
+            "accel bias",
+        ]
+        .iter()
+        .zip(r.blocks.iter())
+        {
+            println!(
+                "  {name:<11} {:>8.3}   {}",
+                slot.mean(),
+                verdict(slot.mean(), blo, bhi)
+            );
+        }
     }
 }

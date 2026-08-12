@@ -67,7 +67,12 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
         let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
         let strength: f64 = flag(args, "--strength").unwrap_or("1").parse()?;
-        drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
+        if args.iter().any(|a| a == "--eskf") {
+            let r = drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength);
+            drifters_cli::nees::eskf::print(&r);
+        } else {
+            drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
+        }
         return Ok(());
     }
     let make_figure = match args.first().map(String::as_str) {
