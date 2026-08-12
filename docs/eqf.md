@@ -570,6 +570,20 @@ error it is describing.
 interval the figure is flat — 26.0, 23.9, 24.0, 24.2 at `dt` of 0.02, 0.01,
 0.004 and 0.002. A discretisation error would fall with `dt`.
 
+Scaling every error magnitude instead (`--strength`, sigmas by `s` and noise
+densities by `s²`, leaving the error-to-covariance ratio unchanged) shows the
+harness has a floor of its own: 23.9, 26.4, 47.5, 287 at `s` of 1, 0.3, 0.1,
+0.03. NEES *rising* as the errors shrink means a fixed term that does not scale
+with the noise, and it is the truth propagator — first order in specific force
+where the filter is second order. At `s = 0.03` it dominates and falls with
+`dt`: 291, 37.2, 27.2 at 0.01, 0.002, 0.0005.
+
+That floor does not account for the nominal figure. At `s = 1, dt = 0.002` it is
+roughly twenty-five times smaller and NEES is still 24.2. Two separate effects;
+one is the harness, one is the filter. Giving the truth propagator the Simpson
+quadrature already used in `filter.rs` would remove the first and leave the
+second measurable at any strength.
+
 **Where it is.** Attitude and the magnetometer calibration carry most of it, at
 roughly 20 % each, with the gyro bias at 5 %. Position and velocity are clean.
 The magnetometer calibration is unobservable in this experiment — no

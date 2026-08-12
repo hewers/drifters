@@ -66,7 +66,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let seconds: f64 = flag(args, "--seconds").unwrap_or("120").parse()?;
         let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
         let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
-        drifters_cli::nees::run_nees_at(runs, seconds, seed, dt).print();
+        let strength: f64 = flag(args, "--strength").unwrap_or("1").parse()?;
+        drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
         return Ok(());
     }
     let make_figure = match args.first().map(String::as_str) {

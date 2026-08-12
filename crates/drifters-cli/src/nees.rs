@@ -257,8 +257,8 @@ fn initial_sigma() -> [f64; DIM] {
     s
 }
 
-fn initial_covariance() -> Matrix<DIM, DIM> {
-    let s = initial_sigma();
+fn initial_covariance_scaled(strength: f64) -> Matrix<DIM, DIM> {
+    let s = initial_sigma().map(|v| v * strength);
     let mut d = [0.0; DIM];
     for i in 0..DIM {
         d[i] = s[i] * s[i];
@@ -279,10 +279,27 @@ pub fn run_nees(runs: usize, seconds: f64, seed: u64) -> NeesReport {
 /// Sweeping `dt` discriminates between a discretisation artefact and a
 /// structural fault: the first shrinks as `dt` falls, the second does not.
 pub fn run_nees_at(runs: usize, seconds: f64, seed: u64, dt: f64) -> NeesReport {
+    run_nees_scaled(runs, seconds, seed, dt, 1.0)
+}
+
+/// As [`run_nees_at`], with every error magnitude scaled by `strength`.
+///
+/// Sigmas scale by `strength` and noise densities by its square, so the ratio
+/// of error to covariance is unchanged and NEES is invariant for a correctly
+/// implemented filter. What is *not* invariant is second-order error: the
+/// physical Jacobian in this harness is first-order, so any excess it
+/// contributes shrinks with `strength`. That separates a fault in the filter
+/// from a fault in the measuring apparatus.
+pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: f64) -> NeesReport {
     let settle = 10.0;
     let gnss_every = (1.0 / dt).round() as usize; // 1 Hz, whatever dt is
-    let gnss_sigma = Vec3::new(0.5, 0.5, 1.0);
-    let q = noise();
+    let gnss_sigma = Vec3::new(0.5, 0.5, 1.0) * strength;
+    let mut q = noise();
+    let s2 = strength * strength;
+    q.gyro = q.gyro * s2;
+    q.accel = q.accel * s2;
+    q.gyro_bias = q.gyro_bias * s2;
+    q.accel_bias = q.accel_bias * s2;
 
     let mut report = NeesReport {
         runs,
@@ -298,13 +315,13 @@ pub fn run_nees_at(runs: usize, seconds: f64, seed: u64, dt: f64) -> NeesReport 
         let mut truth = State {
             pose: Se23::new(Mat3::identity(), Vec3::new(8.0, 0.0, 0.0), Vec3::ZERO),
             bias: Se3Tangent::new(
-                rng.normal_vec3(Vec3::splat(5.0e-4)),
-                rng.normal_vec3(Vec3::splat(5.0e-3)),
+                rng.normal_vec3(Vec3::splat(5.0e-4 * strength)),
+                rng.normal_vec3(Vec3::splat(5.0e-3 * strength)),
             ),
             lever: Vec3::new(0.30, -0.10, -0.20),
             mag: Mat3::identity(),
         };
-        let sigma = initial_sigma();
+        let sigma = initial_sigma().map(|v| v * strength);
         let start = State {
             pose: Se23::new(
                 Quat::from_rotation_vector(rng.normal_vec3(Vec3::splat(sigma[0])))
@@ -324,7 +341,7 @@ pub fn run_nees_at(runs: usize, seconds: f64, seed: u64, dt: f64) -> NeesReport 
             ),
         };
 
-        let mut filter = EqFilter::new(&start, initial_covariance(), GRAVITY);
+        let mut filter = EqFilter::new(&start, initial_covariance_scaled(strength), GRAVITY);
         filter.alpha = 0.0; // GCU off: this measures the covariance, not robustness.
         let mut bad = false;
 
@@ -510,11 +527,23 @@ mod tests {
         }
     }
 
-    /// The overconfidence does not shrink with the step, so it is not a
-    /// discretisation artefact. Measured across a ten-fold sweep: 26.0, 23.9,
-    /// 24.0, 24.2 at dt of 0.02, 0.01, 0.004 and 0.002.
+    /// At nominal error magnitudes the overconfidence does not shrink with the
+    /// step: 26.0, 23.9, 24.0, 24.2 at `dt` of 0.02, 0.01, 0.004, 0.002.
     ///
-    /// Cheap version here, two points an order of magnitude apart.
+    /// # This holds at `strength = 1` and not below it
+    ///
+    /// The harness has a discretisation floor of its own. The truth propagator
+    /// here is first order in the specific force where the filter is second
+    /// order, so the two disagree by a fixed amount that does not scale with the
+    /// noise. At `strength = 0.03` that term dominates and NEES runs 291, 37.2,
+    /// 27.2 at `dt` of 0.01, 0.002, 0.0005 — clearly discretisation.
+    ///
+    /// It does not explain the nominal result. At `strength = 1, dt = 0.002` the
+    /// floor is some twenty-five times smaller and NEES is still 24.2. Two
+    /// separate effects, and only one of them is the filter's.
+    ///
+    /// Fixing the harness means giving the truth propagator the same Simpson
+    /// quadrature the EqF's own simulator uses in `filter.rs`.
     #[test]
     fn the_overconfidence_is_not_a_discretisation_artefact() {
         let coarse = run_nees_at(8, 60.0, 4242, 0.02).overall.mean();
