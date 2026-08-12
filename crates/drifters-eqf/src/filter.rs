@@ -281,11 +281,23 @@ impl EqFilter {
         let mut correction = [0.0; DIM];
         correction.copy_from_slice(&delta.to_column());
         // Left multiplication: see the module docs.
-        self.x = Symmetry::exp(Algebra::from_array(&correction)).compose(&self.x);
+        let step = Algebra::from_array(&correction);
+        self.x = Symmetry::exp(step).compose(&self.x);
 
         let ikc = Matrix::<DIM, DIM>::identity() - gain.matmul(c);
         self.sigma =
             ikc.matmul(&self.sigma).mul_transpose(&ikc) + gain.matmul(noise).mul_transpose(&gain);
+
+        // Transport the covariance through the reset. The Joseph form above
+        // leaves Σ describing ε about Δ; the reset moves that origin to zero and
+        // the coordinates move with it.
+        //
+        // With ε_new = log(exp(ε) exp(−Δ)), the Jacobian at ε = Δ is
+        // Ad_{exp(Δ)} J_r(Δ), whose first-order expansion is I + ½ ad_Δ.
+        // Omitting it cost about 14 % of NEES, concentrated in the rotational
+        // states — see `drifters nees` and docs/eqf.md.
+        let reset = Matrix::<DIM, DIM>::identity() + step.ad() * 0.5;
+        self.sigma = reset.matmul(&self.sigma).mul_transpose(&reset);
         self.sigma.symmetrize();
         Some(nis)
     }

@@ -576,13 +576,24 @@ The magnetometer calibration is unobservable in this experiment — no
 magnetometer update is applied — so its NEES is testing the transition matrix
 alone, and the attitude and calibration blocks are coupled through `−₃A`.
 
-**Leading hypothesis, not yet tested.** The reset does not transport the
-covariance. `X̂ ← exp(Δ) X̂` is applied without adjusting `Σ`, on the grounds
-that `ε_new = ε − Δ` holds to first order with a reset Jacobian of
-`I − ½ ad_Δ + …`. That approximation is applied at every measurement update,
-and it would be expected to bite hardest on the rotational states — which is
-where the excess is. Implementing the transport and re-running this campaign is
-the experiment that would confirm or eliminate it.
+**Leading hypothesis, tested and rejected.** The reset was not transporting the
+covariance: `X̂ ← exp(Δ) X̂` was applied without adjusting `Σ`. The exact
+Jacobian of `ε_new = log(exp(ε) exp(−Δ))` at `ε = Δ` is `Ad_{exp(Δ)} J_r(Δ)`,
+first-order `I + ½ ad_Δ`. Since the approximation runs at every update and the
+excess sits in the rotational states, it was the obvious candidate.
+
+Implementing it moved NEES from **23.910 to 23.870**. The transport is retained,
+being the more correct form and costing one `21 × 21` product per update, but it
+accounts for none of the discrepancy.
+
+**What is left.** The flatness in `dt` is the strongest remaining clue: it rules
+out anything that scales with the step, which includes the transition matrix
+truncation and the `Q dt` discretisation (the van Loan correction is
+`½(AQ + QAᵀ)dt²`, an order of magnitude smaller at `dt = 0.002` than at 0.02,
+and the measurement did not move). A scale-invariant error points at the noise
+injection `G Q Gᵀ` itself, or at the harness. Running the ESKF through the same
+campaign would separate those two: a fault in the harness should show up for
+both filters, a fault in `G` only for this one.
 
 **What it means for the numbers already reported.** Anything derived from the
 EqF's covariance is optimistic by roughly this margin: the NIS-based tuning of

@@ -31,7 +31,7 @@
 //! them accordingly — `ρ_p` takes `b`, `ρ_v` takes `a` — which is the sanity
 //! check that the mapping is the right way round.
 
-use drifters_core::math::{Mat3, Vec3, Vector};
+use drifters_core::math::{Mat3, Matrix, Vec3, Vector};
 use drifters_core::F;
 
 use crate::lie::{integrated_adjoint, left_jacobian, Se23, Se23Tangent, Se3, Se3Tangent};
@@ -170,6 +170,41 @@ impl Algebra {
             delta: Vec3::new(v[15], v[16], v[17]),
             e: Vec3::new(v[18], v[19], v[20]),
         }
+    }
+}
+
+impl Algebra {
+    /// The Lie bracket `[self, other] = ad_self[other]`.
+    ///
+    /// Obtained by differentiating [`Symmetry::adjoint_apply`] at the identity,
+    /// so the two agree by construction rather than by transcription; the
+    /// `se₂(3)` part is `(a_ω×b_ω, a_ω×b_ν − b_ω×a_ν, a_ω×b_ρ − b_ω×a_ρ)`.
+    pub fn bracket(self, other: Self) -> Self {
+        let (a, b) = (self.c, other.c);
+        Self {
+            c: Se23Tangent::new(
+                a.omega.cross(b.omega),
+                a.omega.cross(b.nu) - b.omega.cross(a.nu),
+                a.omega.cross(b.rho) - b.omega.cross(a.rho),
+            ),
+            gamma: self.gamma.bracket(other.c.pi()) + self.c.pi().bracket(other.gamma),
+            delta: self.delta.cross(other.c.omega) + self.c.omega.cross(other.delta),
+            e: self.e.cross(other.e),
+        }
+    }
+
+    /// The `21 × 21` matrix of [`bracket`](Self::bracket).
+    pub fn ad(self) -> Matrix<21, 21> {
+        let mut m = Matrix::<21, 21>::zeros();
+        for k in 0..21 {
+            let mut basis = [0.0; 21];
+            basis[k] = 1.0;
+            let column = self.bracket(Self::from_array(&basis)).to_array();
+            for (i, v) in column.iter().enumerate() {
+                m[(i, k)] = *v;
+            }
+        }
+        m
     }
 }
 
@@ -863,6 +898,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `ad_w = d/ds Ad_{exp(sw)}` at `s = 0`, against the Adjoint that is
+    /// already checked by numerical conjugation. Deriving one from the other
+    /// means a slip in the bracket cannot hide.
+    #[test]
+    fn the_bracket_is_the_derivative_of_the_adjoint() {
+        let w = sample_algebra()[1];
+        let h = 1e-6;
+        let analytic = w.ad();
+        for k in 0..21 {
+            let mut basis = [0.0; 21];
+            basis[k] = 1.0;
+            let u = Algebra::from_array(&basis);
+            let step = |s: F| Symmetry::exp(w.scaled(s)).adjoint_apply(u).to_array();
+            let (fwd, back) = (step(h), step(-h));
+            for i in 0..21 {
+                let numeric = (fwd[i] - back[i]) / (2.0 * h);
+                assert!(
+                    (numeric - analytic[(i, k)]).abs() <= 1e-6 * (1.0 + analytic[(i, k)].abs()),
+                    "ad[{i},{k}]: numeric {numeric} vs analytic {}",
+                    analytic[(i, k)]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_bracket_is_antisymmetric() {
+        let g = sample_algebra();
+        let (a, b) = (g[1], g[2]);
+        for (x, y) in a
+            .bracket(b)
+            .to_array()
+            .iter()
+            .zip(b.bracket(a).to_array().iter())
+        {
+            assert_relative_eq!(*x, -*y, epsilon = 1e-12);
+        }
+        assert!(a.bracket(a).to_array().iter().all(|v| v.abs() < 1e-12));
     }
 
     #[test]
