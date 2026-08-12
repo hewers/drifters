@@ -1,6 +1,6 @@
 [package]
 name = "drifters-filter"
-description = "no_std error-state Kalman filter fusing IMU, GNSS and auxiliary sensors for pose estimation"
+description = "no_std error-state Kalman filter for aided inertial navigation (GNSS/INS): estimates extended pose and IMU errors from IMU, GNSS and auxiliary sensors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

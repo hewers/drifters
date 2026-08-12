@@ -1,6 +1,6 @@
 [package]
 name = "drifters-eqf"
-description = "Equivariant filter (EqF) for inertial navigation, after Fornasier et al. ICRA 2024"
+description = "Equivariant filter (EqF) for aided inertial navigation, after Fornasier et al. ICRA 2024: self-calibrating, with a fixed linearisation origin"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

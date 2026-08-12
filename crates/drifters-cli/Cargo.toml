@@ -1,6 +1,6 @@
 [package]
 name = "drifters-cli"
-description = "Replay tool for the drifters GNSS/INS filter, compatible with the KF-GINS dataset formats"
+description = "Replay and evaluation harness for the drifters navigation filters, compatible with the KF-GINS dataset formats"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

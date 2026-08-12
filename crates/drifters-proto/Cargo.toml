@@ -1,6 +1,6 @@
 [package]
 name = "drifters-proto"
-description = "no_std protobuf serialization for drifters GNSS/INS types"
+description = "no_std protobuf serialization for drifters aided-inertial-navigation types"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,4 +1,12 @@
-//! Equivariant filter (EqF) for inertial navigation.
+//! Equivariant filter (EqF) for aided inertial navigation.
+//!
+//! A second estimator over the same problem as [`drifters_filter`], reaching it
+//! from Lie group symmetry rather than from a local error state. It carries the
+//! extended pose as an `SE₂(3)` element rather than as separate position,
+//! velocity and attitude, which is what lets the linearisation origin stay
+//! fixed instead of following the estimate.
+//!
+//! [`drifters_filter`]: https://docs.rs/drifters-filter
 //!
 //! Implements the estimator of Fornasier, Ge, van Goor, Scheiber, Tridgell,
 //! Mahony and Weiss, *"An Equivariant Approach to Robust State Estimation for

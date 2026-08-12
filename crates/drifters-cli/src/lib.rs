@@ -1,5 +1,8 @@
-//! Replay engine for the drifters GNSS/INS filter over the KF-GINS dataset
-//! formats.
+//! Replay and evaluation harness for both drifters estimators.
+//!
+//! Drives the ESKF and the equivariant filter over recorded data, and over
+//! synthetic data where the truth is known exactly, so their accuracy and their
+//! covariances can be scored on identical inputs.
 //!
 //! Exposed as a library so the regression test can drive a replay directly
 //! rather than shelling out to the binary and parsing its output.

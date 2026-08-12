@@ -1,4 +1,9 @@
-//! Core types for GNSS/INS navigation on embedded targets.
+//! Core types for aided inertial navigation on embedded targets.
+//!
+//! The state these describe is an *extended pose* — position, velocity and
+//! attitude as one object — together with the sensor errors that corrupt it.
+//! See [`types::Pva`] and [`types::NavState`]. Nothing here estimates anything;
+//! this crate is the vocabulary the estimators share.
 //!
 //! This crate is `#![no_std]` and allocation-free. Every type it exposes is
 //! `Copy`, fixed size, and safe to keep in a `static` or on a small stack. The

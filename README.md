@@ -1,13 +1,30 @@
 # drifters
 
-A `no_std`, allocation-free GNSS/INS sensor fusion library in Rust. Fuses IMU,
-GNSS and auxiliary sensors into position, velocity and attitude — the same code
-on a Cortex-M microcontroller and on a workstation.
+A `no_std`, allocation-free **aided inertial navigation** library in Rust. It
+estimates *extended pose* — position, velocity and attitude together — along
+with the sensor errors that corrupt it, and runs the same code on a Cortex-M
+microcontroller and on a workstation.
 
-The architecture follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS): a
-loosely-coupled 21-state error-state Kalman filter over a local-level (NED)
-strapdown mechanization, with feedback after every measurement. What differs is
-that this is `no_std`, allocation-free, sans-IO, and measured on bare metal.
+*Aided* rather than simply inertial, because only the IMU is: it alone drives
+the propagation, and GNSS, barometric, magnetic and odometric aiding all enter
+as corrections to it. *Extended pose* rather than pose, because velocity is a
+state and not a by-product — it is the `v` in `SE₂(3)`, and the geometry of the
+second estimator is built on it. In the usual shorthand, this is **GNSS/INS
+integration**.
+
+Two estimators over the same interface:
+
+- an **error-state Kalman filter**, 21 states, following
+  [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) — loosely coupled, over a
+  local-level (NED) strapdown mechanization, with feedback after every
+  measurement.
+- an **equivariant filter**, 21 states, following Fornasier et al. (ICRA 2024).
+  It linearises at a fixed origin rather than at the moving estimate, and
+  spends six of its states on **self-calibration**: it recovers the GNSS antenna
+  lever arm from a zero start, which the ESKF must be told.
+
+What differs from the reference implementations is that this is `no_std`,
+allocation-free, sans-IO, and measured on bare metal.
 
 ## Measured, not asserted
 
@@ -175,9 +192,9 @@ drifters-core      no_std, no alloc, deps: libm
                    fixed-size matrices, quaternions, WGS-84, frames, time
 drifters-filter    no_std, no alloc — mechanization, 21-state ESKF, GinsEngine
 drifters-proto     no_std — protobuf codecs (micropb), codegen needs no protoc
-drifters-eqf       no_std — equivariant filter (EqF), in progress
+drifters-eqf       no_std — equivariant filter, Lie groups, self-calibration
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
-drifters-cli       std — file-driven replay and validation
+drifters-cli       std — replay, estimator comparison, NEES and tuning
 ```
 
 ## Quick start

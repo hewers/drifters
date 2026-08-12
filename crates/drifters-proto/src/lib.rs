@@ -1,5 +1,7 @@
 //! Protobuf serialization for the drifters navigation types.
 //!
+//! Extended pose, sensor samples and filter configuration, on the wire.
+//!
 //! `no_std` and allocation-free, so the same code encodes a solution on a
 //! microcontroller and decodes it in a host replay tool.
 //!

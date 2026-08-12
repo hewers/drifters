@@ -1,4 +1,12 @@
-//! Error-state Kalman filter fusing IMU, GNSS and auxiliary sensors.
+//! Error-state Kalman filter for aided inertial navigation.
+//!
+//! Estimates extended pose — position, velocity and attitude — plus IMU biases
+//! and scale factors, from an inertial core with GNSS, barometric, magnetic and
+//! odometric aiding.
+//!
+//! Only the IMU drives the propagation. Every other sensor enters through
+//! [`measurement`], as a correction to it; that asymmetry is what the word
+//! *inertial* refers to, rather than the sensor list.
 //!
 //! The architecture follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS): a
 //! loosely-coupled 21-state error-state EKF over a local-level (NED)

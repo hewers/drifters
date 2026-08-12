@@ -1,6 +1,6 @@
 [package]
 name = "drifters-core"
-description = "no_std core types for GNSS/INS navigation: fixed-size linear algebra, quaternions, WGS-84 earth model and frame transforms"
+description = "no_std core types for aided inertial navigation (GNSS/INS): fixed-size linear algebra, quaternions, WGS-84 earth model and frame transforms"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
