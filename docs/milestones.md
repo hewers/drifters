@@ -492,6 +492,60 @@ across nine decades is what caught it.
 
 ---
 
+## M14 — Local-first architecture 📋 proposed
+
+A coupled redesign, recorded in
+[adr/0009](adr/0009-local-first-architecture.md). Four findings from the current
+implementation point at the same set of changes, and they are cheaper together
+than separately.
+
+Each step is gated on a measurement rather than on the previous one compiling.
+
+- [ ] **Local frame native, with re-anchoring.** Position is local Cartesian
+      metres about an explicit origin, everywhere; geodetic only at the I/O
+      boundary. Re-anchoring transforms state *and* covariance through the
+      rotation between the two NED frames.
+      *Gate:* NEES invariant across a re-anchor; KF-GINS and GSDC accuracy
+      unchanged.
+- [ ] **UD factorisation, Bierman–Thornton.** `P = U D Uᵀ`, never stored `P`.
+      Positive-definiteness by construction, half the precision requirement,
+      231 scalars against 441, no square roots.
+      *Gate:* NEES unchanged or better on both estimators, zero abandoned runs.
+- [ ] **`u64` nanosecond time**, with `dt` from an integer difference.
+- [ ] **Non-dimensionalised states, then the `f32` evaluation.**
+      *Gate:* NEES at both precisions, side by side. This is where
+      [adr/0005](adr/0005-scalar-type.md)'s question gets a new answer, or its
+      old one confirmed on new premises.
+- [ ] **Crate restructure**: `no_std` by default, `std`/`alloc` additive, and
+      the measurement models moved below the boundary so the desktop tooling
+      exercises the same code the target runs.
+      *Gate:* NEES and replay run against a `no_std` build of the filter.
+- [ ] **Tight coupling** — pseudorange and Doppler per satellite, receiver clock
+      states, working below four satellites. Its own milestone; needs ephemeris
+      and orbit/clock computation that does not exist here yet, and
+      [adr/0003](adr/0003-interop-boundary.md) keeps the AGPL option off the
+      default path.
+      *Gate:* GSDC urban-canyon segments, where loose coupling currently gains
+      nothing.
+- [ ] **RTS smoothing**, desktop only. Needs the stored forward history, hence
+      allocation.
+      *Gate:* smoothed NEES against filtered, on the synthetic campaign.
+
+**Why now.** The four findings are in [adr/0009](adr/0009-local-first-architecture.md)
+in full: `f32` is blocked by the *frame* rather than by the filter; the
+covariance conditioning is already tight in `f64`; both estimators are
+measurably overconfident and the ESKF's fault sits in the cross-covariances; and
+a covariance filter provably cannot be run backwards, which is why smoothing
+belongs as a backward recursion over stored quantities rather than as a reverse
+pass.
+
+**What this costs.** It is a rewrite of the state representation, not an edit —
+position units, the transition matrix's position rows, every position
+measurement Jacobian and the serialization schema. The 3.3 cm KF-GINS result and
+the GSDC holdout table are regression tests for it, not assumptions.
+
+---
+
 ## M11 — Diagnostics and the README figure ✅ done
 
 A filter that cannot be *seen* is hard to trust. The replay already computes
