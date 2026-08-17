@@ -424,6 +424,20 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
                     .overall
                     .push((0..DIM).map(|i| e[i] * solved[(i, 0)]).sum());
 
+                if std::env::var("DRIFTERS_COND").is_ok() && run == 0 {
+                    use conditioning::{condition, correlation, digits};
+                    let raw = condition(&filter.sigma);
+                    let scaled = condition(&correlation(&filter.sigma));
+                    if let (Some(r), Some(sc)) = (raw, scaled) {
+                        let (rd, rud) = digits(r);
+                        let (sd, sud) = digits(sc);
+                        eprintln!(
+                            "  t={t:6.1}  cond(P)={r:9.2e} [{rd:4.1} dig, UD {rud:4.1}]   \
+                             cond(corr)={sc:9.2e} [{sd:4.1} dig, UD {sud:4.1}]"
+                        );
+                    }
+                }
+
                 for (slot, (_, base)) in report.blocks.iter_mut().zip(BLOCKS.iter()) {
                     let block = p.block::<3, 3>(*base, *base);
                     if let Some(bc) = Cholesky::new(&block) {
@@ -839,6 +853,147 @@ pub mod eskf {
                 "  {name:<11} {:>8.3}   {}",
                 slot.mean(),
                 verdict(slot.mean(), blo, bhi)
+            );
+        }
+    }
+}
+
+/// Conditioning diagnostics: what precision the covariance actually demands.
+///
+/// The `f32` question for a Kalman filter is not about the state, whose
+/// magnitudes are small in a local frame. It is about whether `P` can be
+/// factored at all. That depends on its condition number, and this measures it
+/// rather than estimating it from unit ranges.
+pub mod conditioning {
+    use drifters_core::math::{Cholesky, Matrix};
+
+    /// Largest eigenvalue, by power iteration.
+    fn lambda_max<const N: usize>(p: &Matrix<N, N>) -> f64 {
+        let mut v = [1.0 / (N as f64).sqrt(); N];
+        let mut lambda = 0.0;
+        for _ in 0..200 {
+            let mut w = [0.0; N];
+            for i in 0..N {
+                for j in 0..N {
+                    w[i] += p[(i, j)] * v[j];
+                }
+            }
+            let norm = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+            if norm == 0.0 || !norm.is_finite() {
+                return 0.0;
+            }
+            for i in 0..N {
+                v[i] = w[i] / norm;
+            }
+            lambda = norm;
+        }
+        lambda
+    }
+
+    /// Smallest eigenvalue, by inverse iteration through the Cholesky factor.
+    fn lambda_min<const N: usize>(p: &Matrix<N, N>) -> Option<f64> {
+        let chol = Cholesky::new(p)?;
+        let mut v = Matrix::<N, 1>::zeros();
+        for i in 0..N {
+            v[(i, 0)] = 1.0 / (N as f64).sqrt();
+        }
+        let mut lambda = 0.0;
+        for _ in 0..200 {
+            let w = chol.solve(&v);
+            let norm = (0..N).map(|i| w[(i, 0)] * w[(i, 0)]).sum::<f64>().sqrt();
+            if norm == 0.0 || !norm.is_finite() {
+                return None;
+            }
+            for i in 0..N {
+                v[(i, 0)] = w[(i, 0)] / norm;
+            }
+            lambda = 1.0 / norm;
+        }
+        Some(lambda)
+    }
+
+    /// Spectral condition number of a symmetric positive-definite matrix.
+    pub fn condition<const N: usize>(p: &Matrix<N, N>) -> Option<f64> {
+        let hi = lambda_max(p);
+        let lo = lambda_min(p)?;
+        if lo <= 0.0 || !hi.is_finite() {
+            return None;
+        }
+        Some(hi / lo)
+    }
+
+    /// `S⁻¹ P S⁻¹` with `S = diag(√Pᵢᵢ)` — the correlation matrix.
+    ///
+    /// This is the non-dimensionalisation. Every state is expressed in units of
+    /// its own current standard deviation, so the diagonal becomes unity and the
+    /// only conditioning left is genuine correlation between states rather than
+    /// the accident that position is in metres and gyro bias in rad/s.
+    pub fn correlation<const N: usize>(p: &Matrix<N, N>) -> Matrix<N, N> {
+        let mut s = [0.0; N];
+        for i in 0..N {
+            s[i] = p[(i, i)].max(0.0).sqrt();
+        }
+        let mut c = Matrix::<N, N>::zeros();
+        for i in 0..N {
+            for j in 0..N {
+                let d = s[i] * s[j];
+                c[(i, j)] = if d > 0.0 {
+                    p[(i, j)] / d
+                } else {
+                    f64::from(i == j)
+                };
+            }
+        }
+        c
+    }
+
+    /// Digits of mantissa a factorisation of this matrix demands.
+    ///
+    /// A Cholesky needs roughly `log₁₀(cond)`; a factored form such as UD works
+    /// on something with the square root of that condition number, so it needs
+    /// half. `f32` carries 7.2 digits, `f64` 15.9.
+    pub fn digits(cond: f64) -> (f64, f64) {
+        let direct = cond.log10();
+        (direct, direct / 2.0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn condition_matches_a_known_spectrum() {
+            // Diagonal: the condition number is the ratio of the extremes.
+            let p = Matrix::<4, 4>::from_diagonal(&[1.0e-6, 1.0, 4.0, 1.0e3]);
+            let c = condition(&p).expect("positive definite");
+            assert!((c - 1.0e9).abs() < 1.0e9 * 1e-3, "cond {c:e}");
+        }
+
+        /// The point of the whole exercise: scaling by the diagonal removes the
+        /// conditioning that is an artefact of units rather than of
+        /// correlation. Here the two states are uncorrelated, so the
+        /// correlation matrix is the identity and its condition number is 1
+        /// however far apart their variances are.
+        #[test]
+        fn non_dimensionalising_removes_unit_induced_conditioning() {
+            let p = Matrix::<2, 2>::from_diagonal(&[1.0e2, 1.0e-14]);
+            assert!(condition(&p).unwrap() > 1.0e15);
+            assert!((condition(&correlation(&p)).unwrap() - 1.0).abs() < 1e-9);
+        }
+
+        /// Genuine correlation survives the scaling, as it must: two states
+        /// that are 99.99 % correlated are near-singular in any units.
+        #[test]
+        fn genuine_correlation_survives_scaling() {
+            let mut p = Matrix::<2, 2>::zeros();
+            p[(0, 0)] = 1.0;
+            p[(1, 1)] = 1.0;
+            p[(0, 1)] = 0.9999;
+            p[(1, 0)] = 0.9999;
+            let c = condition(&correlation(&p)).unwrap();
+            assert!(
+                c > 1.0e4,
+                "near-singular pair should stay near-singular: {c:e}"
             );
         }
     }

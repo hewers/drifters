@@ -17,11 +17,31 @@ property of absolute Earth-referenced coordinates, not of single precision, and
 it disappears entirely if the filter never holds one.
 
 **The covariance is the real precision constraint, and it is already tight in
-`f64`.** Position variance is order `10² m²`; gyro-bias variance is order
-`10⁻¹⁴`. That is a condition number near `10¹⁶`, and a Cholesky needs roughly
-`log₁₀(cond)` digits. `f64` has 15.9. The Joseph form, the explicit
-re-symmetrisation and the solve-rather-than-invert discipline in the current
-code are all there because of this, and they are mitigations rather than a fix.
+`f64`.** Measured, not estimated — `drifters nees` reports the spectral
+condition number of `P` through a run, by power and inverse iteration:
+
+| elapsed | `cond(P)` | digits | `cond(corr)` | digits | UD **+** scaled |
+|---|---|---|---|---|---|
+| 11 s | 4.6 × 10⁷ | 7.7 | 5.5 × 10² | 2.7 | **1.4** |
+| 121 s | 1.4 × 10¹¹ | 11.1 | 1.9 × 10⁵ | 5.3 | **2.6** |
+| 451 s | 4.4 × 10¹² | 12.6 | 1.4 × 10⁶ | 6.1 | **3.1** |
+| 898 s | 4.2 × 10¹³ | 13.6 | 4.5 × 10⁶ | 6.7 | **3.3** |
+
+Two things follow, and the second was not anticipated.
+
+Raw `P` passes `f32`'s 7.2 digits **within eleven seconds**, so a naive single
+precision covariance filter does not fail eventually, it fails immediately.
+
+And raw `P` reaches 13.6 digits after fifteen minutes and is still climbing at
+roughly `t³`. Extrapolated over the 57-minute KF-GINS run that is `≈ 10¹⁵`, or
+15.4 digits, against `f64`'s 15.9. **The shipping `f64` implementation ends that
+dataset with a fraction of a digit of margin.** The Joseph form, the explicit
+re-symmetrisation and the solve-rather-than-invert discipline are mitigations for
+this and they are not a fix. Whether it contributes to the measured
+overconfidence is untested — at the 120 s of the NEES campaign there are still
+4.8 digits of `f64` margin, so it is probably not the explanation *there* — but
+it is a standing hazard on long runs and an argument for the factored form
+independent of `f32`.
 
 **Both filters are measurably overconfident.** `drifters nees`, on synthetic
 data drawn from each filter's own model, gives 23.6 against 21 for the EqF and
@@ -89,10 +109,20 @@ so the failure mode where a covariance stops being a covariance cannot occur.
 The current code detects it — `Cholesky::new` returns `Option` and the NEES
 harness counts abandoned runs — but detection is not prevention.
 
-**It halves the precision requirement.** The condition number of the factors is
-the square root of the condition number of `P`: `10⁸` rather than `10¹⁶`, or
-about 8 significant digits. That is what makes single precision *arguable* where
-it currently is not, and it makes `f64` comfortable rather than marginal.
+**It halves the precision requirement, and the scaling removes the rest.** The
+factors have the square root of `P`'s condition number, so UD alone takes 13.6
+digits to 6.8 — already inside `f32`. Non-dimensionalising as well takes it to
+**3.3**, and that number grows logarithmically rather than as `t³`: 2.6, 3.1,
+3.3 across the run above. Against `f32`'s 7.2 that is close to four digits of
+margin, and it is what turns single precision from marginal into comfortable.
+
+The two mechanisms are complementary rather than alternative, and the reason is
+worth stating: most of `cond(P)` is an artefact of *units*, not of correlation —
+position in metres against gyro bias in rad/s. Scaling each state by its own
+standard deviation removes exactly that and leaves the genuine correlation
+structure, which is what
+`non_dimensionalising_removes_unit_induced_conditioning` and
+`genuine_correlation_survives_scaling` pin down.
 
 **It is not more expensive.** `U` and `D` together are `n(n+1)/2 = 231` scalars
 for `n = 21`, against 441 for a dense `P`. No square roots, unlike Carlson or
