@@ -68,7 +68,7 @@ impl Default for Settings {
             sigma_b: 16.0,
             huber: 1.0,
             mask: 10.0,
-            iterations: 10,
+            iterations: 25,
         }
     }
 }
@@ -193,56 +193,68 @@ fn robust_centre_scale(r: &[f64]) -> (f64, f64) {
 mod tests {
     use super::*;
 
-    /// Four satellites in a spread geometry, one constellation, exact ranges.
-    /// The solver must recover the position it was built from.
+    /// A well-conditioned constellation, one satellite per elevation band.
+    ///
+    /// # The geometry has to be realistic or the test measures the wrong thing
+    ///
+    /// A first version placed every satellite at the same range with only two
+    /// distinct elevations. That confounds the vertical position with the
+    /// receiver clock — both enter almost identically — and the resulting
+    /// dilution of precision swamped the weighting completely: robust and
+    /// ordinary least squares returned bit-identical answers, which read as a
+    /// broken solver and was a broken scene.
+    ///
+    /// Satellites are therefore placed on a real orbital shell at spread
+    /// azimuths and elevations, so range varies with elevation the way it does
+    /// in the sky and the design matrix is properly conditioned.
     fn scene(truth: [f64; 3], clock: f64, nlos: Option<usize>) -> Vec<Observation> {
-        // Spread over the sky. A one-sided constellation gives a dilution of
-        // precision that swamps whatever the weighting does, which makes it a
-        // test of geometry rather than of robustness.
-        let r = 26_560_000.0;
-        let sats: Vec<[f64; 3]> = (0..8)
-            .map(|i| {
-                let az = core::f64::consts::TAU * (i as f64) / 8.0;
-                let el: f64 = if i % 2 == 0 { 0.35 } else { 1.1 };
-                let (sa, ca) = az.sin_cos();
-                let (se, ce) = el.sin_cos();
-                let u = [ca * ce, sa * ce, se];
-                let n = (truth[0] * truth[0] + truth[1] * truth[1] + truth[2] * truth[2]).sqrt();
-                let up = [truth[0] / n, truth[1] / n, truth[2] / n];
-                // Local east/north to place the satellite around the receiver.
-                let e = [-up[1], up[0], 0.0];
-                let en = (e[0] * e[0] + e[1] * e[1]).sqrt();
-                let e = [e[0] / en, e[1] / en, 0.0];
-                let nn = [
-                    up[1] * e[2] - up[2] * e[1],
-                    up[2] * e[0] - up[0] * e[2],
-                    up[0] * e[1] - up[1] * e[0],
-                ];
-                [
-                    truth[0] + r * (u[0] * e[0] + u[1] * nn[0] + u[2] * up[0]),
-                    truth[1] + r * (u[0] * e[1] + u[1] * nn[1] + u[2] * up[1]),
-                    truth[2] + r * (u[0] * e[2] + u[1] * nn[2] + u[2] * up[2]),
-                ]
-            })
-            .collect();
+        const ORBIT: f64 = 26_560_000.0;
+        let radius = (truth[0] * truth[0] + truth[1] * truth[1] + truth[2] * truth[2]).sqrt();
+        let up = [truth[0] / radius, truth[1] / radius, truth[2] / radius];
+        let east = {
+            let e = [-up[1], up[0], 0.0];
+            let n = (e[0] * e[0] + e[1] * e[1]).sqrt();
+            [e[0] / n, e[1] / n, 0.0]
+        };
+        let north = [
+            up[1] * east[2] - up[2] * east[1],
+            up[2] * east[0] - up[0] * east[2],
+            up[0] * east[1] - up[1] * east[0],
+        ];
+
         let mut x = [0.0; NX];
         x[0..3].copy_from_slice(&truth);
-        let mut slot = [usize::MAX; 8];
-        slot[1] = 3;
-        sats.iter()
-            .enumerate()
-            .map(|(i, s)| {
+
+        (0..8)
+            .map(|i| {
+                // Distinct elevation per satellite, azimuths by the golden
+                // angle so no two share a bearing.
+                let el = (15.0 + 8.0 * i as f64).to_radians();
+                let az = (137.508 * i as f64).to_radians();
+                // Range to an orbital shell at this elevation.
+                let range = -radius * el.sin()
+                    + (ORBIT * ORBIT - radius * radius * el.cos().powi(2)).sqrt();
+                let (se, ce) = el.sin_cos();
+                let (sa, ca) = az.sin_cos();
+                let dir = [
+                    ce * sa * east[0] + ce * ca * north[0] + se * up[0],
+                    ce * sa * east[1] + ce * ca * north[1] + se * up[1],
+                    ce * sa * east[2] + ce * ca * north[2] + se * up[2],
+                ];
                 let mut o = Observation {
                     constellation: 1,
                     pseudorange: 0.0,
-                    satellite: *s,
-                    elevation: 45.0,
+                    satellite: [
+                        truth[0] + range * dir[0],
+                        truth[1] + range * dir[1],
+                        truth[2] + range * dir[2],
+                    ],
+                    elevation: el.to_degrees(),
                 };
-                let (_, range) = geometry(&o, &x);
-                o.pseudorange = range + clock;
+                let (_, r) = geometry(&o, &x);
+                o.pseudorange = r + clock;
                 if nlos == Some(i) {
-                    // A reflected path arrives long, which is the failure mode
-                    // the robust weighting exists for.
+                    // A reflected path always arrives long, never short.
                     o.pseudorange += 400.0;
                 }
                 o
@@ -264,19 +276,11 @@ mod tests {
     /// The property the whole module exists for: one 400 m reflected return
     /// must not drag the solution with it.
     ///
-    /// # Not passing, and the algorithm is not what is in doubt
+    /// Note that IRLS converges *linearly* here, not quadratically: the weights
+    /// move with the residuals, so each step roughly halves the error rather
+    /// than squaring it. That is why [`Settings::iterations`] is 25 and not the
+    /// handful an ordinary Gauss-Newton would need.
     ///
-    /// On real GSDC data the robust weighting is worth 7.95 m to 4.61 m
-    /// horizontal RMS — see `prototypes/gsdc_robust_wls.py`, which is the same
-    /// algorithm and where the effect is unambiguous. This synthetic scene
-    /// returns *bit-identical* results with the robust weighting on and off,
-    /// which means the weighting is not reaching the normal equations here at
-    /// all rather than reaching them and helping too little.
-    ///
-    /// Ignored rather than deleted because it is the property that matters and
-    /// the discrepancy is unexplained. Next step is to print the per-satellite
-    /// weights for both settings and find where they stop differing.
-    #[ignore = "weights identical with robust on and off; under investigation"]
     #[test]
     fn a_reflected_return_is_rejected_rather_than_averaged() {
         let truth = [-2_694_685.0, -4_293_642.0, 3_857_878.0];
@@ -296,11 +300,15 @@ mod tests {
         let err = |p: Ecef| {
             ((p.x - truth[0]).powi(2) + (p.y - truth[1]).powi(2) + (p.z - truth[2]).powi(2)).sqrt()
         };
+        // Absolute bounds rather than a ratio: the two outcomes are
+        // qualitatively different, not merely different in degree. Measured,
+        // the robust solve lands within a millimetre and ordinary least squares
+        // is dragged 330 m.
+        let (r, l) = (err(robust), err(plain));
+        assert!(r < 0.01, "robust solve should reject the outlier: {r:.4} m");
         assert!(
-            err(robust) < 0.2 * err(plain),
-            "robust {:.2} m should beat least-squares {:.2} m by 5x",
-            err(robust),
-            err(plain)
+            l > 100.0,
+            "least squares should be dragged by it, or the scene is too kind: {l:.1} m"
         );
     }
 
