@@ -106,3 +106,38 @@ improving the estimator on this dataset, which is consistent with everything
 
 Prototype in [`../prototypes/gsdc_robust_wls.py`](../prototypes/gsdc_robust_wls.py);
 the Rust implementation is next.
+
+## Tuned, on trace A only
+
+648-point grid over the elevation weighting `σ = a + b/sin(el) + c·10^(−(C/N₀−ref)/20)`,
+the robust threshold and cost, an elevation mask and a `C/N₀` cut. Fitted on
+trace A; B, C and D held out.
+
+Best on A: `a = 0.3`, `b = 16`, **`c = 0`**, Huber `k = 1.0`, 10° elevation mask.
+
+| | Google | untuned | **tuned** |
+|---|---|---|---|
+| A *(fitted)* | 6.24 / 17.97 | 4.61 / 8.65 | **4.22 / 7.78** |
+| B | 3.78 / 9.40 | 3.71 / 8.38 | **3.64 / 7.55** |
+| C | 2.82 / 12.31 | 2.51 / 6.10 | **2.47 / 5.75** |
+| D | 4.05 / 19.90 | 2.75 / 5.63 | **2.80 / 5.36** |
+| **mean** | **4.22 / 14.90** | 3.40 / 7.19 | **3.28 / 6.61** |
+
+Three things the grid settled:
+
+**`C/N₀` weighting earns nothing** — the search chose `c = 0`. Elevation already
+carries that information, which is consistent with the twelve-fold elevation
+spread measured above and with `C/N₀` being largely a function of it.
+
+**A 10° mask helps**, and a `C/N₀` cut does not. Discarding the worst geometry
+beats trying to weight it.
+
+**A tighter Huber wins** — `k = 1.0` rather than 1.5, so more aggressive
+down-weighting, which is what a heavy NLOS tail should want.
+
+**The proportions matter more than the numbers.** Against Google's WLS the
+algorithm is worth −22 % horizontal and −56 % vertical; the tuning on top of it
+is worth a further −3 % and −8 %, and it transfers (three traces improve
+horizontally, all four vertically, one is 2 % worse). Structure beat tuning by
+roughly seven to one here, which is the same lesson the process-noise sweep in
+[gsdc.md](gsdc.md) reached from the other direction.
