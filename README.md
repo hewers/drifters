@@ -39,7 +39,7 @@ Every number here is produced by a test in this repository.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** in the shipped stack: `libm` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 336, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 367, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position
 *before* each fix is applied, so between fixes it is running on inertial dead
@@ -147,18 +147,58 @@ The per-filter diagnostic figures, with NIS, are still there: `drifters plot`
 and `drifters gsdc --figure`. Filter consistency means NIS *scattered about 3*,
 not NIS *small*.
 
-### What made the phone result work: Doppler
+### What made the phone result work: the GNSS, not the filter
 
 The first attempt at that trace was a negative result. Position-only aiding
 gained **1.7 %** over the phone's own GNSS, and un-tuned it was *worse* than
 doing nothing.
 
-That was diagnosed rather than tuned away. Heading is weakly observable from
+That was diagnosed rather than tuned away — heading is weakly observable from
 position alone, so a phone gyro's drift injects error faster than 1 Hz fixes
-remove it. Solving a **Doppler velocity** from the raw pseudorange rates already
-in the dataset is what makes heading observable, and it moved the result from
-1.7 % to 34.7 %. Both estimators above are given it, or the comparison would be
-about inputs. Full diagnosis in [docs/gsdc.md](docs/gsdc.md).
+remove it — and solving a **Doppler velocity** from the pseudorange rates in the
+dataset moved it to 34.7 %. But following that thread to the end turned the
+conclusion around, and the table above is no longer the best this repository
+does with the same files.
+
+The dataset ships raw observables, and almost none of the work was in the
+filter:
+
+| what changed | competition score, four traces |
+|---|---|
+| the phone's own `WlsPosition*` columns | 4.99 |
+| solve position from the raw pseudoranges instead | 3.90 |
+| refit the tuning the better GNSS made stale | 3.04 |
+| replace the Doppler velocity with time-differenced carrier phase | 2.86 |
+| **fit the pseudorange positions and carrier deltas together** | **2.47** |
+
+Score is the competition metric, the mean of the 50th and 95th percentile
+horizontal error, and every row is trace A's tuning applied unchanged to three
+held-out traces.
+
+The last row **uses no IMU at all**. On a 1 Hz phone trace, fitting the file's
+two GNSS observables against each other beats fusing either of them with the
+phone's inertial sensors, on every one of the four traces. That is worth
+stating plainly rather than burying: this hardware's IMU needs its noise
+inflated 400× to be usable, and what it contributes between GNSS epochs is a
+trajectory shape the carrier phase measures directly and 2000× better. The
+batch fit is non-causal, so it is a different product rather than a competitor
+— but it settles where the remaining error lives.
+
+Three findings on the way there are worth more than the number:
+
+- **The cycle-slip flag is never set**, on any of the four traces, while 8.1 %
+  of carrier pairs are in fact slipped. This is the second validity flag in the
+  dataset worth nothing; the `State` bits on the pseudoranges were the first.
+- **A delta is not a velocity at either endpoint.** Handing the filter
+  `delta/dt` threw away the entire advantage — the lagged carrier velocity is
+  no better than the Doppler it replaced — because a delta belongs to its
+  interval's midpoint.
+- **A solve cannot always tell that it has failed.** About one epoch in a
+  hundred came out confidently wrong, and neither its residual scatter nor its
+  geometry could see it. Only an independent second solution could.
+
+Full diagnosis in [docs/gsdc.md](docs/gsdc.md) and
+[docs/gsdc-observables.md](docs/gsdc-observables.md).
 
 ## Status
 
