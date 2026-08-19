@@ -201,7 +201,14 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "{:<26} {:>9} {:>9} {:>9} {:>9}",
         "", "horiz RMS", "vert RMS", "horiz max", "score"
     );
-    for (name, e, horizontal) in [
+    /// One row of the error table: what to call it, the error against truth,
+    /// and its per-epoch horizontal error for the order statistics.
+    type Row<'a> = (
+        &'a str,
+        &'a drifters_cli::truth::ErrorStats,
+        &'a [(f64, f64)],
+    );
+    let mut rows: Vec<Row> = vec![
         (
             "phone GNSS (WLS) alone",
             &report.gnss_only,
@@ -209,7 +216,11 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         ),
         ("drifters ESKF", &report.filter, &report.filter_horizontal),
         ("drifters EqF", &report.eqf, &report.eqf_horizontal),
-    ] {
+    ];
+    if let Some(s) = &report.smoothed {
+        rows.push(("GNSS batch-smoothed", s, &report.smoothed_horizontal));
+    }
+    for (name, e, horizontal) in rows {
         let errors: Vec<f64> = horizontal.iter().map(|&(_, m)| m).collect();
         println!(
             "{name:<26} {:>9.3} {:>9.3} {:>9.3} {:>9.3}",

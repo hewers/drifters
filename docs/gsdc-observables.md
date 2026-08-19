@@ -297,3 +297,56 @@ Trace A's tuning applied unchanged to B, C and D, competition score in metres:
 
 Carrier velocity is worth −8.8 % to the ESKF and −9.5 % to the EqF out of
 sample. End to end the chain now runs **4.99 → 2.78 m, −44 %**.
+
+## Fitting the two observables together, instead of choosing
+
+Everything above still treats the pseudorange position as *the* answer and the
+carrier phase as a way to help a filter along. That gets the relationship
+backwards. The file contains two measurements of different things: where the
+receiver was, good to metres, and how far it moved, good to centimetres.
+Reporting the first alone throws the second away.
+
+Fitting both at once is a least-squares problem whose normal equations are
+tridiagonal — epoch `i` couples only to `i ± 1` — so with diagonal weights it
+is three scalar solves of length `n`, each strictly diagonally dominant, in
+`O(n)`. [`smooth.rs`](../crates/drifters-cli/src/smooth.rs) has it. The effect
+is to average the pseudorange error over as many epochs as the deltas hold
+together, which here is the whole trace.
+
+Two things had to be added before it worked.
+
+**Robust reweighting**, for the same reason every other solver here has it. A
+bad anchor pulls one epoch; a bad *link* bends every epoch downstream until the
+anchors drag it back. The unweighted fit reached 251 m of horizontal error
+while its median stayed under two.
+
+**Screening every delta, not every epoch.** The carrier velocity is a central
+difference, so checking *it* against the Doppler leaves the deltas at the edges
+of a gap unexamined — and those are the deltas either side of a loss of lock,
+the likeliest to be wrong. Checking each delta on its own against the same
+Doppler removed the last excursion: horizontal RMS 10.49 → 2.93 m, maximum
+251.8 → 17.8 m.
+
+Competition score, trace A's tuning applied unchanged to B, C and D:
+
+| trace | GNSS alone | ESKF | EqF | **batch fit** |
+|---|---|---|---|---|
+| A *(fitted)* | 4.577 | 3.243 | 3.121 | **2.797** |
+| B | 4.686 | 3.950 | 3.847 | **3.535** |
+| C | 3.097 | 1.944 | 2.008 | **1.600** |
+| D | 3.243 | 2.294 | 2.210 | **2.043** |
+| **mean** | 3.901 | 2.858 | 2.797 | **2.494** |
+
+**The batch fit uses no IMU and beats both filters on every trace.** That is
+worth stating plainly rather than burying: on a 1 Hz phone trace, fitting the
+two GNSS observables against each other is worth more than fusing either of
+them with the phone's inertial sensors. The IMU on this hardware is 400 times
+noisier than its datasheet, and what it mainly contributes between GNSS epochs
+is a shape the carrier phase already measures directly and far better.
+
+It is also non-causal — it uses the whole trace at once — so it is not a
+competitor to the filters so much as a different product. What it does settle
+is where the remaining error lives. Both filters were being asked to recover
+trajectory shape from a bad IMU when the shape was in the file all along.
+
+End to end the chain runs **4.99 → 2.49 m, −50 %**.

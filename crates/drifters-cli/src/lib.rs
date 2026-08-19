@@ -13,6 +13,7 @@ pub mod kfgins;
 pub mod nees;
 pub mod plot;
 pub mod robust;
+pub mod smooth;
 pub mod stats;
 pub mod tdcp;
 pub mod truth;
@@ -342,6 +343,13 @@ pub struct GsdcReport {
     pub gnss_only: truth::ErrorStats,
     /// Error of the equivariant filter against truth, over the same epochs.
     pub eqf: truth::ErrorStats,
+    /// Error of the batch-smoothed GNSS trajectory, when carrier phase gave
+    /// enough links to build one. No IMU: this is what the GNSS file alone is
+    /// worth once the pseudorange positions and the carrier deltas are fitted
+    /// together rather than one being thrown away.
+    pub smoothed: Option<truth::ErrorStats>,
+    /// Per-epoch horizontal error of the smoothed trajectory.
+    pub smoothed_horizontal: Vec<(f64, f64)>,
     /// Per-epoch trace from the equivariant filter.
     pub eqf_epochs: Vec<Epoch>,
     /// The EqF's normalised innovation squared.
@@ -434,7 +442,7 @@ pub fn run_gsdc(
             s.dtheta = s.dtheta * gyro_scale;
         }
     }
-    let fixes = gsdc::read_gnss(
+    let gsdc::GnssTrace { fixes, deltas } = gsdc::read_gnss(
         &dir.join("device_gnss.csv"),
         utc_offset - gnss_lag,
         sigma,
@@ -510,6 +518,8 @@ pub fn run_gsdc(
         gnss_velocity: truth::ErrorStats::new(),
         gnss_velocity_count: 0,
         gnss_velocity_horizontal: Vec::new(),
+        smoothed: None,
+        smoothed_horizontal: Vec::new(),
         gnss_horizontal: Vec::new(),
         filter_horizontal: Vec::new(),
         eqf_horizontal: Vec::new(),
@@ -599,6 +609,55 @@ pub fn run_gsdc(
     report.eqf_nis_values = second.nis_values;
     report.eqf_lever = second.lever;
     report.eqf_horizontal = second.horizontal;
+
+    // The GNSS file fitted to itself: pseudorange positions as anchors,
+    // carrier deltas as links, solved in one local frame. No IMU and no
+    // filter, so this measures what the two GNSS observables are worth
+    // together — and it is non-causal, using the whole trace at once.
+    if deltas.iter().any(|d| d.is_some()) {
+        let origin = fixes[0].position;
+        let rotation = origin.dcm_ecef_from_ned().transpose();
+        let anchors: Vec<smooth::Anchor> = fixes
+            .iter()
+            .enumerate()
+            .map(|(index, f)| {
+                let n = f.position.ned_from(origin);
+                smooth::Anchor {
+                    index,
+                    position: vec3(n.n, n.e, n.d),
+                    sigma,
+                }
+            })
+            .collect();
+        let links: Vec<smooth::Link> = deltas
+            .iter()
+            .enumerate()
+            .filter_map(|(index, d)| {
+                let ned = rotation * (*d)?;
+                Some(smooth::Link {
+                    index,
+                    delta: ned,
+                    // Measured against truth on trace A, single one-second
+                    // delta: 0.096 N, 0.081 E, 0.530 D RMS. The vertical is
+                    // the weak axis for the same reason it always is here.
+                    sigma: vec3(0.10, 0.10, 0.53),
+                })
+            })
+            .collect();
+        if let Some(fitted) = smooth::smooth(fixes.len(), &anchors, &links, &smooth::Settings::default()) {
+            let mut stats = truth::ErrorStats::new();
+            for (f, p) in fixes.iter().zip(&fitted) {
+                let lla = origin.shifted(drifters_core::frames::Ned::new(p.x, p.y, p.z));
+                stats.push(&reference, f.time.tow, lla);
+                if let Some(r) = reference.at(f.time.tow) {
+                    report
+                        .smoothed_horizontal
+                        .push((f.time.tow, lla.ned_from(r).horizontal_norm()));
+                }
+            }
+            report.smoothed = Some(stats);
+        }
+    }
 
     Ok(report)
 }
