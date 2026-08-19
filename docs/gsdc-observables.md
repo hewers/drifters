@@ -434,3 +434,27 @@ the 95th percentile, that is a bad trade.
 
 The code was deleted rather than left switched off. Both results are worth more
 than the code would have been.
+
+## Where the remaining error is, and why it stops here
+
+The batch fit sits at 2.47 m. What sets that floor is the part of the
+pseudorange error that is correlated across epochs: averaging removes the
+independent part, and there is nothing left to average away.
+
+That can be checked rather than assumed. Inflating the anchor sigma widens the
+fit's effective smoothing window, and if the window were the binding constraint
+the score would respond:
+
+| anchor sigma × | 0.3 | 1 | 2 | 5.5 | 15 | 30 |
+|---|---|---|---|---|---|---|
+| score | 2.820 | **2.799** | 2.824 | 2.828 | 2.826 | 2.826 |
+
+Flat across a hundredfold range. The links are so much better than the anchors
+that the fit already averages over everything they allow, and more smoothing
+changes nothing. Combined with the bias result above — the separable part of a
+multipath bias is the part that does no harm — this is the floor for what these
+two observables can do against each other.
+
+Getting below it needs information that is not in the file: a reference station
+for differential corrections, precise orbit and clock products, or a
+three-dimensional map to predict which returns are non-line-of-sight.
