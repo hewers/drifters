@@ -442,7 +442,11 @@ pub fn run_gsdc(
             s.dtheta = s.dtheta * gyro_scale;
         }
     }
-    let gsdc::GnssTrace { fixes, deltas } = gsdc::read_gnss(
+    let gsdc::GnssTrace {
+        fixes,
+        quality,
+        deltas,
+    } = gsdc::read_gnss(
         &dir.join("device_gnss.csv"),
         utc_offset - gnss_lag,
         sigma,
@@ -617,6 +621,30 @@ pub fn run_gsdc(
     if deltas.iter().any(|d| d.is_some()) {
         let origin = fixes[0].position;
         let rotation = origin.dcm_ecef_from_ned().transpose();
+        // Anchor weights from what each pseudorange solve knew about itself.
+        // Its reduced chi-squared does predict the error it went on to make:
+        // over trace A the best quartile by chi has 2.24 m RMS against the
+        // worst quartile's 7.02, a correlation of +0.26.
+        //
+        // How much that is worth is another matter. On the fitting trace it is
+        // worth nothing measurable — 2.799 against 2.797 — and pooled over four
+        // traces about 1 %, almost all of it on one trace. Raising the exponent
+        // improves the pooled figure monotonically, and that is exactly the
+        // knob not to turn: the improvement is on held-out traces, trace A
+        // cannot resolve it, and fitting to B would be the leakage this whole
+        // protocol exists to avoid. So the exponent stays at one, which is not
+        // a fitted value but the natural one — sigma proportional to the
+        // residual scatter that produced it.
+        //
+        // Normalising by the median keeps the overall scale, and so the
+        // tuning, unchanged. The clamp guards against chi itself being a noisy
+        // estimate from a few dozen residuals rather than being a tuned range.
+        let chis: Vec<f64> = quality.iter().flatten().map(|q| q.chi).collect();
+        let typical = stats::median(&chis);
+        let weight = |q: Option<crate::wls::Solution>| match q {
+            Some(q) if typical > 0.0 => (q.chi / typical).clamp(0.5, 4.0),
+            _ => 1.0,
+        };
         let anchors: Vec<smooth::Anchor> = fixes
             .iter()
             .enumerate()
@@ -625,7 +653,7 @@ pub fn run_gsdc(
                 smooth::Anchor {
                     index,
                     position: vec3(n.n, n.e, n.d),
-                    sigma,
+                    sigma: sigma * weight(quality.get(index).copied().flatten()),
                 }
             })
             .collect();

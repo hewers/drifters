@@ -355,6 +355,8 @@ pub enum VelocitySource {
 pub struct GnssTrace {
     /// One fix per epoch.
     pub fixes: Vec<GnssFix>,
+    /// What the pseudorange solve knew about each epoch, where it ran.
+    pub quality: Vec<Option<crate::wls::Solution>>,
     /// Carrier-phase position change from epoch `i` to `i + 1`, ECEF metres,
     /// where the carrier solve produced one that the Doppler did not
     /// contradict.
@@ -522,16 +524,19 @@ pub fn read_gnss(
     // Position first, one epoch at a time. Seeding each solve from the file's
     // own solution rather than from the previous result keeps epochs
     // independent, so one bad solve cannot propagate.
-    let positions: Vec<Lla> = epochs
+    let quality: Vec<Option<crate::wls::Solution>> = epochs
         .iter()
         .map(|e| match source {
             PositionSource::Solve(set) if !e.ranges.is_empty() => {
-                crate::wls::solve(&e.ranges, e.receiver, &set)
-                    .map(|p| p.to_lla())
-                    .unwrap_or(e.position)
+                crate::wls::solve_full(&e.ranges, e.receiver, &set)
             }
-            _ => e.position,
+            _ => None,
         })
+        .collect();
+    let positions: Vec<Lla> = epochs
+        .iter()
+        .zip(&quality)
+        .map(|(e, q)| q.map_or(e.position, |q| q.position.to_lla()))
         .collect();
 
     // Then the carrier-phase position changes, one per adjacent pair.
@@ -643,7 +648,11 @@ pub fn read_gnss(
 
         fixes.push(fix);
     }
-    Ok(GnssTrace { fixes, deltas })
+    Ok(GnssTrace {
+        fixes,
+        quality,
+        deltas,
+    })
 }
 
 /// Read `ground_truth.csv`.

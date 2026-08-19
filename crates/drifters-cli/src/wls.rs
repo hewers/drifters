@@ -21,6 +21,7 @@
 
 use crate::robust::{self, Clocks, Row, elevation_sigma, NX};
 use drifters_core::frames::Ecef;
+use drifters_core::math::{Cholesky, Matrix};
 
 /// Speed of light, m/s.
 const C: f64 = 299_792_458.0;
@@ -74,7 +75,28 @@ impl Default for Settings {
 ///
 /// Returns `None` when the epoch cannot support a solution — fewer
 /// observations than unknowns, or a normal matrix that will not factor.
+/// A solved epoch, and what the solve knows about how well it went.
+#[derive(Clone, Copy, Debug)]
+pub struct Solution {
+    /// Receiver position, ECEF metres.
+    pub position: Ecef,
+    /// Satellites above the elevation mask that were used.
+    pub used: usize,
+    /// Reduced chi-squared of the final residuals against the elevation
+    /// weights: one when the epoch was as good as the weighting predicted.
+    pub chi: f64,
+    /// Position dilution of precision — how far a metre of residual can move
+    /// the answer, given the geometry.
+    pub pdop: f64,
+}
+
+/// Position only, for callers that do not need the diagnostics.
 pub fn solve(obs: &[Observation], guess: Ecef, set: &Settings) -> Option<Ecef> {
+    solve_full(obs, guess, set).map(|s| s.position)
+}
+
+/// Solve, and report what the solve knows about itself.
+pub fn solve_full(obs: &[Observation], guess: Ecef, set: &Settings) -> Option<Solution> {
     let used: Vec<&Observation> = obs.iter().filter(|o| o.elevation >= set.mask).collect();
     let clocks = Clocks::assign(used.iter().map(|o| o.constellation));
     let nx = clocks.unknowns();
@@ -111,7 +133,48 @@ pub fn solve(obs: &[Observation], guess: Ecef, set: &Settings) -> Option<Ecef> {
         }
     }
     let p = Ecef::new(x[0], x[1], x[2]);
-    (p.x.is_finite() && p.y.is_finite() && p.z.is_finite()).then_some(p)
+    if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+        return None;
+    }
+
+    // Reduced chi-squared of the final residuals, and the geometry, both from
+    // the last iteration's rows.
+    let dof = (rows.len() - nx).max(1) as f64;
+    let chi = (rows
+        .iter()
+        .map(|r| (r.residual / r.sigma).powi(2))
+        .sum::<f64>()
+        / dof)
+        .sqrt();
+
+    let mut normal = Matrix::<NX, NX>::zeros();
+    for r in &rows {
+        let mut row = [0.0; NX];
+        row[0..3].copy_from_slice(&r.unit);
+        row[r.clock] = 1.0;
+        for i in 0..nx {
+            for j in 0..nx {
+                normal[(i, j)] += row[i] * row[j];
+            }
+        }
+    }
+    for i in nx..NX {
+        normal[(i, i)] = 1.0;
+    }
+    let chol = Cholesky::new(&normal)?;
+    let mut variance = 0.0;
+    for i in 0..3 {
+        let mut e = Matrix::<NX, 1>::zeros();
+        e[(i, 0)] = 1.0;
+        variance += chol.solve(&e)[(i, 0)];
+    }
+
+    Some(Solution {
+        position: p,
+        used: rows.len(),
+        chi,
+        pdop: variance.sqrt(),
+    })
 }
 
 /// Unit vector from satellite to receiver, and the range, with the Earth's

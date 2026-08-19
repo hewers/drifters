@@ -331,11 +331,11 @@ Competition score, trace A's tuning applied unchanged to B, C and D:
 
 | trace | GNSS alone | ESKF | EqF | **batch fit** |
 |---|---|---|---|---|
-| A *(fitted)* | 4.577 | 3.243 | 3.121 | **2.797** |
-| B | 4.686 | 3.950 | 3.847 | **3.535** |
-| C | 3.097 | 1.944 | 2.008 | **1.600** |
-| D | 3.243 | 2.294 | 2.210 | **2.043** |
-| **mean** | 3.901 | 2.858 | 2.797 | **2.494** |
+| A *(fitted)* | 4.577 | 3.243 | 3.121 | **2.799** |
+| B | 4.686 | 3.950 | 3.847 | **3.394** |
+| C | 3.097 | 1.944 | 2.008 | **1.617** |
+| D | 3.243 | 2.294 | 2.210 | **2.071** |
+| **mean** | 3.901 | 2.858 | 2.797 | **2.470** |
 
 **The batch fit uses no IMU and beats both filters on every trace.** That is
 worth stating plainly rather than burying: on a 1 Hz phone trace, fitting the
@@ -349,4 +349,28 @@ competitor to the filters so much as a different product. What it does settle
 is where the remaining error lives. Both filters were being asked to recover
 trajectory shape from a bad IMU when the shape was in the file all along.
 
-End to end the chain runs **4.99 → 2.49 m, −50 %**.
+### Weighting the anchors by what the solve knew
+
+The pseudorange solve's reduced chi-squared does predict the error it went on
+to make. Over trace A, sorting epochs by it, the best quartile has 2.24 m RMS
+against the worst quartile's 7.02 — a correlation of +0.26.
+
+Using it is worth much less than that suggests. On the fitting trace it is
+worth nothing measurable, 2.799 against 2.797. Pooled over four traces it is
+worth about 1 %, and nearly all of that is one trace:
+
+| exponent on `chi/median` | A | B | C | D | mean |
+|---|---|---|---|---|---|
+| 0 *(constant sigma)* | 2.797 | 3.535 | 1.600 | 2.043 | 2.494 |
+| 1 | 2.799 | 3.394 | 1.618 | 2.071 | 2.470 |
+| 2 | 2.744 | 3.281 | 1.622 | 2.075 | 2.431 |
+
+The pooled figure improves monotonically with the exponent, and that is exactly
+the knob not to turn. The improvement is on **held-out** traces; trace A cannot
+resolve it at all, its five values spanning 2.735–2.799 with no ordering. So
+the exponent stays at one, which is not a fitted value but the natural one —
+sigma proportional to the residual scatter that produced it. Recorded here
+because the temptation to take the 2.431 is the whole reason the holdout
+exists.
+
+End to end the chain runs **4.99 → 2.47 m, −50 %**.
