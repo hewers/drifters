@@ -141,3 +141,58 @@ is worth a further −3 % and −8 %, and it transfers (three traces improve
 horizontally, all four vertically, one is 2 % worse). Structure beat tuning by
 roughly seven to one here, which is the same lesson the process-noise sweep in
 [gsdc.md](gsdc.md) reached from the other direction.
+
+## In the Rust replay, and what it does to the filters
+
+The solver is on the replay path behind `--raw-ranges`, and the four-trace
+holdout reproduces the prototype: the competition score for the GNSS solution
+alone falls from 4.99 m to 3.90 m, against the prototype's 5.02 → 3.89.
+
+The competition metric is the mean of the 50th and 95th percentile horizontal
+error, which is not RMS and does not always agree with it. A solution that is
+better almost everywhere but has one bad epoch loses on RMS and wins on the
+score, and the score is the one that describes what a navigation user
+experiences. Both are reported.
+
+Wiring it in made the filter tuning stale, in a way worth spelling out because
+it is the ordinary consequence of improving a measurement. `--sigma-v 18` was
+fitted when the vertical GNSS error *was* 18 m. With the raw-range solve it is
+5–8 m, so the filters were under-trusting GNSS by a factor of two to three, and
+fusion had become **worse than raw GNSS** on traces A and B — the filter was
+dragging a good measurement toward a badly-weighted prediction.
+
+Refitting, on trace A only:
+
+- sigmas set from trace A's measured per-axis GNSS error, N 3.79 / E 1.99 /
+  D 7.96 m. The replay now prints this line, which turns setting them from a
+  fit into a measurement and makes staleness visible.
+- process-noise scale swept on trace A: the ESKF wants ×600, the EqF ×200.
+
+That the two disagree is itself a result. Below its optimum the ESKF degrades
+steeply — ×150 costs it 74 % — while the EqF is flat from ×200 to ×300 and
+falls away gently either side. The EqF extracts usable information from the IMU
+at a lower process noise than the ESKF can tolerate.
+
+Trace A's tuning applied unchanged to B, C and D:
+
+| trace | GNSS alone | ESKF ×600 | EqF ×200 |
+|---|---|---|---|
+| A *(fitted)* | 4.577 | 3.195 | **3.142** |
+| B | 4.686 | 4.245 | **4.212** |
+| C | 3.097 | **2.304** | 2.357 |
+| D | 3.243 | 2.426 | **2.332** |
+| **mean** | **3.901** | 3.042 | **3.011** |
+| **mean, B/C/D only** | **3.675** | 2.992 | **2.967** |
+
+Competition score, metres. Trace A is in-sample; the honest figure is the
+B/C/D row, where fusion is worth −19.3 % over the raw-range GNSS solution.
+
+Both filters now beat GNSS alone on every trace, which was not true before —
+under the stale tuning the ESKF lost to raw GNSS on two of the four. End to
+end the chain runs 4.99 → 3.01 m, −40 %, of which the solver is worth −22 %
+and the refit the rest.
+
+The two filters are within 1 % of each other pooled, which is inside the spread
+between traces and is not a result. The EqF winning three of four traces is
+weak evidence at best. What is not weak is the sensitivity difference: the ESKF
+needed three times the process noise to work at all.

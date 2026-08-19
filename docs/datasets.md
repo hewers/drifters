@@ -76,7 +76,7 @@ There are seven `sm-s908b` traces in the train split if more are wanted.
 Then:
 
 ```bash
-cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale 300
+cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges --sigma-n 3.79 --sigma-e 1.99 --sigma-v 7.96 --imu-scale 600
 ```
 
 `datasets/` is git-ignored, and so is the archive itself — see below. Full

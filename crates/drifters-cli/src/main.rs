@@ -214,6 +214,15 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!("score = mean of the 50th and 95th percentile horizontal error, the competition metric");
+    // The GNSS error measured against truth is what --sigma-* should be set
+    // to. Printing it turns setting them from a fit into a measurement, and
+    // makes it obvious when a change to the GNSS solution has left them stale.
+    println!(
+        "measured GNSS error, per axis  : N {:.2}, E {:.2}, D {:.2} m  (what --sigma-n/e/v should be)",
+        report.gnss_only.north.rms(),
+        report.gnss_only.east.rms(),
+        report.gnss_only.down.rms(),
+    );
     let (a, b) = (
         report.gnss_only.horizontal.rms(),
         report.filter.horizontal.rms(),

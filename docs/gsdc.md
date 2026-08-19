@@ -233,7 +233,7 @@ for the fetch and the one-line `unzip` that pulls out a single trace. With
 `ground_truth.csv`:
 
 ```bash
-cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale 300
+cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges --sigma-n 3.79 --sigma-e 1.99 --sigma-v 7.96 --imu-scale 600
 ```
 
 Add `--no-doppler` to reproduce the position-only result.
@@ -241,4 +241,14 @@ Add `--no-doppler` to reproduce the position-only result.
 The sigmas are measured from this trace rather than assumed — the dataset
 carries no covariance for the WLS solution, so they are an input, and the
 diagnostic flags `--imu-scale`, `--gyro-scale` and `--gnss-lag` are the ones
-used for the sweeps above.
+used for the sweeps above. The replay prints the measured per-axis GNSS error
+next to the table; that is what the sigmas should be, and printing it is how
+staleness gets noticed.
+
+`--raw-ranges` solves each epoch's position from the pseudoranges instead of
+taking the file's `WlsPosition*` columns, and is worth −22 % on the competition
+score by itself. **The sweeps on this page predate it** and were run against the
+file's solution, with `--sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale
+300`; they are correct for that configuration and are left as measured. The
+refit that the better GNSS forced, and the four-trace holdout under it, are in
+[gsdc-observables.md](gsdc-observables.md#in-the-rust-replay-and-what-it-does-to-the-filters).
