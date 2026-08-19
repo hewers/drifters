@@ -285,6 +285,72 @@ impl RangeColumns {
     }
 }
 
+/// The columns a time-differenced carrier-phase solve needs.
+struct CarrierColumns {
+    adr: usize,
+    adr_state: usize,
+    svid: usize,
+    frequency: usize,
+    elevation: usize,
+    constellation: usize,
+    rate: usize,
+    drift: usize,
+    sat: [usize; 3],
+}
+
+impl CarrierColumns {
+    fn parse(h: &Header) -> Option<Self> {
+        Some(Self {
+            adr: h.at("AccumulatedDeltaRangeMeters").ok()?,
+            adr_state: h.at("AccumulatedDeltaRangeState").ok()?,
+            svid: h.at("Svid").ok()?,
+            frequency: h.at("CarrierFrequencyHz").ok()?,
+            elevation: h.at("SvElevationDegrees").ok()?,
+            constellation: h.at("ConstellationType").ok()?,
+            rate: h.at("PseudorangeRateMetersPerSecond").ok()?,
+            drift: h.at("SvClockDriftMetersPerSecond").ok()?,
+            sat: [
+                h.at("SvPositionXEcefMeters").ok()?,
+                h.at("SvPositionYEcefMeters").ok()?,
+                h.at("SvPositionZEcefMeters").ok()?,
+            ],
+        })
+    }
+
+    fn carrier(&self, p: &[&str]) -> Option<crate::tdcp::Carrier> {
+        Some(crate::tdcp::Carrier {
+            constellation: field(p, self.constellation).parse::<u8>().ok()?,
+            svid: field(p, self.svid).parse::<u16>().ok()?,
+            // Rounded to MHz so two rows for one satellite on one band still
+            // match if the reported frequency wobbles in its last digits.
+            band: (field(p, self.frequency).parse::<f64>().ok()? * 1.0e-6).round() as u32,
+            adr: field(p, self.adr).parse::<f64>().ok()?,
+            state: field(p, self.adr_state).parse::<i32>().ok()?,
+            satellite: [
+                field(p, self.sat[0]).parse::<f64>().ok()?,
+                field(p, self.sat[1]).parse::<f64>().ok()?,
+                field(p, self.sat[2]).parse::<f64>().ok()?,
+            ],
+            elevation: field(p, self.elevation).parse::<f64>().ok()?,
+            rate: field(p, self.rate).parse::<f64>().ok()?
+                + field(p, self.drift).parse::<f64>().ok()?,
+        })
+    }
+}
+
+/// Where each epoch's velocity comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum VelocitySource {
+    /// No velocity measurement; position fixes only.
+    None,
+    /// A weighted least-squares solve on the Doppler shift.
+    Doppler,
+    /// Time-differenced carrier phase — see [`crate::tdcp`]. Roughly ten times
+    /// better than Doppler on this data, and falls back to Doppler for any
+    /// epoch pair it cannot solve.
+    Carrier(crate::tdcp::Settings),
+}
+
 /// Read the per-epoch position solutions from `device_gnss.csv`.
 ///
 /// `sigma` is the assumed one-sigma position uncertainty in NED metres. The
@@ -296,7 +362,7 @@ pub fn read_gnss(
     path: &Path,
     utc_offset: f64,
     sigma: Vec3,
-    doppler: bool,
+    velocity: VelocitySource,
     source: PositionSource,
 ) -> Result<Vec<GnssFix>, DataError> {
     let file = File::open(path)?;
@@ -315,7 +381,7 @@ pub fn read_gnss(
     );
     // Doppler columns are optional: a file without them still yields
     // position-only fixes rather than failing.
-    let doppler_columns: Option<[usize; 9]> = if doppler {
+    let doppler_columns: Option<[usize; 9]> = if !matches!(velocity, VelocitySource::None) {
         (|| {
             Some([
                 header.at("SvPositionXEcefMeters").ok()?,
@@ -335,6 +401,10 @@ pub fn read_gnss(
         None
     };
 
+    let carrier_columns = match velocity {
+        VelocitySource::Carrier(_) => CarrierColumns::parse(&header),
+        _ => None,
+    };
     let range_columns = match source {
         PositionSource::Solve(_) => RangeColumns::parse(&header),
         PositionSource::File => None,
@@ -349,35 +419,12 @@ pub fn read_gnss(
         position: Lla,
         satellites: Vec<DopplerObservation>,
         ranges: Vec<crate::wls::Observation>,
+        carriers: Vec<crate::tdcp::Carrier>,
     }
     let mut fixes: Vec<GnssFix> = Vec::new();
     let mut current: Option<Epoch> = None;
 
-    let finish = |e: Epoch, fixes: &mut Vec<GnssFix>| {
-        // Solve from the raw ranges when asked, seeding from the file's own
-        // solution. Seeding per epoch rather than from the previous result
-        // keeps epochs independent, so one bad solve cannot propagate.
-        let position = match source {
-            PositionSource::Solve(set) if !e.ranges.is_empty() => {
-                crate::wls::solve(&e.ranges, e.receiver, &set)
-                    .map(|p| p.to_lla())
-                    .unwrap_or(e.position)
-            }
-            _ => e.position,
-        };
-        let mut fix = GnssFix {
-            time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
-            position,
-            position_std: sigma,
-            velocity: None,
-            velocity_std: Vec3::ZERO,
-        };
-        if let Some(d) = solve_doppler(&e.satellites, e.receiver, e.position) {
-            fix.velocity = Some(d.velocity);
-            fix.velocity_std = d.sigma;
-        }
-        fixes.push(fix);
-    };
+    let mut epochs: Vec<Epoch> = Vec::new();
 
     for line in lines {
         let line = line?;
@@ -389,7 +436,7 @@ pub fn read_gnss(
         // New epoch?
         if current.as_ref().is_none_or(|e| (utc - e.utc).abs() >= 1.0) {
             if let Some(e) = current.take() {
-                finish(e, &mut fixes);
+                epochs.push(e);
             }
             let (Ok(x), Ok(y), Ok(z)) = (
                 field(&parts, cx).parse::<f64>(),
@@ -414,12 +461,19 @@ pub fn read_gnss(
                 position,
                 satellites: Vec::new(),
                 ranges: Vec::new(),
+                carriers: Vec::new(),
             });
         }
 
         if let (Some(c), Some(e)) = (range_columns.as_ref(), current.as_mut()) {
             if let Some(o) = c.observation(&parts) {
                 e.ranges.push(o);
+            }
+        }
+
+        if let (Some(c), Some(e)) = (carrier_columns.as_ref(), current.as_mut()) {
+            if let Some(o) = c.carrier(&parts) {
+                e.carriers.push(o);
             }
         }
 
@@ -447,7 +501,107 @@ pub fn read_gnss(
         }
     }
     if let Some(e) = current.take() {
-        finish(e, &mut fixes);
+        epochs.push(e);
+    }
+
+    // Position first, one epoch at a time. Seeding each solve from the file's
+    // own solution rather than from the previous result keeps epochs
+    // independent, so one bad solve cannot propagate.
+    let positions: Vec<Lla> = epochs
+        .iter()
+        .map(|e| match source {
+            PositionSource::Solve(set) if !e.ranges.is_empty() => {
+                crate::wls::solve(&e.ranges, e.receiver, &set)
+                    .map(|p| p.to_lla())
+                    .unwrap_or(e.position)
+            }
+            _ => e.position,
+        })
+        .collect();
+
+    // Then the carrier-phase position changes, one per adjacent pair.
+    // `deltas[i]` spans epoch `i` to `i + 1`.
+    let mut deltas: Vec<Option<Vec3>> = vec![None; epochs.len().saturating_sub(1)];
+    if let VelocitySource::Carrier(set) = velocity {
+        for i in 0..deltas.len() {
+            let dt = (epochs[i + 1].utc - epochs[i].utc) * 1.0e-3;
+            if !(0.5..1.5).contains(&dt) {
+                continue;
+            }
+            deltas[i] = crate::tdcp::delta_position(
+                &epochs[i].carriers,
+                &epochs[i + 1].carriers,
+                dt,
+                positions[i].to_ecef(),
+                &set,
+            )
+            .map(|d| d.delta / dt);
+        }
+    }
+
+    for (i, e) in epochs.iter().enumerate() {
+        let position = positions[i];
+        let mut fix = GnssFix {
+            time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
+            position,
+            position_std: sigma,
+            velocity: None,
+            velocity_std: Vec3::ZERO,
+        };
+
+        // A single carrier delta is the *average* velocity over its interval,
+        // which belongs to the interval's midpoint. Used as the velocity at
+        // either endpoint it lags by half a second, and on this data that lag
+        // costs more than the measurement is worth: the horizontal 95th
+        // percentile goes from 0.064 m to 0.499 m and Doppler is then just as
+        // good. Averaging the two deltas that meet at an epoch is a central
+        // difference, which has no lag, and it recovers the whole advantage.
+        if let (Some(before), Some(after)) = (
+            i.checked_sub(1).and_then(|j| deltas.get(j)).copied().flatten(),
+            deltas.get(i).copied().flatten(),
+        ) {
+            let ecef = (before + after) * 0.5;
+            // A rate, so only the rotation applies — no origin shift.
+            let ned = position.dcm_ecef_from_ned().transpose() * ecef;
+            fix.velocity = Some(Ned::new(ned.x, ned.y, ned.z));
+            // Measured against survey truth on trace A: 0.05 m/s horizontally
+            // and 0.27 m/s vertically. The vertical is five times worse
+            // because the geometry is — every satellite is above the horizon,
+            // so nothing pins down `up` the way the horizontal plane is
+            // pinned down from all sides.
+            //
+            // Flat rather than scaled by what each solve reports about its own
+            // residuals: that was tried and is worth nothing, because the
+            // epochs that need catching are the ones whose surviving
+            // satellites agree with each other on a wrong answer. Those are
+            // caught below instead, from outside.
+            fix.velocity_std = Vec3::new(0.05, 0.05, 0.27);
+        }
+
+        // Doppler wherever carrier phase produced nothing — the first and
+        // last epoch always, any epoch that lost lock, and any epoch whose
+        // carrier solve the Doppler contradicts — so enabling the carrier
+        // solve never costs the filter a measurement, and a carrier solve
+        // that is confidently wrong never reaches it.
+        if !matches!(velocity, VelocitySource::None) {
+            if let Some(d) = solve_doppler(&e.satellites, e.receiver, position) {
+                let agreed = match (fix.velocity, velocity) {
+                    (Some(c), VelocitySource::Carrier(set)) => {
+                        (c.n - d.velocity.n).powi(2)
+                            + (c.e - d.velocity.e).powi(2)
+                            + (c.d - d.velocity.d).powi(2)
+                            < set.agreement * set.agreement
+                    }
+                    _ => false,
+                };
+                if !agreed {
+                    fix.velocity = Some(d.velocity);
+                    fix.velocity_std = d.sigma;
+                }
+            }
+        }
+
+        fixes.push(fix);
     }
     Ok(fixes)
 }
@@ -621,7 +775,7 @@ mod tests {
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
         let p = tmp("gnss-ranges.csv", &range_epoch(truth, 1234.5, &[9; 8]));
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap();
         assert_eq!(fixes.len(), 1);
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
@@ -632,7 +786,7 @@ mod tests {
 
         // With the file's own column the same epoch stays at the 53 m seed,
         // confirming the solve did the work rather than the seed being right.
-        let file = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
+        let file = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap();
         let seeded = file[0].position.to_ecef();
         let seed_err = ((seeded.x - truth.x).powi(2)
             + (seeded.y - truth.y).powi(2)
@@ -653,7 +807,7 @@ mod tests {
         // three position states, one clock, and one redundant observation.
         let mixed = range_epoch(truth, 1234.5, &[9, 1, 9, 8, 9, 0, 9, 9]);
         let p = tmp("gnss-state.csv", &mixed);
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap();
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
             + (solved.y - truth.y).powi(2)
@@ -672,7 +826,7 @@ mod tests {
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
         let p = tmp("gnss-thin.csv", &range_epoch(truth, 0.0, &[9, 9, 9, 9, 0, 0, 0, 0]));
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap();
         assert_eq!(fixes.len(), 1, "the epoch should survive, not be dropped");
         let solved = fixes[0].position.to_ecef();
         // The file's seed, 53.9 m from truth, not a wild solve.
@@ -681,6 +835,185 @@ mod tests {
             + (solved.z - truth.z).powi(2))
         .sqrt();
         assert!((err - 53.85).abs() < 0.5, "expected the file seed: {err:.2} m");
+    }
+
+    /// Three epochs of carrier phase for a receiver moving at a constant
+    /// `velocity`, so the middle epoch has a delta on each side and the
+    /// central difference has something to work with.
+    ///
+    /// `rogue` makes the first `rogue.1` satellites report the last epoch's
+    /// phase as though the receiver had moved by `rogue.0` instead. That is
+    /// what a real correlated slip looks like to the solver: the rogue
+    /// satellites agree with each other on a wrong displacement, so their
+    /// residuals are small and neither the phase screen nor the solve's own
+    /// scatter has anything to object to. Their Doppler is left telling the
+    /// truth, because a cycle slip moves the carrier phase and not the
+    /// frequency — which is the whole reason the cross-check works.
+    fn carrier_trace(
+        truth: Ecef,
+        velocity: [f64; 3],
+        rogue: Option<([f64; 3], usize)>,
+    ) -> String {
+        const ORBIT: f64 = 26_560_000.0;
+        let mut csv = String::from(
+            "utcTimeMillis,WlsPositionXEcefMeters,WlsPositionYEcefMeters,\
+             WlsPositionZEcefMeters,AccumulatedDeltaRangeMeters,\
+             AccumulatedDeltaRangeState,Svid,CarrierFrequencyHz,\
+             SvElevationDegrees,ConstellationType,\
+             PseudorangeRateMetersPerSecond,SvClockDriftMetersPerSecond,\
+             SvPositionXEcefMeters,SvPositionYEcefMeters,SvPositionZEcefMeters,\
+             SvVelocityXEcefMetersPerSecond,SvVelocityYEcefMetersPerSecond,\
+             SvVelocityZEcefMetersPerSecond,\
+             PseudorangeRateUncertaintyMetersPerSecond\n",
+        );
+        let lla = truth.to_lla();
+        let radius = (truth.x * truth.x + truth.y * truth.y + truth.z * truth.z).sqrt();
+        let sats: Vec<[f64; 3]> = (0..12)
+            .map(|i| {
+                let el = (15.0 + 6.0 * i as f64).to_radians();
+                let az = (137.508 * i as f64).to_radians();
+                let range = -radius * el.sin()
+                    + (ORBIT * ORBIT - radius * radius * el.cos().powi(2)).sqrt();
+                let (e, n, u) = (
+                    range * el.cos() * az.sin(),
+                    range * el.cos() * az.cos(),
+                    range * el.sin(),
+                );
+                let (sla, cla) = lla.lat.sin_cos();
+                let (slo, clo) = lla.lon.sin_cos();
+                [
+                    truth.x - slo * e - sla * clo * n + cla * clo * u,
+                    truth.y + clo * e - sla * slo * n + cla * slo * u,
+                    truth.z + cla * n + sla * u,
+                ]
+            })
+            .collect();
+        for step in 0..3 {
+            let t = 1000 + step * 1000;
+            let rx = [
+                truth.x + velocity[0] * step as f64,
+                truth.y + velocity[1] * step as f64,
+                truth.z + velocity[2] * step as f64,
+            ];
+            for (i, sv) in sats.iter().enumerate() {
+                let truthful = ((sv[0] - rx[0]).powi(2)
+                    + (sv[1] - rx[1]).powi(2)
+                    + (sv[2] - rx[2]).powi(2))
+                .sqrt();
+                let unit = [
+                    (rx[0] - sv[0]) / truthful,
+                    (rx[1] - sv[1]) / truthful,
+                    (rx[2] - sv[2]) / truthful,
+                ];
+                // Positive receding, matching the column's convention. Always
+                // the true motion: a slip does not move the Doppler.
+                let rate = unit[0] * velocity[0] + unit[1] * velocity[1] + unit[2] * velocity[2];
+                let range = match rogue {
+                    Some((wrong, n)) if i < n && step == 2 => {
+                        let r = [
+                            truth.x + velocity[0] + wrong[0],
+                            truth.y + velocity[1] + wrong[1],
+                            truth.z + velocity[2] + wrong[2],
+                        ];
+                        ((sv[0] - r[0]).powi(2) + (sv[1] - r[1]).powi(2) + (sv[2] - r[2]).powi(2))
+                            .sqrt()
+                    }
+                    _ => truthful,
+                };
+                let adr = 1.0e7 * (i as f64 + 1.0) + range;
+                csv.push_str(&format!(
+                    "{t},{:.6},{:.6},{:.6},{adr:.6},1,{i},1.575e9,{:.4},1,{rate:.6},0.0,\
+                     {:.6},{:.6},{:.6},0.0,0.0,0.0,0.1\n",
+                    truth.x, truth.y, truth.z,
+                    (15.0 + 6.0 * i as f64),
+                    sv[0], sv[1], sv[2],
+                ));
+            }
+        }
+        csv
+    }
+
+    #[test]
+    fn the_carrier_velocity_is_a_central_difference_over_the_epoch_it_belongs_to() {
+        // Only the middle epoch has a delta on both sides. The first and last
+        // fall back, which is why the file needs three epochs to test one.
+        let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
+        let motion = [4.0, -3.0, 1.0];
+        let p = tmp("gnss-carrier.csv", &carrier_trace(truth, motion, None));
+        let source = PositionSource::File;
+        let set = crate::tdcp::Settings::default();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::Carrier(set), source)
+            .unwrap();
+        assert_eq!(fixes.len(), 3);
+
+        let v = fixes[1].velocity.expect("the middle epoch has both deltas");
+        let ned = truth.to_lla().dcm_ecef_from_ned().transpose()
+            * Vec3::new(motion[0], motion[1], motion[2]);
+        let e = (v.n - ned.x).hypot(v.e - ned.y).hypot(v.d - ned.z);
+        assert!(e < 1.0e-3, "carrier velocity off by {e:.2e} m/s");
+        assert!(fixes[1].velocity_std.x < 0.1, "carrier epochs claim carrier accuracy");
+    }
+
+    #[test]
+    fn a_carrier_solve_the_doppler_contradicts_falls_back_rather_than_being_used() {
+        // The phase screen is disabled here so the test is about one thing:
+        // what happens when the two velocity solutions disagree. In the real
+        // files the screen is on and the disagreements that get this far come
+        // from epochs with barely more satellites than unknowns, where the
+        // geometry multiplies sub-screen residuals into hundreds of m/s — see
+        // [`crate::tdcp::Settings::agreement`].
+        let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
+        let motion = [4.0, -3.0, 1.0];
+        let set = crate::tdcp::Settings {
+            screen: f64::INFINITY,
+            ..Default::default()
+        };
+        // Every satellite reports the last epoch as though the receiver had
+        // jumped 300 m sideways, while every Doppler still reports the truth.
+        let p = tmp(
+            "gnss-carrier-slip.csv",
+            &carrier_trace(truth, motion, Some(([300.0, -200.0, 150.0], 12))),
+        );
+        let ned = truth.to_lla().dcm_ecef_from_ned().transpose()
+            * Vec3::new(motion[0], motion[1], motion[2]);
+        let err = |f: &GnssFix| {
+            let v = f.velocity.expect("every epoch should carry a velocity");
+            (v.n - ned.x).hypot(v.e - ned.y).hypot(v.d - ned.z)
+        };
+
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            Vec3::splat(5.0),
+            VelocitySource::Carrier(set),
+            PositionSource::File,
+        )
+        .unwrap();
+        assert!(
+            err(&fixes[1]) < 1.0,
+            "the Doppler fallback should be roughly right: {:.3} m/s",
+            err(&fixes[1])
+        );
+
+        // With the cross-check off, the same file yields the rogue answer, so
+        // it is the cross-check doing this and not something else.
+        let unchecked = crate::tdcp::Settings {
+            agreement: f64::INFINITY,
+            ..set
+        };
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            Vec3::splat(5.0),
+            VelocitySource::Carrier(unchecked),
+            PositionSource::File,
+        )
+        .unwrap();
+        assert!(
+            err(&fixes[1]) > 100.0,
+            "unchecked, the rogue phase should dominate: {:.1} m/s",
+            err(&fixes[1])
+        );
     }
 
     #[test]
@@ -761,7 +1094,7 @@ mod tests {
              2000,-2694001,-4293001,3857001\n\
              2000,-2694001,-4293001,3857001\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap();
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
         assert_relative_eq!(fixes[0].time.tow, 1.0, epsilon = 1e-9);
@@ -776,7 +1109,7 @@ mod tests {
              2000,-2694000,-4293000,3857000\n\
              3000,,,\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap();
         assert_eq!(fixes.len(), 1);
     }
 

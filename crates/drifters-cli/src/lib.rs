@@ -12,7 +12,9 @@ pub mod gsdc;
 pub mod kfgins;
 pub mod nees;
 pub mod plot;
+pub mod robust;
 pub mod stats;
+pub mod tdcp;
 pub mod truth;
 pub mod wls;
 
@@ -356,6 +358,18 @@ pub struct GsdcReport {
     /// the three solutions. Kept separately from [`Epoch`] because they are
     /// scored against ground truth rather than against the fixes.
     pub gnss_horizontal: Vec<(f64, f64)>,
+    /// Error of the GNSS velocity measurement against a truth velocity, NED
+    /// m/s. The measurement the filter is being handed, scored on its own —
+    /// without this, a velocity solve that is quietly wrong looks like a
+    /// filter that is quietly wrong.
+    pub gnss_velocity: truth::ErrorStats,
+    /// Epochs that carried a velocity measurement at all.
+    pub gnss_velocity_count: u64,
+    /// Per-epoch horizontal velocity error, m/s, for order statistics. RMS
+    /// alone cannot distinguish a measurement that is uniformly mediocre from
+    /// one that is excellent with a handful of bad epochs, and those two call
+    /// for opposite responses.
+    pub gnss_velocity_horizontal: Vec<f64>,
     /// See [`GsdcReport::gnss_horizontal`].
     pub filter_horizontal: Vec<(f64, f64)>,
     /// See [`GsdcReport::gnss_horizontal`].
@@ -390,8 +404,8 @@ pub struct GsdcOptions {
     pub gyro_scale: f64,
     /// Diagnostic: shift GNSS timestamps to sweep for a lag.
     pub gnss_lag: f64,
-    /// Use the Doppler velocity solution as well as position.
-    pub doppler: bool,
+    /// Where the velocity measurement comes from.
+    pub velocity: gsdc::VelocitySource,
     /// Solve position from the raw pseudoranges rather than taking the file's
     /// `WlsPosition*` columns. See [`gsdc::PositionSource`].
     pub raw_ranges: bool,
@@ -409,7 +423,7 @@ pub fn run_gsdc(
         imu_scale,
         gyro_scale,
         gnss_lag,
-        doppler,
+        velocity,
         raw_ranges,
         alpha,
     } = options;
@@ -424,7 +438,7 @@ pub fn run_gsdc(
         &dir.join("device_gnss.csv"),
         utc_offset - gnss_lag,
         sigma,
-        doppler,
+        velocity,
         if raw_ranges {
             gsdc::PositionSource::Solve(crate::wls::Settings::default())
         } else {
@@ -493,6 +507,9 @@ pub fn run_gsdc(
         eqf_nis_values: Vec::new(),
         eqf_lever: drifters_core::math::Vec3::ZERO,
         eqf_alpha: alpha,
+        gnss_velocity: truth::ErrorStats::new(),
+        gnss_velocity_count: 0,
+        gnss_velocity_horizontal: Vec::new(),
         gnss_horizontal: Vec::new(),
         filter_horizontal: Vec::new(),
         eqf_horizontal: Vec::new(),
@@ -523,6 +540,16 @@ pub fn run_gsdc(
                 report
                     .gnss_horizontal
                     .push((fix.time.tow, fix.position.ned_from(r).horizontal_norm()));
+            }
+            // Half a second either side, matching the one-second epoch
+            // spacing, so the truth velocity is the average over the same
+            // interval the measurement describes.
+            if let (Some(v), Some(t)) = (fix.velocity, reference.velocity_at(fix.time.tow, 0.5)) {
+                report.gnss_velocity.push_ned(v.n - t.n, v.e - t.e, v.d - t.d);
+                report
+                    .gnss_velocity_horizontal
+                    .push((v.n - t.n).hypot(v.e - t.e));
+                report.gnss_velocity_count += 1;
             }
 
             engine.add_gnss(fix);
@@ -564,7 +591,7 @@ pub fn run_gsdc(
     // second pass rather than interleaved only because the two engines keep
     // their own state; the data they see is byte-identical.
     let second = eqf::replay_gsdc_eqf(
-        &imu, &fixes, &reference, attitude, imu_scale, alpha, doppler,
+        &imu, &fixes, &reference, attitude, imu_scale, alpha,
     );
     report.eqf = second.error;
     report.eqf_epochs = second.epochs;
@@ -604,7 +631,7 @@ pub fn tune_gsdc(
                 imu_scale: *scale,
                 gyro_scale: 1.0,
                 gnss_lag: 0.0,
-                doppler: true,
+                velocity: gsdc::VelocitySource::Doppler,
                 raw_ranges,
                 alpha,
             },

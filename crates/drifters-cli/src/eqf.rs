@@ -687,7 +687,6 @@ pub fn replay_gsdc_eqf(
     attitude: drifters_core::math::Euler,
     imu_scale: f64,
     alpha: f64,
-    doppler: bool,
 ) -> GsdcEqf {
     let first = fixes[0];
     let anchor = Anchor::new(first.position);
@@ -774,15 +773,15 @@ pub fn replay_gsdc_eqf(
             let r = Mat3::from_diagonal(&[s.x * s.x, s.y * s.y, s.z * s.z]);
             let nis = filter.update_position(measured, &r);
 
-            // Doppler velocity is what made heading observable for the ESKF on
+            // GNSS velocity is what made heading observable for the ESKF on
             // this trace (a 1.7% gain became 34.7%). The EqF gets the same
             // measurement or the comparison is about inputs, not estimators.
-            if doppler {
-                if let Some(v) = fix.velocity {
-                    let sv = fix.velocity_std;
-                    let rv = Mat3::from_diagonal(&[sv.x * sv.x, sv.y * sv.y, sv.z * sv.z]);
-                    filter.update_velocity(Vec3::new(v.n, v.e, v.d), sample.gyro(), &rv);
-                }
+            // Which solve produced it is [`gsdc::VelocitySource`]'s business;
+            // an epoch without one simply carries `None`.
+            if let Some(v) = fix.velocity {
+                let sv = fix.velocity_std;
+                let rv = Mat3::from_diagonal(&[sv.x * sv.x, sv.y * sv.y, sv.z * sv.z]);
+                filter.update_velocity(Vec3::new(v.n, v.e, v.d), sample.gyro(), &rv);
             }
 
             if let Some(nis) = nis {

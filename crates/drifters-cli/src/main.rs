@@ -172,7 +172,13 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             imu_scale,
             gyro_scale,
             gnss_lag,
-            doppler: !args.iter().any(|a| a == "--no-doppler"),
+            velocity: if args.iter().any(|a| a == "--no-doppler") {
+                drifters_cli::gsdc::VelocitySource::None
+            } else if args.iter().any(|a| a == "--carrier") {
+                drifters_cli::gsdc::VelocitySource::Carrier(Default::default())
+            } else {
+                drifters_cli::gsdc::VelocitySource::Doppler
+            },
             raw_ranges: args.iter().any(|a| a == "--raw-ranges"),
             alpha,
         },
@@ -214,6 +220,23 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!("score = mean of the 50th and 95th percentile horizontal error, the competition metric");
+    if report.gnss_velocity_count > 0 {
+        let v = &report.gnss_velocity;
+        println!(
+            "GNSS velocity error, per axis  : N {:.3}, E {:.3}, D {:.3} m/s RMS over {} epochs",
+            v.north.rms(),
+            v.east.rms(),
+            v.down.rms(),
+            report.gnss_velocity_count,
+        );
+        let h = &report.gnss_velocity_horizontal;
+        println!(
+            "  horizontal                   : median {:.3}, p95 {:.3}, max {:.2} m/s",
+            drifters_cli::stats::percentile(h, 0.50),
+            drifters_cli::stats::percentile(h, 0.95),
+            v.horizontal.max(),
+        );
+    }
     // The GNSS error measured against truth is what --sigma-* should be set
     // to. Printing it turns setting them from a fit into a measurement, and
     // makes it obvious when a change to the GNSS solution has left them stale.

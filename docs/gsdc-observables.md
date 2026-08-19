@@ -196,3 +196,104 @@ The two filters are within 1 % of each other pooled, which is inside the spread
 between traces and is not a result. The EqF winning three of four traces is
 weak evidence at best. What is not weak is the sensitivity difference: the ESKF
 needed three times the process noise to work at all.
+
+## Carrier phase: the other observable in the same file
+
+The pseudorange work above is bounded by what a pseudorange is — 18–34 m of
+multipath bias, which no amount of weighting removes. `device_gnss.csv` also
+carries `AccumulatedDeltaRangeMeters`, and differencing that between
+consecutive epochs measures how far the receiver moved to **0.011 m** robust
+sigma, against survey truth over 25 310 satellite pairs on trace A. The integer
+ambiguity cancels in the difference, so nothing has to be resolved.
+
+Unlike the pseudorange it is nearly flat with elevation — 0.008 m above 60°,
+0.016 m below 15°, a two-fold spread against the pseudorange's twelve-fold.
+
+### Cycle slips are never flagged
+
+When the receiver loses lock the ambiguity changes and the difference is
+meaningless. `AccumulatedDeltaRangeState` has a `CYCLE_SLIP` bit for this, and
+**on all four traces it is never set**, while 8.1 % of satellite pairs are in
+fact slipped. Trusting it gives a 95th-percentile error of 2.06 m and a maximum
+of 36.5 m — the same lesson as the `State` bits on the pseudorange side, and
+the second time on this dataset that a validity flag has been worth nothing.
+
+Slips are found instead by predicting the phase change from the Doppler and
+rejecting pairs that disagree, both available at the epoch. Screening at 0.5 m
+keeps 86 % of pairs, catches 96.6 % of the slips, and brings the 95th
+percentile to 0.036 m. A tighter screen is worse: at 0.2 m it keeps 67 % and
+the solved position change degrades, because the satellites it discards were
+carrying the geometry.
+
+### A delta is not a velocity at either endpoint
+
+The first attempt handed the filter `delta / dt` as the velocity at the later
+epoch. It made both filters worse and diverged the EqF, and the reason is not
+subtle once measured: a delta is the *average* velocity over its interval, so
+it belongs to the interval's midpoint. Used half a second late it lags by
+`a·dt/2`, and on a driving trace that is most of a metre per second.
+
+| one-second horizontal error | p95 |
+|---|---|
+| delta, scored as a delta | 0.064 m |
+| the same delta, scored as the velocity at the later epoch | 0.499 m |
+| Doppler, scored the same way | 0.567 m |
+
+So the naive integration threw away the entire advantage — the lagged carrier
+velocity is no better than the Doppler it replaced, and worse vertically. What
+recovers it is averaging the two deltas that meet at an epoch, which is a
+central difference and has no lag. That costs one epoch of latency: the
+velocity at *t* needs the observation at *t+1*, so this is a smoothed estimate
+and not a real-time one. A causal system would instead timestamp the forward
+difference at the midpoint, which needs velocity-only fixes that
+[`GnssFix`](../crates/drifters-core/src/types.rs) does not currently express.
+
+Against truth, per axis, one-second velocity:
+
+| | E | N | U |
+|---|---|---|---|
+| Doppler | 0.250 | 0.302 | 0.501 |
+| central-difference carrier | **0.040** | **0.052** | **0.269** |
+
+RMS in m/s. In the replay the same measurement scores a **median** horizontal
+error of 0.011 m/s against the Doppler's 0.178 — sixteen times better.
+
+### A solve cannot always tell that it has failed
+
+About one epoch in a hundred still came out badly wrong, by hundreds of m/s.
+Not from a large slip — the screen catches those — but from an epoch left with
+barely more satellites than unknowns. Four constellations means seven unknowns,
+and every bad epoch on trace A had eight to ten satellites holding up seven
+states. The geometry then multiplies sub-screen residuals into hundreds of
+metres, and the solve's residuals are small *because* it has no redundancy.
+
+Two ways of asking the solve about itself were tried, and both failed:
+
+- **Scaling the reported uncertainty by the residual scatter** changed the
+  four-trace score by 0.3 %, in the wrong direction. The surviving satellites
+  agree with each other on the wrong answer, so the scatter is small.
+- **A dilution-of-precision threshold**, aimed straight at the geometry, made
+  it monotonically worse at every value from 2 to 15. Most weak-geometry epochs
+  are perfectly good, and discarding them costs more than the few bad ones do.
+
+What works is a second, independent solution. The Doppler is already being
+computed as the fallback, and the disagreement separates cleanly — 95th
+percentile 1.6 m/s, 99.5th percentile 367 m/s — so a 3 m/s gate takes the tail
+and nothing else. **A confidently wrong solve is not detectable from inside
+itself; it takes an independent measurement.**
+
+### What it is worth
+
+Trace A's tuning applied unchanged to B, C and D, competition score in metres:
+
+| trace | GNSS alone | ESKF, Doppler | ESKF, carrier | EqF, Doppler | EqF, carrier |
+|---|---|---|---|---|---|
+| A *(fitted)* | 4.577 | 3.195 | 3.213 | 3.142 | **3.074** |
+| B | 4.686 | 4.245 | 3.949 | 4.212 | **3.847** |
+| C | 3.097 | 2.304 | **1.942** | 2.357 | 2.002 |
+| D | 3.243 | 2.426 | 2.294 | 2.332 | **2.210** |
+| **mean** | 3.901 | 3.042 | 2.849 | 3.011 | **2.783** |
+| **mean, B/C/D** | 3.675 | 2.992 | 2.728 | 2.967 | **2.686** |
+
+Carrier velocity is worth −8.8 % to the ESKF and −9.5 % to the EqF out of
+sample. End to end the chain now runs **4.99 → 2.78 m, −44 %**.

@@ -20,8 +20,8 @@
 //! at exactly the moments a run is least trustworthy: the first and last
 //! seconds, before initialisation has settled.
 
-use drifters_core::frames::Lla;
-use drifters_core::math::RAD_TO_DEG;
+use drifters_core::frames::{Lla, Ned};
+use drifters_core::math::{RAD_TO_DEG, Vec3};
 
 use crate::stats::Running;
 
@@ -118,6 +118,20 @@ impl Truth {
             p0.height + a * (p1.height - p0.height),
         ))
     }
+
+    /// Ground velocity at `tow` in NED m/s, by central difference over
+    /// `2 * half` seconds, or `None` if either side falls outside the span.
+    ///
+    /// A central difference rather than a forward one so the result belongs to
+    /// `tow` and not to half an interval earlier — the same distinction that
+    /// decides whether a carrier-phase delta is worth anything as a velocity.
+    pub fn velocity_at(&self, tow: f64, half: f64) -> Option<Ned> {
+        let (before, after) = (self.at(tow - half)?, self.at(tow + half)?);
+        let (a, b) = (before.to_ecef(), after.to_ecef());
+        let d = Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z) / (2.0 * half);
+        let ned = self.at(tow)?.dcm_ecef_from_ned().transpose() * d;
+        Some(Ned::new(ned.x, ned.y, ned.z))
+    }
 }
 
 /// Accumulated position error against a truth trajectory.
@@ -162,6 +176,17 @@ impl ErrorStats {
         self.east.push(e.e);
         self.down.push(e.d);
         self.horizontal.push(e.horizontal_norm());
+    }
+
+    /// Accumulate an error given directly in the local frame.
+    ///
+    /// The velocity error has no position to resolve against, so it comes in
+    /// already differenced rather than as a solution and a reference.
+    pub fn push_ned(&mut self, north: f64, east: f64, down: f64) {
+        self.north.push(north);
+        self.east.push(east);
+        self.down.push(down);
+        self.horizontal.push(north.hypot(east));
     }
 
     /// Number of epochs compared.

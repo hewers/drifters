@@ -233,7 +233,7 @@ for the fetch and the one-line `unzip` that pulls out a single trace. With
 `ground_truth.csv`:
 
 ```bash
-cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges --sigma-n 3.79 --sigma-e 1.99 --sigma-v 7.96 --imu-scale 600
+cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges --carrier --sigma-n 3.79 --sigma-e 1.99 --sigma-v 7.96 --imu-scale 400
 ```
 
 Add `--no-doppler` to reproduce the position-only result.

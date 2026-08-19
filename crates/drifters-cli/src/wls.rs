@@ -19,16 +19,13 @@
 //! A clock state per constellation is required, not optional: solving one
 //! common clock leaves 16.8 m of median residual.
 
+use crate::robust::{self, Clocks, Row, elevation_sigma, NX};
 use drifters_core::frames::Ecef;
-use drifters_core::math::{Cholesky, Matrix};
 
 /// Speed of light, m/s.
 const C: f64 = 299_792_458.0;
 /// Earth rotation rate, rad/s.
 const OMEGA_E: f64 = 7.292_115_146_7e-5;
-/// Position plus one clock per supported constellation.
-const NX: usize = 3 + 6;
-
 /// One satellite's pseudorange at one epoch, already corrected.
 #[derive(Clone, Copy, Debug)]
 pub struct Observation {
@@ -79,18 +76,12 @@ impl Default for Settings {
 /// observations than unknowns, or a normal matrix that will not factor.
 pub fn solve(obs: &[Observation], guess: Ecef, set: &Settings) -> Option<Ecef> {
     let used: Vec<&Observation> = obs.iter().filter(|o| o.elevation >= set.mask).collect();
-    // Which constellations are present, so each gets its own clock column.
-    let mut slot = [usize::MAX; 8];
-    let mut clocks = 0;
-    for o in &used {
-        let c = (o.constellation as usize).min(7);
-        if slot[c] == usize::MAX {
-            slot[c] = 3 + clocks;
-            clocks += 1;
-        }
-    }
-    let nx = 3 + clocks;
-    if used.len() < nx + 1 || clocks == 0 {
+    let clocks = Clocks::assign(used.iter().map(|o| o.constellation));
+    let nx = clocks.unknowns();
+    // One redundant observation at least. With none there is no residual to
+    // judge an outlier by, and a robust solve that fits n observations with n
+    // unknowns is an ordinary one that has been told a story about itself.
+    if used.len() < nx + 1 || clocks.count() == 0 {
         return None;
     }
 
@@ -99,55 +90,23 @@ pub fn solve(obs: &[Observation], guess: Ecef, set: &Settings) -> Option<Ecef> {
     x[1] = guess.y;
     x[2] = guess.z;
 
-    let mut residual = vec![0.0; used.len()];
+    let mut rows: Vec<Row> = Vec::with_capacity(used.len());
     for _ in 0..set.iterations {
-        // Pass one: residuals, for the robust scale.
-        for (k, o) in used.iter().enumerate() {
-            residual[k] = o.pseudorange - predicted(o, &x, slot);
+        rows.clear();
+        for o in &used {
+            let (unit, _) = geometry(o, &x);
+            rows.push(Row {
+                unit,
+                clock: clocks.slot(o.constellation),
+                residual: o.pseudorange - predicted(o, &x, &clocks),
+                sigma: elevation_sigma(o.elevation, set.sigma_a, set.sigma_b),
+            });
         }
-        // Centre on the median before scaling. The receiver clock is one of
-        // the unknowns, so until it converges every residual carries the same
-        // large offset — and an uncentred z then makes every satellite look
-        // like an outlier, which weights them all down equally and silently
-        // reduces the robust solve to an ordinary one.
-        let (centre, scale) = robust_centre_scale(&residual[..used.len()]);
-
-        // Pass two: accumulate the weighted normal equations.
-        let mut ata = Matrix::<NX, NX>::zeros();
-        let mut atb = Matrix::<NX, 1>::zeros();
-        for (k, o) in used.iter().enumerate() {
-            let (u, _) = geometry(o, &x);
-            let sigma =
-                set.sigma_a + set.sigma_b / (o.elevation.max(3.0)).to_radians().sin().max(0.05);
-            let z = ((residual[k] - centre) / scale).abs();
-            // Huber: quadratic inside the threshold, linear outside, which is
-            // what keeps a 800 m NLOS return from dominating the epoch.
-            let robust = if z <= set.huber {
-                1.0
-            } else {
-                set.huber / z.max(1e-9)
-            };
-            let w = robust / (sigma * sigma);
-
-            let mut row = [0.0; NX];
-            row[0..3].copy_from_slice(&u);
-            row[slot[(o.constellation as usize).min(7)]] = 1.0;
-            for i in 0..nx {
-                atb[(i, 0)] += w * row[i] * residual[k];
-                for j in 0..nx {
-                    ata[(i, j)] += w * row[i] * row[j];
-                }
-            }
-        }
-        // Unused columns would make the system singular; pin them.
-        for i in nx..NX {
-            ata[(i, i)] = 1.0;
-        }
-        let dx = Cholesky::new(&ata)?.solve(&atb);
+        let dx = robust::step(&rows, nx, set.huber)?;
         for i in 0..nx {
-            x[i] += dx[(i, 0)];
+            x[i] += dx[i];
         }
-        if dx[(0, 0)].hypot(dx[(1, 0)]).hypot(dx[(2, 0)]) < 1.0e-3 {
+        if dx[0].hypot(dx[1]).hypot(dx[2]) < 1.0e-3 {
             break;
         }
     }
@@ -168,25 +127,9 @@ fn geometry(o: &Observation, x: &[f64; NX]) -> ([f64; 3], f64) {
     ([d[0] / range, d[1] / range, d[2] / range], range)
 }
 
-fn predicted(o: &Observation, x: &[f64; NX], slot: [usize; 8]) -> f64 {
+fn predicted(o: &Observation, x: &[f64; NX], clocks: &Clocks) -> f64 {
     let (_, range) = geometry(o, x);
-    range + x[slot[(o.constellation as usize).min(7)]]
-}
-
-/// Median of the residuals, and their median absolute deviation scaled to a
-/// Gaussian sigma.
-///
-/// A mean and a standard deviation would both be set by the outliers this is
-/// trying to find, which is the whole reason for robust statistics here.
-fn robust_centre_scale(r: &[f64]) -> (f64, f64) {
-    let mut v: Vec<f64> = r.to_vec();
-    v.sort_by(f64::total_cmp);
-    let median = v[v.len() / 2];
-    for x in v.iter_mut() {
-        *x = (*x - median).abs();
-    }
-    v.sort_by(f64::total_cmp);
-    (median, 1.4826 * v[v.len() / 2] + 1.0e-6)
+    range + x[clocks.slot(o.constellation)]
 }
 
 #[cfg(test)]
