@@ -64,3 +64,45 @@ improve the 2.89 m high-elevation population and leave the 34 m one alone.
 
 That ordering is the opposite of where this investigation started, which is why
 it was worth measuring before implementing.
+
+## Measured: a robust weighted solve beats Google's WLS on all four traces
+
+Built from the ordering above — own position solve, elevation weighting,
+robust IRLS — and validated on the three held-out traces. Nothing is tuned per
+trace: `σ = 0.6 + 8/sin(el)` metres and a Huber threshold of 1.5 were chosen
+from the elevation table above, not fitted.
+
+Horizontal / vertical RMS against survey truth, metres:
+
+| | A | B | C | D |
+|---|---|---|---|---|
+| Google `WlsPosition` | 6.24 / 17.97 | 3.78 / 9.40 | 2.82 / 12.31 | 4.05 / 19.90 |
+| **robust weighted solve** | **4.61 / 8.65** | **3.71 / 8.38** | **2.50 / 6.09** | **2.76 / 5.62** |
+| horizontal | −26 % | −2 % | −11 % | −32 % |
+| vertical | −52 % | −11 % | −50 % | −72 % |
+
+**Vertical more than halves on three of four traces**, which is the larger
+result: the vertical channel is the weak one in every number this project has
+reported on this dataset.
+
+The ablation, on trace A, shows where it comes from:
+
+| | horiz RMS |
+|---|---|
+| own solve, uniform weights, no robustness | 11.55 |
+| + elevation weighting | 7.95 |
+| + robust IRLS | **4.61** |
+| + robust, **Sagnac correction removed** | 29.33 |
+
+Solving it naively is *worse* than accepting Google's, by a factor of two. The
+gain is entirely in the weighting and the robustness — and the last row confirms
+empirically that the Earth-rotation correction during signal travel is not
+optional, since removing it costs a factor of six.
+
+**This beats the fused result.** The ESKF at ×300 gives 3.32 m on trace D and
+this is 2.76 m from GNSS alone, before any IMU. Improving the measurement beats
+improving the estimator on this dataset, which is consistent with everything
+[gsdc.md](gsdc.md) records about how little the phone IMU contributes.
+
+Prototype in [`../prototypes/gsdc_robust_wls.py`](../prototypes/gsdc_robust_wls.py);
+the Rust implementation is next.
