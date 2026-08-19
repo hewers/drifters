@@ -184,20 +184,38 @@ pub fn assess(nis: &Running, dimension: usize) -> Consistency {
 /// multipath makes them: a handful of large innovations move a mean a long way
 /// and a median hardly at all.
 pub fn median(values: &[F]) -> F {
-    if values.is_empty() {
-        return F::NAN;
-    }
+    percentile(values, 0.5)
+}
+
+/// The `q`-quantile of a sample, `q` in `[0, 1]`, by linear interpolation
+/// between order statistics. Consumes a copy.
+///
+/// Interpolating rather than picking the nearest order statistic matters at
+/// the tail: over 1229 epochs the 95th percentile falls between two samples
+/// most of the time, and rounding to one of them quantises the score by
+/// whatever the gap between those two epochs happens to be.
+pub fn percentile(values: &[F], q: F) -> F {
     let mut v: Vec<F> = values.iter().copied().filter(|x| x.is_finite()).collect();
     if v.is_empty() {
         return F::NAN;
     }
     v.sort_by(F::total_cmp);
-    let n = v.len();
-    if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        0.5 * (v[n / 2 - 1] + v[n / 2])
-    }
+    let rank = q.clamp(0.0, 1.0) * (v.len() - 1) as F;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    v[lo] + (rank - lo as F) * (v[hi] - v[lo])
+}
+
+/// The Google Smartphone Decimeter Challenge scoring metric: the mean of the
+/// 50th and 95th percentiles of horizontal error, in metres.
+///
+/// Not RMS. The competition scores this because it is what a navigation user
+/// experiences — a typical error and a bad-case error, weighted equally —
+/// whereas RMS is dominated by the worst few epochs of a trace. The two can
+/// disagree about which of two solutions is better, so this is reported
+/// alongside RMS rather than instead of it.
+pub fn gsdc_score(horizontal_errors: &[F]) -> F {
+    0.5 * (percentile(horizontal_errors, 0.50) + percentile(horizontal_errors, 0.95))
 }
 
 /// Median of the chi-squared distribution with three degrees of freedom.
@@ -210,6 +228,56 @@ pub const CHI2_3DOF_MEDIAN: F = 2.365_974;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn percentile_interpolates_between_order_statistics() {
+        // Ranks 0..3 over four samples: q=0.5 lands at rank 1.5, halfway
+        // between 20 and 30.
+        let v = [10.0, 20.0, 30.0, 40.0];
+        assert!((percentile(&v, 0.0) - 10.0).abs() < 1e-12);
+        assert!((percentile(&v, 1.0) - 40.0).abs() < 1e-12);
+        assert!((percentile(&v, 0.5) - 25.0).abs() < 1e-12);
+        // Rank 0.25*3 = 0.75, so three quarters of the way from 10 to 20.
+        assert!((percentile(&v, 0.25) - 17.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_is_order_invariant_and_survives_degenerate_input() {
+        let v = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
+        let mut shuffled = [6.0, 1.0, 9.0, 3.0, 2.0, 5.0, 1.0, 4.0];
+        for q in [0.0, 0.1, 0.5, 0.95, 1.0] {
+            assert!((percentile(&v, q) - percentile(&shuffled, q)).abs() < 1e-12);
+        }
+        shuffled.sort_by(F::total_cmp);
+        assert!(percentile(&[], 0.5).is_nan());
+        assert!(percentile(&[F::NAN], 0.5).is_nan());
+        // Out-of-range q clamps rather than indexing past the end.
+        assert!((percentile(&v, 2.0) - 9.0).abs() < 1e-12);
+        assert!((percentile(&v, -1.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gsdc_score_is_the_mean_of_the_median_and_the_ninety_fifth() {
+        // Twenty-one samples 0..20: rank = q*20, so both percentiles land
+        // exactly on a sample and the expected value is arithmetic.
+        let v: Vec<F> = (0..21).map(|i| i as F).collect();
+        assert!((percentile(&v, 0.50) - 10.0).abs() < 1e-12);
+        assert!((percentile(&v, 0.95) - 19.0).abs() < 1e-12);
+        assert!((gsdc_score(&v) - 14.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gsdc_score_and_rms_can_disagree_about_which_solution_is_better() {
+        // The reason both are reported. A solution that is better almost
+        // everywhere but has one bad epoch loses on RMS and wins on the
+        // competition metric — and it is the better solution to navigate with.
+        let rms = |v: &[F]| (v.iter().map(|x| x * x).sum::<F>() / v.len() as F).sqrt();
+        let mut steady = vec![1.0; 100];
+        steady[0] = 60.0;
+        let jittery = vec![3.0; 100];
+        assert!(rms(&steady) > rms(&jittery));
+        assert!(gsdc_score(&steady) < gsdc_score(&jittery));
+    }
+
     #[test]
     fn median_handles_both_parities_and_ignores_non_finite() {
         assert!(median(&[]).is_nan());

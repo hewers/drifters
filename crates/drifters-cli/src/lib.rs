@@ -392,6 +392,9 @@ pub struct GsdcOptions {
     pub gnss_lag: f64,
     /// Use the Doppler velocity solution as well as position.
     pub doppler: bool,
+    /// Solve position from the raw pseudoranges rather than taking the file's
+    /// `WlsPosition*` columns. See [`gsdc::PositionSource`].
+    pub raw_ranges: bool,
     /// GCU convergence rate for the EqF. See [`crate::eqf`].
     pub alpha: f64,
 }
@@ -407,6 +410,7 @@ pub fn run_gsdc(
         gyro_scale,
         gnss_lag,
         doppler,
+        raw_ranges,
         alpha,
     } = options;
     let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
@@ -421,6 +425,11 @@ pub fn run_gsdc(
         utc_offset - gnss_lag,
         sigma,
         doppler,
+        if raw_ranges {
+            gsdc::PositionSource::Solve(crate::wls::Settings::default())
+        } else {
+            gsdc::PositionSource::File
+        },
     )?;
     let reference = gsdc::read_truth(&dir.join("ground_truth.csv"), utc_offset)?;
     if !quiet {
@@ -580,6 +589,7 @@ pub fn tune_gsdc(
     sigma: drifters_core::math::Vec3,
     scales: &[f64],
     alpha: f64,
+    raw_ranges: bool,
     quiet: bool,
 ) -> Result<Vec<eqf::TuneRow>, Box<dyn std::error::Error>> {
     let mut rows = Vec::new();
@@ -595,6 +605,7 @@ pub fn tune_gsdc(
                 gyro_scale: 1.0,
                 gnss_lag: 0.0,
                 doppler: true,
+                raw_ranges,
                 alpha,
             },
             true,

@@ -173,6 +173,7 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             gyro_scale,
             gnss_lag,
             doppler: !args.iter().any(|a| a == "--no-doppler"),
+            raw_ranges: args.iter().any(|a| a == "--raw-ranges"),
             alpha,
         },
         quiet,
@@ -191,21 +192,28 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== position error against ground truth (metres) ===");
     println!(
-        "{:<26} {:>9} {:>9} {:>9}",
-        "", "horiz RMS", "vert RMS", "horiz max"
+        "{:<26} {:>9} {:>9} {:>9} {:>9}",
+        "", "horiz RMS", "vert RMS", "horiz max", "score"
     );
-    for (name, e) in [
-        ("phone GNSS (WLS) alone", &report.gnss_only),
-        ("drifters ESKF", &report.filter),
-        ("drifters EqF", &report.eqf),
+    for (name, e, horizontal) in [
+        (
+            "phone GNSS (WLS) alone",
+            &report.gnss_only,
+            &report.gnss_horizontal,
+        ),
+        ("drifters ESKF", &report.filter, &report.filter_horizontal),
+        ("drifters EqF", &report.eqf, &report.eqf_horizontal),
     ] {
+        let errors: Vec<f64> = horizontal.iter().map(|&(_, m)| m).collect();
         println!(
-            "{name:<26} {:>9.3} {:>9.3} {:>9.3}",
+            "{name:<26} {:>9.3} {:>9.3} {:>9.3} {:>9.3}",
             e.horizontal.rms(),
             e.down.rms(),
-            e.horizontal.max()
+            e.horizontal.max(),
+            drifters_cli::stats::gsdc_score(&errors),
         );
     }
+    println!("score = mean of the 50th and 95th percentile horizontal error, the competition metric");
     let (a, b) = (
         report.gnss_only.horizontal.rms(),
         report.filter.horizontal.rms(),
@@ -518,7 +526,14 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("sweeping {} process-noise scales", scales.len());
     }
     let rows =
-        drifters_cli::tune_gsdc(&dir, drifters_cli::vec3(sn, se, sv), &scales, alpha, quiet)?;
+        drifters_cli::tune_gsdc(
+            &dir,
+            drifters_cli::vec3(sn, se, sv),
+            &scales,
+            alpha,
+            args.iter().any(|a| a == "--raw-ranges"),
+            quiet,
+        )?;
 
     println!("\n--- posterior IMU process-noise tune ---");
     println!("assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF alpha {alpha:.2}");

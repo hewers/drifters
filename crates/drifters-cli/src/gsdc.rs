@@ -200,7 +200,92 @@ pub fn read_imu(path: &Path) -> Result<(Vec<ImuSample>, f64), DataError> {
     Ok((samples, utc_offset))
 }
 
-/// Read the per-epoch WLS position solutions from `device_gnss.csv`.
+/// Where each epoch's position comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum PositionSource {
+    /// The `WlsPosition*EcefMeters` columns, as supplied.
+    File,
+    /// Solved here from the raw pseudoranges, by [`crate::wls`].
+    ///
+    /// Measured over four traces this lowers the competition-style score from
+    /// 5.02 m to 3.89 m and halves the vertical error; see
+    /// [`docs/gsdc-observables.md`](https://github.com/hewers/drifters/blob/main/docs/gsdc-observables.md).
+    /// Falls back to the file's solution for any epoch it cannot solve, so a
+    /// trace never loses fixes by enabling it.
+    Solve(crate::wls::Settings),
+}
+
+/// The columns a pseudorange solve needs, resolved once from the header.
+struct RangeColumns {
+    pseudorange: usize,
+    sv_clock: usize,
+    iono: usize,
+    tropo: usize,
+    isb: Option<usize>,
+    elevation: usize,
+    constellation: usize,
+    state: usize,
+    sat: [usize; 3],
+}
+
+/// Metres per second in vacuum, for the nanosecond-valued bias column.
+const SPEED_OF_LIGHT: f64 = 299_792_458.0;
+
+impl RangeColumns {
+    fn parse(h: &Header) -> Option<Self> {
+        Some(Self {
+            pseudorange: h.at("RawPseudorangeMeters").ok()?,
+            sv_clock: h.at("SvClockBiasMeters").ok()?,
+            iono: h.at("IonosphericDelayMeters").ok()?,
+            tropo: h.at("TroposphericDelayMeters").ok()?,
+            isb: h.at("FullInterSignalBiasNanos").ok(),
+            elevation: h.at("SvElevationDegrees").ok()?,
+            constellation: h.at("ConstellationType").ok()?,
+            state: h.at("State").ok()?,
+            sat: [
+                h.at("SvPositionXEcefMeters").ok()?,
+                h.at("SvPositionYEcefMeters").ok()?,
+                h.at("SvPositionZEcefMeters").ok()?,
+            ],
+        })
+    }
+
+    /// One row's observation, or `None` if the row is unusable.
+    ///
+    /// The `State` bits are checked rather than trusted: without code lock and
+    /// a decoded time of week the pseudorange is not a range at all, and those
+    /// rows are present in the files.
+    fn observation(&self, p: &[&str]) -> Option<crate::wls::Observation> {
+        const CODE_LOCK: i64 = 0x1;
+        const TOW_DECODED: i64 = 0x8;
+        let state = field(p, self.state).parse::<i64>().ok()?;
+        if state & CODE_LOCK == 0 || state & TOW_DECODED == 0 {
+            return None;
+        }
+        let isb = self
+            .isb
+            .and_then(|c| field(p, c).parse::<f64>().ok())
+            .unwrap_or(0.0)
+            * SPEED_OF_LIGHT
+            * 1.0e-9;
+        Some(crate::wls::Observation {
+            constellation: field(p, self.constellation).parse::<u8>().ok()?,
+            pseudorange: field(p, self.pseudorange).parse::<f64>().ok()?
+                + field(p, self.sv_clock).parse::<f64>().ok()?
+                - field(p, self.iono).parse::<f64>().ok()?
+                - field(p, self.tropo).parse::<f64>().ok()?
+                - isb,
+            satellite: [
+                field(p, self.sat[0]).parse::<f64>().ok()?,
+                field(p, self.sat[1]).parse::<f64>().ok()?,
+                field(p, self.sat[2]).parse::<f64>().ok()?,
+            ],
+            elevation: field(p, self.elevation).parse::<f64>().ok()?,
+        })
+    }
+}
+
+/// Read the per-epoch position solutions from `device_gnss.csv`.
 ///
 /// `sigma` is the assumed one-sigma position uncertainty in NED metres. The
 /// dataset carries no covariance for the WLS solution, so this is a
@@ -212,6 +297,7 @@ pub fn read_gnss(
     utc_offset: f64,
     sigma: Vec3,
     doppler: bool,
+    source: PositionSource,
 ) -> Result<Vec<GnssFix>, DataError> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
@@ -249,22 +335,39 @@ pub fn read_gnss(
         None
     };
 
-    // Rows arrive one per satellite per epoch. The WLS position is repeated
-    // identically across an epoch; the Doppler fields are not, so an epoch is
-    // accumulated and solved when the timestamp moves on.
+    let range_columns = match source {
+        PositionSource::Solve(_) => RangeColumns::parse(&header),
+        PositionSource::File => None,
+    };
+
+    // Rows arrive one per satellite per epoch. The file's WLS position is
+    // repeated identically across an epoch; the per-satellite fields are not,
+    // so an epoch is accumulated and solved when the timestamp moves on.
     struct Epoch {
         utc: f64,
         receiver: Ecef,
         position: Lla,
         satellites: Vec<DopplerObservation>,
+        ranges: Vec<crate::wls::Observation>,
     }
     let mut fixes: Vec<GnssFix> = Vec::new();
     let mut current: Option<Epoch> = None;
 
     let finish = |e: Epoch, fixes: &mut Vec<GnssFix>| {
+        // Solve from the raw ranges when asked, seeding from the file's own
+        // solution. Seeding per epoch rather than from the previous result
+        // keeps epochs independent, so one bad solve cannot propagate.
+        let position = match source {
+            PositionSource::Solve(set) if !e.ranges.is_empty() => {
+                crate::wls::solve(&e.ranges, e.receiver, &set)
+                    .map(|p| p.to_lla())
+                    .unwrap_or(e.position)
+            }
+            _ => e.position,
+        };
         let mut fix = GnssFix {
             time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
-            position: e.position,
+            position,
             position_std: sigma,
             velocity: None,
             velocity_std: Vec3::ZERO,
@@ -310,7 +413,14 @@ pub fn read_gnss(
                 receiver,
                 position,
                 satellites: Vec::new(),
+                ranges: Vec::new(),
             });
+        }
+
+        if let (Some(c), Some(e)) = (range_columns.as_ref(), current.as_mut()) {
+            if let Some(o) = c.observation(&parts) {
+                e.ranges.push(o);
+            }
         }
 
         // Accumulate this row's satellite, if the Doppler fields are usable.
@@ -442,6 +552,137 @@ mod tests {
         p
     }
 
+    /// Build one epoch of `device_gnss.csv` whose pseudoranges are consistent
+    /// with a known receiver position, splitting each range into a raw
+    /// measurement plus the corrections the reader has to reapply. A sign
+    /// error or a missed unit conversion moves the solved position, so this
+    /// exercises the whole chain rather than the arithmetic in isolation.
+    fn range_epoch(truth: Ecef, clock: f64, states: &[i64]) -> String {
+        const ORBIT: f64 = 26_560_000.0;
+        const C: f64 = 299_792_458.0;
+        const OMEGA_E: f64 = 7.292_115_146_7e-5;
+        let mut csv = String::from(
+            "utcTimeMillis,WlsPositionXEcefMeters,WlsPositionYEcefMeters,\
+             WlsPositionZEcefMeters,RawPseudorangeMeters,SvClockBiasMeters,\
+             IonosphericDelayMeters,TroposphericDelayMeters,\
+             FullInterSignalBiasNanos,SvElevationDegrees,ConstellationType,\
+             State,SvPositionXEcefMeters,SvPositionYEcefMeters,\
+             SvPositionZEcefMeters\n",
+        );
+        let (lat, lon) = (truth.to_lla().lat, truth.to_lla().lon);
+        let radius = (truth.x * truth.x + truth.y * truth.y + truth.z * truth.z).sqrt();
+        for (i, state) in states.iter().enumerate() {
+            let el = (15.0 + 8.0 * i as f64).to_radians();
+            let az = (137.508 * i as f64).to_radians();
+            let range =
+                -radius * el.sin() + (ORBIT * ORBIT - radius * radius * el.cos().powi(2)).sqrt();
+            // Local ENU offset to the satellite, rotated into ECEF.
+            let (e, n, u) = (
+                range * el.cos() * az.sin(),
+                range * el.cos() * az.cos(),
+                range * el.sin(),
+            );
+            let (sla, cla) = lat.sin_cos();
+            let (slo, clo) = lon.sin_cos();
+            let sat = [
+                truth.x - slo * e - sla * clo * n + cla * clo * u,
+                truth.y + clo * e - sla * slo * n + cla * slo * u,
+                truth.z + cla * n + sla * u,
+            ];
+            // Undo the Sagnac rotation the solver will apply, so the geometric
+            // range the solver computes is the one written here.
+            let theta = OMEGA_E * range / C;
+            let (sin, cos) = theta.sin_cos();
+            let unrotated = [sat[0] * cos - sat[1] * sin, sat[0] * sin + sat[1] * cos, sat[2]];
+            // Split the true range into a raw reading and the corrections.
+            let (iono, tropo, sv_clock, isb_ns) = (3.0, 7.0, -12.0, 4.0);
+            let isb = isb_ns * C * 1.0e-9;
+            let raw = range + clock - sv_clock + iono + tropo + isb;
+            csv.push_str(&format!(
+                "1000,{:.6},{:.6},{:.6},{raw:.6},{sv_clock},{iono},{tropo},{isb_ns},\
+                 {:.4},1,{state},{:.6},{:.6},{:.6}\n",
+                truth.x + 30.0,
+                truth.y - 20.0,
+                truth.z + 40.0,
+                el.to_degrees(),
+                unrotated[0],
+                unrotated[1],
+                unrotated[2],
+            ));
+        }
+        csv
+    }
+
+    #[test]
+    fn pseudorange_corrections_are_reassembled_with_the_right_signs() {
+        // The seed written into the file is 53 m off; recovering the truth
+        // means every correction was applied in the right direction and the
+        // inter-signal bias was converted from nanoseconds.
+        let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
+        let p = tmp("gnss-ranges.csv", &range_epoch(truth, 1234.5, &[9; 8]));
+        let source = PositionSource::Solve(crate::wls::Settings::default());
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        assert_eq!(fixes.len(), 1);
+        let solved = fixes[0].position.to_ecef();
+        let err = ((solved.x - truth.x).powi(2)
+            + (solved.y - truth.y).powi(2)
+            + (solved.z - truth.z).powi(2))
+        .sqrt();
+        assert!(err < 0.05, "solved position should match truth: {err:.4} m");
+
+        // With the file's own column the same epoch stays at the 53 m seed,
+        // confirming the solve did the work rather than the seed being right.
+        let file = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
+        let seeded = file[0].position.to_ecef();
+        let seed_err = ((seeded.x - truth.x).powi(2)
+            + (seeded.y - truth.y).powi(2)
+            + (seeded.z - truth.z).powi(2))
+        .sqrt();
+        assert!(seed_err > 50.0, "seed should be far from truth: {seed_err:.1} m");
+    }
+
+    #[test]
+    fn rows_without_code_lock_or_a_decoded_time_of_week_are_dropped() {
+        // State 9 is code lock (0x1) plus TOW decoded (0x8). Rows carrying
+        // neither are present in the real files and their pseudoranges are not
+        // ranges; a solve that used them would be dragged far off.
+        let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
+        let source = PositionSource::Solve(crate::wls::Settings::default());
+
+        // Three of the eight rows fail the bit check, leaving five usable:
+        // three position states, one clock, and one redundant observation.
+        let mixed = range_epoch(truth, 1234.5, &[9, 1, 9, 8, 9, 0, 9, 9]);
+        let p = tmp("gnss-state.csv", &mixed);
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        let solved = fixes[0].position.to_ecef();
+        let err = ((solved.x - truth.x).powi(2)
+            + (solved.y - truth.y).powi(2)
+            + (solved.z - truth.z).powi(2))
+        .sqrt();
+        assert!(err < 0.5, "the five valid rows should still solve: {err:.4} m");
+    }
+
+    #[test]
+    fn an_epoch_that_cannot_be_solved_keeps_the_file_solution() {
+        // Four usable satellites exactly determine three position states and a
+        // clock, leaving no residual to judge an outlier by, so the solver
+        // refuses rather than fitting whatever it is given. Falling back to
+        // the file's solution rather than dropping the epoch means enabling
+        // the solver never costs a trace its fixes.
+        let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
+        let p = tmp("gnss-thin.csv", &range_epoch(truth, 0.0, &[9, 9, 9, 9, 0, 0, 0, 0]));
+        let source = PositionSource::Solve(crate::wls::Settings::default());
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, source).unwrap();
+        assert_eq!(fixes.len(), 1, "the epoch should survive, not be dropped");
+        let solved = fixes[0].position.to_ecef();
+        // The file's seed, 53.9 m from truth, not a wild solve.
+        let err = ((solved.x - truth.x).powi(2)
+            + (solved.y - truth.y).powi(2)
+            + (solved.z - truth.z).powi(2))
+        .sqrt();
+        assert!((err - 53.85).abs() < 0.5, "expected the file seed: {err:.2} m");
+    }
+
     #[test]
     fn imu_rows_merge_into_increments() {
         let p = tmp(
@@ -520,7 +761,7 @@ mod tests {
              2000,-2694001,-4293001,3857001\n\
              2000,-2694001,-4293001,3857001\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
         assert_relative_eq!(fixes[0].time.tow, 1.0, epsilon = 1e-9);
@@ -535,7 +776,7 @@ mod tests {
              2000,-2694000,-4293000,3857000\n\
              3000,,,\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false).unwrap();
+        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), false, PositionSource::File).unwrap();
         assert_eq!(fixes.len(), 1);
     }
 
