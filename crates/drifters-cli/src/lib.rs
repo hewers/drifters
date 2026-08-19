@@ -672,10 +672,15 @@ pub fn run_gsdc(
                 })
             })
             .collect();
-        if let Some(fitted) = smooth::smooth(fixes.len(), &anchors, &links, &smooth::Settings::default()) {
+        let to_lla = |p: &drifters_core::math::Vec3| {
+            origin.shifted(drifters_core::frames::Ned::new(p.x, p.y, p.z))
+        };
+        if let Some(fitted) =
+            smooth::smooth(fixes.len(), &anchors, &links, &smooth::Settings::default())
+        {
             let mut stats = truth::ErrorStats::new();
             for (f, p) in fixes.iter().zip(&fitted) {
-                let lla = origin.shifted(drifters_core::frames::Ned::new(p.x, p.y, p.z));
+                let lla = to_lla(p);
                 stats.push(&reference, f.time.tow, lla);
                 if let Some(r) = reference.at(f.time.tow) {
                     report

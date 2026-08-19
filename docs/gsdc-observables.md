@@ -374,3 +374,63 @@ because the temptation to take the 2.431 is the whole reason the holdout
 exists.
 
 End to end the chain runs **4.99 → 2.47 m, −50 %**.
+
+## Two things that were measured and not built
+
+With the trajectory shape known to centimetres, the pseudorange residuals can
+be examined against a good reference rather than against each other. Two
+obvious uses of that were investigated. Neither pays, and both are recorded
+because they are the natural next things to try.
+
+### Estimating each satellite's multipath bias is circular
+
+Against survey truth on trace A, with the per-epoch per-constellation clock
+removed, the residuals are 16.97 m RMS over 53 300 samples. How much structure
+is in them:
+
+| model | residual left | variance explained |
+|---|---|---|
+| per-signal constant | 16.51 m | 5 % |
+| per-signal 30 s sliding median | 11.26 m | **56 %** |
+| per-signal 60 s sliding median | 14.24 m | 30 % |
+| per-signal 300 s sliding median | 15.89 m | 12 % |
+
+So multipath bias here is real and fast-moving: it is not a stable offset per
+satellite (5 %), and a half-minute window captures most of it. Fifty-six per
+cent of the pseudorange error variance looks available.
+
+It is not. Splitting that 30-second bias at each epoch into the part inside the
+span of position-and-clock and the part orthogonal to it:
+
+- **52 % of it is orthogonal**, and orthogonal means it cannot move a position
+  solution. Removing it buys nothing.
+- The remaining 48 % is, by construction, indistinguishable from a position
+  error. Subtracting an estimate of it is subtracting an estimate of the
+  answer, and iterating converges to whatever the first pass happened to say.
+
+There is no version of this that is not either useless or circular. The
+separable part of a multipath bias is the part that does no harm.
+
+### Rejecting observations the fitted trajectory contradicts does not pay
+
+Rejection is not circular in the same way — the trajectory is held by carrier
+deltas that owe nothing to the pseudoranges, so dropping a pseudorange cannot
+pull the fit toward what was assumed. It was built, tested, and measured on
+trace A:
+
+| rejection threshold | score | horiz RMS | dropped |
+|---|---|---|---|
+| 2 σ | 3.025 | 2.529 | 2 303 of 56 257 |
+| 3 σ | 3.037 | 2.467 | 962 |
+| 4 σ | 2.905 | 2.468 | 509 |
+| 6 σ | **2.797** | 2.519 | 193 |
+| none | 2.799 | 2.534 | 0 |
+
+Every setting either hurts the competition score or does nothing, and at the
+3 σ default it was worse on all four traces. The RMS does improve, which says
+what is happening: dropping observations shortens the tail and costs the
+typical epoch its geometry. On a metric that weights the median equally with
+the 95th percentile, that is a bad trade.
+
+The code was deleted rather than left switched off. Both results are worth more
+than the code would have been.
