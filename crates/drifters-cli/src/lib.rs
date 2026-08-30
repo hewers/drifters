@@ -7,11 +7,13 @@
 //! Exposed as a library so the regression test can drive a replay directly
 //! rather than shelling out to the binary and parsing its output.
 
+pub mod differential;
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
 pub mod nees;
 pub mod plot;
+pub mod rinex;
 pub mod robust;
 pub mod smooth;
 pub mod stats;
@@ -373,6 +375,15 @@ pub struct GsdcReport {
     pub gnss_velocity: truth::ErrorStats,
     /// Epochs that carried a velocity measurement at all.
     pub gnss_velocity_count: u64,
+    /// Pseudorange residual against truth, metres, with each epoch's
+    /// per-constellation receiver clock removed by median, paired with the
+    /// satellite's elevation in degrees.
+    ///
+    /// The measurement scored on its own. A position error cannot say whether
+    /// the observable or the solver was at fault, and a change that improves
+    /// the observable while worsening the position is a different problem
+    /// from one that does neither.
+    pub range_residual: Vec<(f64, f64)>,
     /// Per-epoch horizontal velocity error, m/s, for order statistics. RMS
     /// alone cannot distinguish a measurement that is uniformly mediocre from
     /// one that is excellent with a handful of bad epochs, and those two call
@@ -400,7 +411,7 @@ pub struct GsdcReport {
 /// A struct rather than eight positional arguments: most of these are
 /// diagnostics used for one sweep each, and at the call site a bare
 /// `300.0, 1.0, 0.0, true, 0.0, false` says nothing about which is which.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct GsdcOptions {
     /// Assumed GNSS one-sigma, NED metres. Measured from the trace, not
     /// assumed — the dataset carries no covariance for its WLS solution.
@@ -417,6 +428,9 @@ pub struct GsdcOptions {
     /// Solve position from the raw pseudoranges rather than taking the file's
     /// `WlsPosition*` columns. See [`gsdc::PositionSource`].
     pub raw_ranges: bool,
+    /// A reference station's RINEX observation file, for differential
+    /// corrections. See [`differential`].
+    pub base: Option<std::path::PathBuf>,
     /// GCU convergence rate for the EqF. See [`crate::eqf`].
     pub alpha: f64,
 }
@@ -433,8 +447,16 @@ pub fn run_gsdc(
         gnss_lag,
         velocity,
         raw_ranges,
+        base,
         alpha,
     } = options;
+    let base = match base {
+        Some(p) => Some((
+            crate::rinex::read_base(&p, &["C1", "C5"])?,
+            differential::Settings::default(),
+        )),
+        None => None,
+    };
     let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
     // Diagnostic: 0 ignores rotation entirely, -1 flips the sign convention.
     if gyro_scale != 1.0 {
@@ -444,20 +466,30 @@ pub fn run_gsdc(
     }
     let gsdc::GnssTrace {
         fixes,
+        corrected,
+        ranges,
         quality,
         deltas,
+        ..
     } = gsdc::read_gnss(
         &dir.join("device_gnss.csv"),
         utc_offset - gnss_lag,
-        sigma,
-        velocity,
-        if raw_ranges {
-            gsdc::PositionSource::Solve(crate::wls::Settings::default())
-        } else {
-            gsdc::PositionSource::File
+        &gsdc::GnssOptions {
+            sigma,
+            velocity,
+            position: if raw_ranges {
+                gsdc::PositionSource::Solve(crate::wls::Settings::default())
+            } else {
+                gsdc::PositionSource::File
+            },
+            base,
         },
     )?;
+    if corrected > 0 && !quiet {
+        eprintln!("differential: corrected {corrected} observations");
+    }
     let reference = gsdc::read_truth(&dir.join("ground_truth.csv"), utc_offset)?;
+
     if !quiet {
         eprintln!(
             "{} IMU samples, {} GNSS fixes, {} truth samples",
@@ -522,6 +554,7 @@ pub fn run_gsdc(
         gnss_velocity: truth::ErrorStats::new(),
         gnss_velocity_count: 0,
         gnss_velocity_horizontal: Vec::new(),
+        range_residual: Vec::new(),
         smoothed: None,
         smoothed_horizontal: Vec::new(),
         gnss_horizontal: Vec::new(),
@@ -533,6 +566,39 @@ pub fn run_gsdc(
         rejected: 0,
         nis: stats::Running::new(),
     };
+
+    // Score the pseudoranges themselves against truth. The epochs are matched
+    // by index rather than by time: `ranges` and `fixes` come from the same
+    // pass over the same file, and the fixes carry the pipeline's own clock
+    // convention while the ranges carry true GPS time.
+    for ((_, obs), fix) in ranges.iter().zip(&fixes) {
+        let Some(truth) = reference.at(fix.time.tow) else {
+            continue;
+        };
+        let t = truth.to_ecef();
+        let residual: Vec<(u8, f64, f64)> = obs
+            .iter()
+            .map(|o| {
+                let s = o.satellite;
+                let d = ((s[0] - t.x).powi(2) + (s[1] - t.y).powi(2) + (s[2] - t.z).powi(2))
+                    .sqrt();
+                (o.constellation, o.pseudorange - d, o.elevation)
+            })
+            .collect();
+        for c in 0..8u8 {
+            let group: Vec<&(u8, f64, f64)> =
+                residual.iter().filter(|(rc, _, _)| *rc == c).collect();
+            if group.len() < 3 {
+                continue;
+            }
+            let mut sorted: Vec<f64> = group.iter().map(|(_, v, _)| *v).collect();
+            sorted.sort_by(f64::total_cmp);
+            let clock = sorted[sorted.len() / 2];
+            report
+                .range_residual
+                .extend(group.iter().map(|(_, v, el)| (v - clock, *el)));
+        }
+    }
 
     let anchor = first.position;
     let mut next = 0usize;
@@ -725,6 +791,7 @@ pub fn tune_gsdc(
                 gnss_lag: 0.0,
                 velocity: gsdc::VelocitySource::Doppler,
                 raw_ranges,
+                base: None,
                 alpha,
             },
             true,

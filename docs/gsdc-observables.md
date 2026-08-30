@@ -458,3 +458,63 @@ two observables can do against each other.
 Getting below it needs information that is not in the file: a reference station
 for differential corrections, precise orbit and clock products, or a
 three-dimensional map to predict which returns are non-line-of-sight.
+
+## Code differential corrections do not help, and the reason is the point
+
+The sub-metre entries in the Google challenge used a reference station, which
+is the one thing the competition files cannot supply. Building that is
+[`rinex.rs`](../crates/drifters-cli/src/rinex.rs) and
+[`differential.rs`](../crates/drifters-cli/src/differential.rs): a RINEX 2.11
+reader, satellite matching by constellation, id and band, and corrections
+built from a CORS station 11 km away.
+
+It works, in the sense that every part of it is right. Solving SLAC's own
+position from its own pseudoranges — the check in
+`examples/base_selfcheck.rs`, against a surveyed coordinate — gives **1.87 m
+median**, which is what a geodetic receiver's code should give. That number
+validates the reader, the satellite matching, the band matching, the Sagnac
+convention, the transmission-time shift and the clock handling all at once.
+
+Applied to the phone, it makes things worse: the batch score goes 2.799 → 3.005
+on trace A. One measurement says why.
+
+| elevation | uncorrected | corrected |
+|---|---|---|
+| 0–15° | 25.14 | 24.77 |
+| 15–30° | 35.74 | 35.84 |
+| 30–60° | 21.54 | 21.86 |
+| **60–90°** | **2.55** | **3.67** |
+
+Pseudorange residual against truth, robust sigma in metres. Above 60°, where
+multipath is small and shared error should dominate, the correction *injects*
+`sqrt(3.67² − 2.55²) = 2.6 m` — and 2.6 m is the reference station's own code
+noise, the same quantity its 1.87 m self-solve reports.
+
+**A geodetic receiver's code is no better than a modern phone's.** Subtracting
+its residual hands over more noise than shared error. That is not what a
+reference station is for.
+
+It is not the 30-second archive interval either. Restricting corrections to
+epochs landing exactly on a base epoch, with no interpolation, degrades the
+residual by the same amount per corrected observation — 864 corrections move
+the aggregate from 2.55 to 2.59, which is what 3 % of the population going to
+3.67 predicts. High-rate base data would not rescue it.
+
+What a reference station has that a phone does not is **carrier phase**:
+millimetre precision rather than metre precision. That is why the winning
+entries used post-processed kinematic and not code differential, and it is the
+remaining route to sub-metre from here. This module is the groundwork for it —
+reader, matching, alignment and geometry all validated against a surveyed
+answer — rather than a substitute for it.
+
+Three wrong turns on the way, each caught by measurement rather than argument:
+
+- **Shifting the satellite by a full travel time** instead of the base–rover
+  difference. 66 ms of orbital motion is 200 m; the score went to 25 m.
+- **Correcting across bands.** 49 % of the phone's Galileo and 28 % of its GPS
+  are on the lower band, and an L1 correction is wrong for them.
+- **Replacing the atmospheric models rather than correcting them.** A
+  correction that carries the whole 20 m delay has to survive interpolation and
+  an 11 km transfer; one that carries only what the model got wrong is a
+  fraction of a metre. The base self-check is what separated these: 18 m
+  without the models, 1.87 m with them.

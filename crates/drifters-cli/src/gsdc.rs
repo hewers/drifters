@@ -225,7 +225,21 @@ struct RangeColumns {
     elevation: usize,
     constellation: usize,
     state: usize,
+    /// A solve needs none of these four — they identify an observation and
+    /// place it in time, which only a differential correction cares about. A
+    /// file without them still solves; it just cannot be corrected. Requiring
+    /// them would make the common path fail for the sake of the rare one.
+    svid: Option<usize>,
+    frequency: Option<usize>,
+    /// `ArrivalTimeNanosSinceGpsEpoch`, the one column in the file that is
+    /// already GPS time. The pipeline's own timestamps are Unix seconds
+    /// reduced modulo a week — self-consistent, and fine while everything is
+    /// compared against everything else in the same file, but eighteen leap
+    /// seconds and a different epoch away from what a RINEX file means by
+    /// seconds of week.
+    arrival: Option<usize>,
     sat: [usize; 3],
+    velocity: Option<[usize; 3]>,
 }
 
 /// Metres per second in vacuum, for the nanosecond-valued bias column.
@@ -242,11 +256,62 @@ impl RangeColumns {
             elevation: h.at("SvElevationDegrees").ok()?,
             constellation: h.at("ConstellationType").ok()?,
             state: h.at("State").ok()?,
+            svid: h.at("Svid").ok(),
+            frequency: h.at("CarrierFrequencyHz").ok(),
+            arrival: h.at("ArrivalTimeNanosSinceGpsEpoch").ok(),
             sat: [
                 h.at("SvPositionXEcefMeters").ok()?,
                 h.at("SvPositionYEcefMeters").ok()?,
                 h.at("SvPositionZEcefMeters").ok()?,
             ],
+            velocity: (|| {
+                Some([
+                    h.at("SvVelocityXEcefMetersPerSecond").ok()?,
+                    h.at("SvVelocityYEcefMetersPerSecond").ok()?,
+                    h.at("SvVelocityZEcefMetersPerSecond").ok()?,
+                ])
+            })(),
+        })
+    }
+
+    /// The band a row was observed on, or 0 if it cannot be determined.
+    ///
+    /// Zero never matches a base station's band, so an observation whose band
+    /// is unknown is left uncorrected rather than corrected with whatever
+    /// happened to be at hand.
+    fn band(&self, p: &[&str]) -> u8 {
+        let Some(c) = self.frequency else { return 0 };
+        let Ok(hz) = field(p, c).parse::<f64>() else {
+            return 0;
+        };
+        crate::rinex::band_of_frequency((hz * 1.0e-6).round() as u32).unwrap_or(0)
+    }
+
+    /// True GPS seconds of week for a row, for matching against an archive.
+    fn gps_tow(&self, p: &[&str]) -> Option<f64> {
+        const SECONDS_PER_WEEK: f64 = 604_800.0;
+        let ns = field(p, self.arrival?).parse::<f64>().ok()?;
+        Some((ns * 1.0e-9).rem_euclid(SECONDS_PER_WEEK))
+    }
+
+    /// One row's satellite state, for building differential corrections.
+    fn satellite(&self, p: &[&str]) -> Option<crate::differential::SatelliteState> {
+        let read = |c: usize| field(p, c).parse::<f64>().ok();
+        let isb = self
+            .isb
+            .and_then(|c| field(p, c).parse::<f64>().ok())
+            .unwrap_or(0.0)
+            * SPEED_OF_LIGHT
+            * 1.0e-9;
+        let velocity = self.velocity?;
+        Some(crate::differential::SatelliteState {
+            constellation: field(p, self.constellation).parse::<u8>().ok()?,
+            svid: field(p, self.svid?).parse::<u16>().ok()?,
+            band: self.band(p),
+            position: [read(self.sat[0])?, read(self.sat[1])?, read(self.sat[2])?],
+            velocity: [read(velocity[0])?, read(velocity[1])?, read(velocity[2])?],
+            clock: read(self.sv_clock)?,
+            modelled: read(self.iono)? + read(self.tropo)? + isb,
         })
     }
 
@@ -268,13 +333,20 @@ impl RangeColumns {
             .unwrap_or(0.0)
             * SPEED_OF_LIGHT
             * 1.0e-9;
+        let modelled = field(p, self.iono).parse::<f64>().ok()?
+            + field(p, self.tropo).parse::<f64>().ok()?
+            + isb;
         Some(crate::wls::Observation {
             constellation: field(p, self.constellation).parse::<u8>().ok()?,
+            svid: self
+                .svid
+                .and_then(|c| field(p, c).parse::<u16>().ok())
+                .unwrap_or(0),
+            band: self.band(p),
+            modelled,
             pseudorange: field(p, self.pseudorange).parse::<f64>().ok()?
                 + field(p, self.sv_clock).parse::<f64>().ok()?
-                - field(p, self.iono).parse::<f64>().ok()?
-                - field(p, self.tropo).parse::<f64>().ok()?
-                - isb,
+                - modelled,
             satellite: [
                 field(p, self.sat[0]).parse::<f64>().ok()?,
                 field(p, self.sat[1]).parse::<f64>().ok()?,
@@ -355,6 +427,18 @@ pub enum VelocitySource {
 pub struct GnssTrace {
     /// One fix per epoch.
     pub fixes: Vec<GnssFix>,
+    /// Observations a reference station's correction was applied to.
+    pub corrected: usize,
+    /// Satellite states per epoch, paired with true GPS time. Kept so a
+    /// reference station's own position can be re-solved from them, which is
+    /// the only end-to-end check that the geometry a correction rests on is
+    /// right.
+    pub satellite_states: Vec<(f64, Vec<crate::differential::SatelliteState>)>,
+    /// The corrected pseudoranges each epoch was solved from, and its true
+    /// GPS time. Kept so the observable itself can be scored against truth:
+    /// a position error says a solve went wrong, and only the residual says
+    /// whether the measurement or the solver was at fault.
+    pub ranges: Vec<(f64, Vec<crate::wls::Observation>)>,
     /// What the pseudorange solve knew about each epoch, where it ran.
     pub quality: Vec<Option<crate::wls::Solution>>,
     /// Carrier-phase position change from epoch `i` to `i + 1`, ECEF metres,
@@ -368,6 +452,36 @@ pub struct GnssTrace {
     pub deltas: Vec<Option<Vec3>>,
 }
 
+/// What to do with `device_gnss.csv`.
+///
+/// A struct rather than five positional arguments, for the reason
+/// [`crate::GsdcOptions`] is one: at the call site `sigma, velocity, source,
+/// base` reads as four values of unrelated types and says nothing about which
+/// is which.
+#[derive(Clone, Debug)]
+pub struct GnssOptions {
+    /// Assumed GNSS one-sigma, NED metres. An input, not a measurement: the
+    /// dataset carries no covariance for its own solution.
+    pub sigma: Vec3,
+    /// Where each epoch's velocity comes from.
+    pub velocity: VelocitySource,
+    /// Where each epoch's position comes from.
+    pub position: PositionSource,
+    /// A reference station and how to use it, for differential corrections.
+    pub base: Option<(crate::rinex::Base, crate::differential::Settings)>,
+}
+
+impl Default for GnssOptions {
+    fn default() -> Self {
+        Self {
+            sigma: Vec3::splat(5.0),
+            velocity: VelocitySource::None,
+            position: PositionSource::File,
+            base: None,
+        }
+    }
+}
+
 /// Read the per-epoch position solutions from `device_gnss.csv`.
 ///
 /// `sigma` is the assumed one-sigma position uncertainty in NED metres. The
@@ -378,10 +492,15 @@ pub struct GnssTrace {
 pub fn read_gnss(
     path: &Path,
     utc_offset: f64,
-    sigma: Vec3,
-    velocity: VelocitySource,
-    source: PositionSource,
+    options: &GnssOptions,
 ) -> Result<GnssTrace, DataError> {
+    let GnssOptions {
+        sigma,
+        velocity,
+        position: source,
+        base: differential,
+    } = options;
+    let (sigma, velocity, source) = (*sigma, *velocity, *source);
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
     let header = Header::parse(
@@ -437,6 +556,8 @@ pub fn read_gnss(
         satellites: Vec<DopplerObservation>,
         ranges: Vec<crate::wls::Observation>,
         carriers: Vec<crate::tdcp::Carrier>,
+        satellites_seen: Vec<crate::differential::SatelliteState>,
+        gps_tow: Option<f64>,
     }
     let mut fixes: Vec<GnssFix> = Vec::new();
     let mut current: Option<Epoch> = None;
@@ -479,12 +600,20 @@ pub fn read_gnss(
                 satellites: Vec::new(),
                 ranges: Vec::new(),
                 carriers: Vec::new(),
+                satellites_seen: Vec::new(),
+                gps_tow: None,
             });
         }
 
         if let (Some(c), Some(e)) = (range_columns.as_ref(), current.as_mut()) {
             if let Some(o) = c.observation(&parts) {
                 e.ranges.push(o);
+            }
+            if let Some(s) = c.satellite(&parts) {
+                e.satellites_seen.push(s);
+            }
+            if e.gps_tow.is_none() {
+                e.gps_tow = c.gps_tow(&parts);
             }
         }
 
@@ -524,6 +653,39 @@ pub fn read_gnss(
     // Position first, one epoch at a time. Seeding each solve from the file's
     // own solution rather than from the previous result keeps epochs
     // independent, so one bad solve cannot propagate.
+    // Differential corrections, if a reference station was supplied. Applied
+    // before any position is solved: they replace the modelled ionosphere and
+    // troposphere with the delay a station eleven kilometres away actually
+    // measured, so the two must not both be in the pseudorange.
+    let mut corrected = 0usize;
+    if let Some((base, set)) = differential.as_ref() {
+        let times: Vec<f64> = epochs.iter().map(|e| e.gps_tow.unwrap_or(-1.0)).collect();
+        // A nominal rover position for the transmission-time difference. One
+        // for the whole trace is enough: it enters only through a difference
+        // of travel times, and a kilometre of it is three nanoseconds.
+        let nominal = epochs
+            .first()
+            .map_or([0.0; 3], |e| [e.receiver.x, e.receiver.y, e.receiver.z]);
+        let corrections = crate::differential::build(
+            base,
+            nominal,
+            |tow| {
+                let i = times.partition_point(|t| *t < tow - 0.5);
+                (i < times.len() && (times[i] - tow).abs() <= 0.5)
+                    .then(|| epochs[i].satellites_seen.clone())
+            },
+            set,
+        );
+        for (e, tow) in epochs.iter_mut().zip(&times) {
+            for o in e.ranges.iter_mut() {
+                if let Some(c) = corrections.at(o.constellation, o.svid, o.band, *tow) {
+                    o.pseudorange -= c;
+                    corrected += 1;
+                }
+            }
+        }
+    }
+
     let quality: Vec<Option<crate::wls::Solution>> = epochs
         .iter()
         .map(|e| match source {
@@ -648,8 +810,21 @@ pub fn read_gnss(
 
         fixes.push(fix);
     }
+    let (ranges, satellite_states) = match source {
+        PositionSource::Solve(_) => epochs
+            .into_iter()
+            .map(|e| {
+                let t = e.gps_tow.unwrap_or(f64::NAN);
+                ((t, e.ranges), (t, e.satellites_seen))
+            })
+            .unzip(),
+        PositionSource::File => (Vec::new(), Vec::new()),
+    };
     Ok(GnssTrace {
         fixes,
+        corrected,
+        satellite_states,
+        ranges,
         quality,
         deltas,
     })
@@ -824,7 +999,7 @@ mod tests {
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
         let p = tmp("gnss-ranges.csv", &range_epoch(truth, 1234.5, &[9; 8]));
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap().fixes;
+        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
         assert_eq!(fixes.len(), 1);
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
@@ -835,7 +1010,7 @@ mod tests {
 
         // With the file's own column the same epoch stays at the 53 m seed,
         // confirming the solve did the work rather than the seed being right.
-        let file = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap().fixes;
+        let file = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
         let seeded = file[0].position.to_ecef();
         let seed_err = ((seeded.x - truth.x).powi(2)
             + (seeded.y - truth.y).powi(2)
@@ -856,7 +1031,7 @@ mod tests {
         // three position states, one clock, and one redundant observation.
         let mixed = range_epoch(truth, 1234.5, &[9, 1, 9, 8, 9, 0, 9, 9]);
         let p = tmp("gnss-state.csv", &mixed);
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap().fixes;
+        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
             + (solved.y - truth.y).powi(2)
@@ -875,7 +1050,7 @@ mod tests {
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
         let p = tmp("gnss-thin.csv", &range_epoch(truth, 0.0, &[9, 9, 9, 9, 0, 0, 0, 0]));
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, source).unwrap().fixes;
+        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
         assert_eq!(fixes.len(), 1, "the epoch should survive, not be dropped");
         let solved = fixes[0].position.to_ecef();
         // The file's seed, 53.9 m from truth, not a wild solve.
@@ -991,7 +1166,15 @@ mod tests {
         let p = tmp("gnss-carrier.csv", &carrier_trace(truth, motion, None));
         let source = PositionSource::File;
         let set = crate::tdcp::Settings::default();
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::Carrier(set), source)
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                velocity: VelocitySource::Carrier(set),
+                position: source,
+                ..Default::default()
+            },
+        )
             .unwrap().fixes;
         assert_eq!(fixes.len(), 3);
 
@@ -1033,9 +1216,10 @@ mod tests {
         let fixes = read_gnss(
             &p,
             0.0,
-            Vec3::splat(5.0),
-            VelocitySource::Carrier(set),
-            PositionSource::File,
+            &GnssOptions {
+                velocity: VelocitySource::Carrier(set),
+                ..Default::default()
+            },
         )
         .unwrap().fixes;
         assert!(
@@ -1053,9 +1237,10 @@ mod tests {
         let fixes = read_gnss(
             &p,
             0.0,
-            Vec3::splat(5.0),
-            VelocitySource::Carrier(unchecked),
-            PositionSource::File,
+            &GnssOptions {
+                velocity: VelocitySource::Carrier(unchecked),
+                ..Default::default()
+            },
         )
         .unwrap().fixes;
         assert!(
@@ -1143,7 +1328,7 @@ mod tests {
              2000,-2694001,-4293001,3857001\n\
              2000,-2694001,-4293001,3857001\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap().fixes;
+        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
         assert_relative_eq!(fixes[0].time.tow, 1.0, epsilon = 1e-9);
@@ -1158,7 +1343,7 @@ mod tests {
              2000,-2694000,-4293000,3857000\n\
              3000,,,\n",
         );
-        let fixes = read_gnss(&p, 0.0, Vec3::splat(5.0), VelocitySource::None, PositionSource::File).unwrap().fixes;
+        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
         assert_eq!(fixes.len(), 1);
     }
 

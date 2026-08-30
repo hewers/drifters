@@ -32,6 +32,21 @@ const OMEGA_E: f64 = 7.292_115_146_7e-5;
 pub struct Observation {
     /// Constellation id, as the GSDC files number them.
     pub constellation: u8,
+    /// Frequency band, from [`crate::rinex::band_of_frequency`]. Like `svid`,
+    /// carried for matching a correction rather than for the solve.
+    pub band: u8,
+    /// Satellite id within its constellation. The solve does not use it —
+    /// geometry does not care which satellite it came from — but a
+    /// differential correction has to be matched to the right one, and an
+    /// observation that cannot say what it is cannot be corrected.
+    pub svid: u16,
+    /// Modelled delay already subtracted from `pseudorange`: ionosphere,
+    /// troposphere and inter-signal bias, metres.
+    ///
+    /// Kept so it can be put *back*. A measured correction from a reference
+    /// station covers the same delays and covers them better, so the two must
+    /// not both be applied — see [`crate::differential`].
+    pub modelled: f64,
     /// Pseudorange with satellite clock, ionosphere, troposphere and
     /// inter-signal bias already applied, metres.
     pub pseudorange: f64,
@@ -248,6 +263,9 @@ mod tests {
                     ce * sa * east[2] + ce * ca * north[2] + se * up[2],
                 ];
                 let mut o = Observation {
+                    svid: i as u16,
+                    band: 1,
+                    modelled: 0.0,
                     constellation: 1,
                     pseudorange: 0.0,
                     satellite: [

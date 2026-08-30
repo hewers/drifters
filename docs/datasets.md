@@ -125,3 +125,32 @@ and what that costs anyone holding an old clone.
 **Reproducibility is better served by a command than by a copy.** A fetch
 command names its source and its version. A committed copy silently becomes a
 fork of someone else's data.
+
+## CORS reference-station RINEX
+
+Differential corrections need a reference station near the trace and on the
+same day. NOAA's [CORS archive](https://geodesy.noaa.gov/corsdata/) is public
+and needs no account. All four GSDC traces above are in the San Francisco Bay
+Area, and `SLAC` (Stanford, 37.4165 N, −122.2042 W) is 11–31 km from them.
+
+```bash
+mkdir -p datasets/cors && cd datasets/cors && for d in 139 143 145 249; do curl -fLO "https://geodesy.noaa.gov/corsdata/rinex/2023/$d/slac/slac${d}0.23o.gz"; done && gunzip -f *.gz
+```
+
+The day-of-year in the filename must match the trace: 139, 143 and 145 are
+2023-05-19, 05-23 and 05-25; 249 is 2023-09-06. The replay reads uncompressed
+files, hence the `gunzip` — the CLI has no external dependencies and adding a
+compression crate to save one command is a poor trade.
+
+```bash
+cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges --carrier --base datasets/cors/slac1390.23o --sigma-n 3.79 --sigma-e 1.99 --sigma-v 7.96 --imu-scale 400
+```
+
+**This makes the result worse, and that is the finding** — see
+[gsdc-observables.md](gsdc-observables.md#code-differential-corrections-do-not-help-and-the-reason-is-the-point).
+The flag exists because the machinery is validated and is the groundwork for
+carrier-phase work, not because it should be switched on.
+
+**Licence.** CORS data is produced by NOAA's National Geodetic Survey and is in
+the public domain. It is still git-ignored: 3.5 MB per station-day, and
+regenerable from the archive by the command above.

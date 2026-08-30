@@ -14,3 +14,8 @@
 # Source papers: fetched locally, not redistributed. Neither is clearly
 # redistributable by a third party — see docs/papers/README.md.
 *.pdf
+
+# CORS reference-station RINEX, fetched by docs/datasets.md. Belongs to NOAA
+# NGS and is freely redistributable, but it is 3.5 MB per station-day and
+# regenerable from the archive, so it is fetched rather than committed.
+datasets/cors/

@@ -180,6 +180,7 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 drifters_cli::gsdc::VelocitySource::Doppler
             },
             raw_ranges: args.iter().any(|a| a == "--raw-ranges"),
+            base: flag(args, "--base").map(PathBuf::from),
             alpha,
         },
         quiet,
@@ -247,6 +248,31 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             drifters_cli::stats::percentile(h, 0.95),
             v.horizontal.max(),
         );
+    }
+    if !report.range_residual.is_empty() {
+        // Broken out by elevation because the aggregate cannot answer the
+        // question anyone asks of it. Low-elevation multipath is twenty-odd
+        // metres and swamps everything; a correction worth a metre only shows
+        // where the satellites are already good.
+        println!("pseudorange residual vs truth, by elevation (robust sigma, metres):");
+        for (lo, hi) in [(0.0, 15.0), (15.0, 30.0), (30.0, 60.0), (60.0, 90.0)] {
+            let mut abs: Vec<f64> = report
+                .range_residual
+                .iter()
+                .filter(|(_, el)| *el >= lo && *el < hi)
+                .map(|(v, _)| v.abs())
+                .collect();
+            if abs.len() < 10 {
+                continue;
+            }
+            abs.sort_by(f64::total_cmp);
+            let n = abs.len();
+            let rms = (abs.iter().map(|x| x * x).sum::<f64>() / n as f64).sqrt();
+            println!(
+                "  {lo:>2.0}-{hi:>2.0} deg  n={n:>6}  robust {:>6.2}  RMS {rms:>7.2}",
+                1.4826 * abs[n / 2],
+            );
+        }
     }
     // The GNSS error measured against truth is what --sigma-* should be set
     // to. Printing it turns setting them from a fit into a measurement, and
