@@ -31,7 +31,15 @@ default = []
 ## filter's behaviour. Do not enable it via feature unification by accident.
 reduced-state = []
 ## Enables `std`-only conveniences inherited from `drifters-core`.
-std = ["drifters-core/std"]
+std = ["alloc", "drifters-core/std"]
+## Fixed-interval RTS smoothing: [`smoother`], and the recording it needs from
+## [`engine::GinsEngine`].
+##
+## Additive, and off by default. The backward pass itself allocates nothing —
+## it writes into a caller-provided slice — but recording the forward pass
+## costs three 21x21 matrices, which is more than the rest of the engine, so
+## the engine keeps them behind a `Box` rather than in every instance.
+alloc = []
 
 [lints.rust]
 missing_docs = "warn"

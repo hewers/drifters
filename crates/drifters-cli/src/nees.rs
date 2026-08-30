@@ -460,6 +460,33 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
 
 #[cfg(test)]
 mod tests {
+
+    /// The smoother must beat the filter against exact truth.
+    ///
+    /// Against a real dataset this cannot be tested: the measurements are the
+    /// reference, and a smoother fits them better whether or not it is right.
+    /// Here the trajectory is generated and the fixes are noisy samples of it,
+    /// so the comparison means something.
+    ///
+    /// A backward pass that returns zeros — which the textbook recursion does
+    /// on a feedback error-state filter, see [`drifters_filter::smoother`] —
+    /// scores exactly equal to the filter and fails this.
+    #[test]
+    fn rts_smoothing_halves_the_position_error_against_truth() {
+        for seed in [1u64, 7, 42, 1234] {
+            // 150 s at 100 Hz: enough epochs for the backward pass to have
+            // something to carry, few enough to run in a debug build.
+            let (filtered, smoothed) = super::eskf::smoothing(150.0, seed, 0.01);
+            assert!(
+                filtered > 0.2,
+                "seed {seed}: the filter should have something to improve on, got {filtered:.4}"
+            );
+            assert!(
+                smoothed < 0.75 * filtered,
+                "seed {seed}: smoothing gained too little — {filtered:.4} m to {smoothed:.4} m"
+            );
+        }
+    }
     use super::*;
 
     #[test]
@@ -626,6 +653,150 @@ pub mod eskf {
     use drifters_filter::state::N_STATE;
 
     /// Run the campaign. Returns the same shape of report as the EqF's.
+    /// Filtered and smoothed position error against exact truth, in metres
+    /// RMS, over one run of the same world.
+    ///
+    /// The only honest way to test a smoother. On a real dataset the
+    /// measurements are the reference, and a smoother fits them better by
+    /// construction whether or not it is correct; here the truth is generated
+    /// and the measurements are noisy samples of it, so an improvement is an
+    /// improvement.
+    pub fn smoothing(seconds: f64, seed: u64, dt: f64) -> (f64, f64) {
+        let origin = Lla::from_degrees(30.44, 114.47, 20.0);
+        let velocity = Ned {
+            n: 8.0,
+            e: 3.0,
+            d: 0.0,
+        };
+        let attitude = drifters_core::math::Euler {
+            roll: 0.02,
+            pitch: -0.01,
+            yaw: 0.6,
+        };
+        let r_nb = Quat::from_euler(attitude.roll, attitude.pitch, attitude.yaw).to_dcm();
+        let tau = 3600.0;
+        let (gyro_arw, accel_vrw) = (3.0e-4, 3.0e-3);
+        let (gyro_bias_sigma, accel_bias_sigma) = (2.0e-5, 2.0e-3);
+        let gnss_sigma = Vec3::new(0.5, 0.5, 1.0);
+
+        let noise = drifters_core::types::ImuNoise {
+            gyro_arw: Vec3::splat(gyro_arw),
+            accel_vrw: Vec3::splat(accel_vrw),
+            gyro_bias_std: Vec3::splat(gyro_bias_sigma),
+            accel_bias_std: Vec3::splat(accel_bias_sigma),
+            gyro_scale_std: Vec3::splat(1.0e-9),
+            accel_scale_std: Vec3::splat(1.0e-9),
+            correlation_time: tau,
+        };
+        let mut rng = Rng::new(seed);
+        let mut bg = rng.normal_vec3(Vec3::splat(gyro_bias_sigma));
+        let mut ba = rng.normal_vec3(Vec3::splat(accel_bias_sigma));
+        let start = origin;
+        let options = GinsOptions {
+            imu_noise: noise,
+            initial_position_std: Vec3::splat(0.5),
+            initial_velocity_std: Vec3::splat(0.2),
+            initial_attitude_std: Vec3::splat(2.0e-3),
+            initial_gyro_bias_std: Vec3::splat(gyro_bias_sigma),
+            initial_accel_bias_std: Vec3::splat(accel_bias_sigma),
+            antenna_lever_arm: Vec3::ZERO,
+            ..GinsOptions::default()
+        }
+        .with_initial_state(
+            start.shifted(Ned {
+                n: rng.normal() * 0.5,
+                e: rng.normal() * 0.5,
+                d: rng.normal() * 0.5,
+            }),
+            Ned {
+                n: velocity.n + rng.normal() * 0.2,
+                e: velocity.e + rng.normal() * 0.2,
+                d: velocity.d + rng.normal() * 0.2,
+            },
+            attitude,
+        );
+        let mut engine = GinsEngine::new(options).expect("valid options");
+        engine.record(true);
+
+        let truth_at = |t: f64| {
+            start.shifted(Ned {
+                n: velocity.n * t,
+                e: velocity.e * t,
+                d: velocity.d * t,
+            })
+        };
+
+        let steps = (seconds / dt) as usize;
+        let decay = (-dt / tau).exp();
+        let walk = (2.0 * dt / tau).sqrt();
+        let per_second = (1.0 / dt).round() as usize;
+        let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
+        let mut filtered: Vec<(f64, f64)> = Vec::new();
+
+        for k in 1..=steps {
+            let t = k as f64 * dt;
+            let truth_pos = truth_at(t);
+            let w_ie = Wgs84::omega_ie_n(truth_pos.lat);
+            let w_en = Wgs84::omega_en_n(truth_pos.lat, truth_pos.height, velocity.to_vec3());
+            let g = Wgs84::gravity_n(truth_pos.lat, truth_pos.height);
+            let bn = r_nb.transpose();
+            let omega = bn * (w_ie + w_en);
+            let force = bn * ((w_ie * 2.0 + w_en).cross(velocity.to_vec3()) - g);
+
+            bg = bg * decay + rng.normal_vec3(Vec3::splat(gyro_bias_sigma * walk));
+            ba = ba * decay + rng.normal_vec3(Vec3::splat(accel_bias_sigma * walk));
+
+            let sample = ImuSample {
+                time: GpsTime { week: 0, tow: t },
+                dt,
+                dtheta: (omega + bg) * dt + rng.normal_vec3(Vec3::splat(gyro_arw * dt.sqrt())),
+                dvel: (force + ba) * dt + rng.normal_vec3(Vec3::splat(accel_vrw * dt.sqrt())),
+            };
+            if k % per_second == 0 {
+                let jitter = rng.normal_vec3(gnss_sigma);
+                engine.add_gnss(GnssFix::position_only(
+                    GpsTime { week: 0, tow: t },
+                    truth_pos.shifted(Ned {
+                        n: jitter.x,
+                        e: jitter.y,
+                        d: jitter.z,
+                    }),
+                    gnss_sigma,
+                ));
+            }
+            if engine.add_imu(sample).is_err() {
+                break;
+            }
+            if let Some(c) = engine.take_checkpoint() {
+                let e = engine.nav_state().position().ned_from(truth_at(c.state.time.tow));
+                filtered.push((c.state.time.tow, e.horizontal_norm()));
+                checkpoints.push(c);
+            }
+        }
+
+        let mut smoothed = vec![
+            drifters_filter::smoother::Smoothed {
+                state: checkpoints[0].state,
+                covariance: checkpoints[0].posterior,
+            };
+            checkpoints.len()
+        ];
+        drifters_filter::smoother::smooth(&checkpoints, &mut smoothed).expect("well-posed");
+
+        let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt();
+        let f: Vec<f64> = filtered.iter().map(|(_, e)| *e).collect();
+        let s: Vec<f64> = smoothed
+            .iter()
+            .map(|x| {
+                x.state
+                    .position()
+                    .ned_from(truth_at(x.state.time.tow))
+                    .horizontal_norm()
+            })
+            .collect();
+        (rms(&f), rms(&s))
+    }
+
     pub fn run(runs: usize, seconds: f64, seed: u64, dt: f64, strength: f64) -> super::NeesReport {
         let origin = Lla::from_degrees(30.44, 114.47, 20.0);
         let velocity = Ned {

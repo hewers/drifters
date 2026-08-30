@@ -345,6 +345,12 @@ pub struct GsdcReport {
     pub gnss_only: truth::ErrorStats,
     /// Error of the equivariant filter against truth, over the same epochs.
     pub eqf: truth::ErrorStats,
+    /// Error of the RTS-smoothed ESKF trajectory: the same forward filter run
+    /// backwards, so it is the filter's own answer with the rest of the run
+    /// taken into account.
+    pub rts: Option<truth::ErrorStats>,
+    /// Per-epoch horizontal error of the RTS-smoothed trajectory.
+    pub rts_horizontal: Vec<(f64, f64)>,
     /// Error of the batch-smoothed GNSS trajectory, when carrier phase gave
     /// enough links to build one. No IMU: this is what the GNSS file alone is
     /// worth once the pseudorange positions and the carrier deltas are fitted
@@ -555,6 +561,8 @@ pub fn run_gsdc(
         gnss_velocity_count: 0,
         gnss_velocity_horizontal: Vec::new(),
         range_residual: Vec::new(),
+        rts: None,
+        rts_horizontal: Vec::new(),
         smoothed: None,
         smoothed_horizontal: Vec::new(),
         gnss_horizontal: Vec::new(),
@@ -603,6 +611,10 @@ pub fn run_gsdc(
     let anchor = first.position;
     let mut next = 0usize;
     let mut last_nis: Option<f64> = None;
+    // Record the transition matrices the backward pass needs. Costs a 21×21
+    // product per IMU sample, which is why it is opt-in.
+    engine.record(true);
+    let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
     for sample in &imu {
         let t = sample.time.tow;
         if t < first.time.tow {
@@ -642,6 +654,12 @@ pub fn run_gsdc(
                     report.nis_values.push(v);
                     last_nis = Some(v);
                     report.applied += 1;
+                    // Only accepted updates are checkpointed: a rejected fix
+                    // leaves no correction and no prior, and recording one
+                    // would tell the smoother an epoch happened that did not.
+                    if let Some(c) = engine.take_checkpoint() {
+                        checkpoints.push(c);
+                    }
                 }
                 _ => report.rejected += 1,
             }
@@ -679,6 +697,38 @@ pub fn run_gsdc(
     report.eqf_nis_values = second.nis_values;
     report.eqf_lever = second.lever;
     report.eqf_horizontal = second.horizontal;
+
+    // The backward pass over the ESKF's own run. Allocation-free by contract,
+    // so the storage is ours to choose.
+    if checkpoints.len() > 1 {
+        let mut smoothed = vec![
+            drifters_filter::smoother::Smoothed {
+                state: checkpoints[0].state,
+                covariance: checkpoints[0].posterior,
+            };
+            checkpoints.len()
+        ];
+        match drifters_filter::smoother::smooth(&checkpoints, &mut smoothed) {
+            Ok(()) => {
+                let mut stats = truth::ErrorStats::new();
+                for s in &smoothed {
+                    let tow = s.state.time.tow;
+                    stats.push(&reference, tow, s.state.pva.position);
+                    if let Some(r) = reference.at(tow) {
+                        report
+                            .rts_horizontal
+                            .push((tow, s.state.pva.position.ned_from(r).horizontal_norm()));
+                    }
+                }
+                report.rts = Some(stats);
+            }
+            Err(e) => {
+                if !quiet {
+                    eprintln!("RTS smoothing failed: {e}");
+                }
+            }
+        }
+    }
 
     // The GNSS file fitted to itself: pseudorange positions as anchors,
     // carrier deltas as links, solved in one local frame. No IMU and no

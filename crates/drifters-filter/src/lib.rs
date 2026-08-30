@@ -53,9 +53,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(feature = "alloc")]
+pub mod smoother;
 pub mod config;
 pub mod engine;
 pub mod eskf;

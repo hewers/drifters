@@ -17,7 +17,7 @@ use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
-use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
+use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, StateMatrix, StateVector, V_ID};
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SA_ID, SG_ID};
 
@@ -50,6 +50,48 @@ pub struct GinsEngine {
     epoch_tolerance: F,
     consecutive_rejections: u32,
     inflations: u32,
+    /// Smoothing state, present only while recording.
+    ///
+    /// Behind `alloc` because it is three 21×21 matrices — four times the rest
+    /// of the engine. A default `no_std` build does not have the field at all,
+    /// which the size test in `state.rs` pins; a build that asked for
+    /// smoothing pays for it. Not boxed, because [`GinsEngine`] is `Copy` and
+    /// a feature that silently removed a trait impl would be worse than the
+    /// bytes.
+    #[cfg(feature = "alloc")]
+    recorder: Option<Recorder>,
+}
+
+/// What a backward pass needs, accumulated during the forward one.
+#[cfg(feature = "alloc")]
+#[derive(Clone, Copy, Debug)]
+struct Recorder {
+    /// Transition accumulated since the last checkpoint.
+    transition: StateMatrix,
+    /// Covariance before the **first** update since the last checkpoint.
+    prior: StateMatrix,
+    /// Set when a checkpoint is taken, so the next update captures the prior.
+    prior_pending: bool,
+    /// Sum of the corrections fed back since the last checkpoint.
+    epoch_correction: StateVector,
+    /// Set when a correction has been fed back and not yet checkpointed.
+    updated: bool,
+    /// The checkpoint sealed at the last update, waiting to be taken.
+    pending: Option<crate::smoother::Checkpoint>,
+}
+
+#[cfg(feature = "alloc")]
+impl Recorder {
+    fn new() -> Self {
+        Self {
+            transition: StateMatrix::identity(),
+            prior: StateMatrix::zeros(),
+            prior_pending: true,
+            epoch_correction: StateVector::zeros(),
+            updated: false,
+            pending: None,
+        }
+    }
 }
 
 impl GinsEngine {
@@ -73,6 +115,8 @@ impl GinsEngine {
             epoch_tolerance: 1.0e-4,
             consecutive_rejections: 0,
             inflations: 0,
+            #[cfg(feature = "alloc")]
+            recorder: None,
             options,
         })
     }
@@ -193,8 +237,68 @@ impl GinsEngine {
     fn propagate(&mut self, imu: &ImuSample) {
         let previous = self.state.pva;
         self.state.pva = mechanize(&previous, &self.previous_imu, imu);
-        self.filter.predict(&previous, imu, &self.options.imu_noise);
+        #[cfg(feature = "alloc")]
+        let accumulate = self.recorder.as_mut().map(|r| &mut r.transition);
+        #[cfg(not(feature = "alloc"))]
+        let accumulate = None;
+        self.filter
+            .predict_recording(&previous, imu, &self.options.imu_noise, accumulate);
         self.previous_pva = previous;
+    }
+
+    /// Record what [`crate::smoother`] needs from the forward pass.
+    ///
+    /// Off by default, and it costs both ways: a 21×21 matrix product per IMU
+    /// sample, and about 18 KiB of state while it is on. An on-target filter
+    /// that will never smooth should pay neither.
+    #[cfg(feature = "alloc")]
+    pub fn record(&mut self, on: bool) {
+        self.recorder = on.then(Recorder::new);
+    }
+
+    /// Seal a checkpoint at the epoch of the update just applied.
+    ///
+    /// Sealed here rather than when the caller asks, because a GNSS fix
+    /// usually falls **inside** an IMU interval: the engine propagates to the
+    /// fix, updates, then propagates the remainder. A checkpoint taken after
+    /// that call returned would carry a transition spanning past its own
+    /// epoch, and a state and covariance from after a propagation the
+    /// recursion believes has not happened yet. Resetting the accumulator here
+    /// puts that propagation into the next span, where it belongs.
+    fn seal_checkpoint(&mut self) {
+        #[cfg(feature = "alloc")]
+        {
+            let covariance = self.filter.covariance;
+            let state = self.state;
+            let Some(r) = self.recorder.as_mut() else {
+                return;
+            };
+            if !r.updated {
+                return;
+            }
+            r.pending = Some(crate::smoother::Checkpoint {
+                state,
+                prior: r.prior,
+                posterior: covariance,
+                correction: r.epoch_correction,
+                transition: r.transition,
+            });
+            r.transition = StateMatrix::identity();
+            r.epoch_correction = StateVector::zeros();
+            r.prior_pending = true;
+            r.updated = false;
+        }
+    }
+
+    /// Take the checkpoint sealed at the most recent update, if any.
+    ///
+    /// Returns `None` when recording is off, when no update has been applied
+    /// since the last call, or when every update since was rejected by its
+    /// gate — a rejected measurement is not an epoch, and recording one would
+    /// tell the smoother something happened that did not.
+    #[cfg(feature = "alloc")]
+    pub fn take_checkpoint(&mut self) -> Option<crate::smoother::Checkpoint> {
+        self.recorder.as_mut()?.pending.take()
     }
 
     /// Where the INS solution puts the **GNSS antenna phase centre**.
@@ -238,6 +342,7 @@ impl GinsEngine {
         h.set_block(0, PHI_ID, &lever_n.skew());
 
         let r = fix.position_std.squared().to_diag();
+        self.note_prior();
         self.filter.update(&z, &h, &r)?;
         self.feedback();
 
@@ -259,8 +364,9 @@ impl GinsEngine {
                 velocity,
                 fix.velocity_std,
             );
-            self.apply(&m)?;
+            self.apply_inner(&m)?;
         }
+        self.seal_checkpoint();
         Ok(())
     }
 
@@ -270,6 +376,16 @@ impl GinsEngine {
     /// discarded, leaving the filter untouched. Constructors for the supported
     /// sensors are in [`crate::measurement`].
     pub fn apply<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+        let accepted = self.apply_inner(m)?;
+        self.seal_checkpoint();
+        Ok(accepted)
+    }
+
+    /// [`GinsEngine::apply`] without sealing a checkpoint, so a caller that
+    /// applies several measurements at one epoch produces one checkpoint
+    /// rather than one per measurement.
+    fn apply_inner<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+        self.note_prior();
         let accepted = self.filter.update_gated_holding(
             &m.innovation,
             &m.jacobian,
@@ -368,33 +484,73 @@ impl GinsEngine {
 
     /// Apply the estimated error state to the navigation state and reset it.
     fn feedback(&mut self) {
-        let dx = self.filter.take_correction().to_column();
-        let block = |i: usize| Vec3::new(dx[i], dx[i + 1], dx[i + 2]);
-
-        // Position: the error state is in NED metres, so it converts through
-        // the local radii before being subtracted from the geodetic position.
-        let dr = Wgs84::dr_inv(self.state.pva.position.lat, self.state.pva.position.height)
-            * block(P_ID);
-        self.state.pva.position.lat -= dr.x;
-        self.state.pva.position.lon -= dr.y;
-        self.state.pva.position.height -= dr.z;
-
-        self.state.pva.velocity = Ned::from_vec3(self.state.pva.velocity.to_vec3() - block(V_ID));
-
-        // Attitude: the tilt error is defined in the navigation frame, so it
-        // pre-multiplies.
-        let correction = Quat::from_rotation_vector(block(PHI_ID));
-        self.state.pva.attitude = Attitude::from_quat(correction * self.state.pva.attitude.quat);
-
-        self.state.imu_error.gyro_bias += block(BG_ID);
-        self.state.imu_error.accel_bias += block(BA_ID);
-        // Under `reduced-state` the scale factors are not estimated, so they
-        // keep whatever prior calibration was configured.
-        #[cfg(not(feature = "reduced-state"))]
-        {
-            self.state.imu_error.gyro_scale += block(SG_ID);
-            self.state.imu_error.accel_scale += block(SA_ID);
+        let dx = self.filter.take_correction();
+        // Summed, not replaced. A GNSS fix updates position and then velocity,
+        // and a checkpoint spans everything since the previous one, so the
+        // smoother needs the total the epoch applied. Summing the error-state
+        // vectors is first-order correct, which is the accuracy the error
+        // state is defined to anyway.
+        #[cfg(feature = "alloc")]
+        if let Some(r) = self.recorder.as_mut() {
+            r.epoch_correction += &dx;
+            r.updated = true;
         }
+        apply_correction(&mut self.state, &dx);
+    }
+
+    /// Capture the covariance before the first update since the last
+    /// checkpoint.
+    ///
+    /// The smoother's gain assumes its prior is the covariance *propagated*
+    /// from the previous checkpoint. Capturing it before the second update of
+    /// an epoch instead would hand it a covariance that already contains the
+    /// first update, and the recursion would diverge — measured, before this
+    /// existed, as 22 m where the filter alone gave 2.8.
+    fn note_prior(&mut self) {
+        #[cfg(feature = "alloc")]
+        if let Some(r) = self.recorder.as_mut() {
+            if r.prior_pending {
+                r.prior = self.filter.covariance;
+                r.prior_pending = false;
+            }
+        }
+    }
+}
+
+/// Apply an error-state correction to a navigation state.
+///
+/// The sign is not uniform across the state vector — position, velocity and
+/// attitude errors are *subtracted* while the IMU error terms are *added* —
+/// because the error state is defined as estimate-minus-truth for the former
+/// and as a correction to the compensation for the latter. Getting one block's
+/// sign wrong produces a filter that looks stable and drifts, so there is one
+/// implementation and both the forward feedback and [`crate::smoother`] call
+/// it. Two copies of this convention would eventually disagree.
+pub fn apply_correction(state: &mut NavState, dx: &StateVector) {
+    let block = |i: usize| Vec3::new(dx[(i, 0)], dx[(i + 1, 0)], dx[(i + 2, 0)]);
+
+    // Position: the error state is in NED metres, so it converts through the
+    // local radii before being subtracted from the geodetic position.
+    let dr = Wgs84::dr_inv(state.pva.position.lat, state.pva.position.height) * block(P_ID);
+    state.pva.position.lat -= dr.x;
+    state.pva.position.lon -= dr.y;
+    state.pva.position.height -= dr.z;
+
+    state.pva.velocity = Ned::from_vec3(state.pva.velocity.to_vec3() - block(V_ID));
+
+    // Attitude: the tilt error is defined in the navigation frame, so it
+    // pre-multiplies.
+    let correction = Quat::from_rotation_vector(block(PHI_ID));
+    state.pva.attitude = Attitude::from_quat(correction * state.pva.attitude.quat);
+
+    state.imu_error.gyro_bias += block(BG_ID);
+    state.imu_error.accel_bias += block(BA_ID);
+    // Under `reduced-state` the scale factors are not estimated, so they keep
+    // whatever prior calibration was configured.
+    #[cfg(not(feature = "reduced-state"))]
+    {
+        state.imu_error.gyro_scale += block(SG_ID);
+        state.imu_error.accel_scale += block(SA_ID);
     }
 }
 

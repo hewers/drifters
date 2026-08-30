@@ -387,6 +387,23 @@ impl Eskf {
     /// KF-GINS uses and is accurate whenever `‖F‖·dt ≪ 1` — true for any IMU
     /// running at 50 Hz or above.
     pub fn predict(&mut self, state: &Pva, imu: &ImuSample, noise: &ImuNoise) {
+        self.predict_recording(state, imu, noise, None);
+    }
+
+    /// Propagate, and accumulate this interval's transition matrix.
+    ///
+    /// `accumulated` is left-multiplied: after a run of intervals it holds
+    /// `Φₙ ⋯ Φ₁`, the transition across the whole span, which is what a
+    /// smoother needs between the epochs it checkpoints. Separate from
+    /// [`Eskf::predict`] because it costs a 21×21 product per sample and the
+    /// on-target path should not pay for a facility it does not use.
+    pub fn predict_recording(
+        &mut self,
+        state: &Pva,
+        imu: &ImuSample,
+        noise: &ImuNoise,
+        accumulated: Option<&mut StateMatrix>,
+    ) {
         let dt = imu.dt;
 
         // Written to hold exactly four 21x21 matrices live at once. The
@@ -421,6 +438,12 @@ impl Eskf {
         self.covariance.symmetrize();
 
         self.dx = phi.matmul(&self.dx);
+
+        if let Some(accumulated) = accumulated {
+            let mut product = StateMatrix::zeros();
+            phi.matmul_into(accumulated, &mut product);
+            *accumulated = product;
+        }
     }
 
     /// Apply a measurement update in Joseph form.

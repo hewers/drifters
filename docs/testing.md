@@ -402,3 +402,42 @@ The result on smartphone data is a **negative one**, recorded in full at
 [gsdc.md](gsdc.md): fusing a phone IMU with position-only smartphone GNSS gains
 1.7 %. That is worth as much as a positive result — it bounds where this filter
 helps, and it was diagnosed rather than tuned away.
+
+## Layer 12 — the smoother, against generated truth
+
+A smoother cannot be validated on a real dataset. The measurements are the
+reference there, and a backward pass fits them better by construction whether
+or not the recursion is right — the KF-GINS "3.3 cm" figure is a residual
+against the very fixes being fitted, so it would improve under a smoother that
+was wholly wrong.
+
+`nees::eskf::smoothing` generates a trajectory, derives the IMU that produces
+it exactly, samples it with noisy fixes, and scores both passes against the
+trajectory. Horizontal RMS over 150 s:
+
+| seed | filtered | smoothed | change |
+|---|---|---|---|
+| 1 | 0.403 m | 0.193 m | −52 % |
+| 7 | 0.402 m | 0.188 m | −53 % |
+| 42 | 0.399 m | 0.173 m | −57 % |
+| 1234 | 0.375 m | 0.156 m | −59 % |
+
+Halving the error is what RTS should deliver on a well-tuned filter, and the
+test asserts a gain of at least 25 % on each seed.
+
+**What this test catches.** The textbook RTS recursion returns *exactly zero*
+on a feedback error-state filter — every correction is fed into the nominal and
+the error reset, so the recursion propagates zeros from a zero terminal
+condition. A smoother with that bug produces a trajectory identical to the
+filter's, which looks entirely plausible and scores identically. Only a
+comparison against independent truth separates them, and this is it.
+
+Two bugs it caught while being written, both invisible on residuals:
+
+- **The prior captured after the wrong update.** A GNSS fix updates position
+  and then velocity; capturing the covariance before the *second* one hands the
+  recursion a prior that already contains the first, and it diverged — 22 m
+  where the filter alone gave 2.8.
+- **The checkpoint sealed after the wrong propagation.** A fix usually falls
+  *inside* an IMU interval, so a checkpoint taken once the sample has been
+  fully processed carries a transition matrix spanning past its own epoch.

@@ -147,9 +147,13 @@ mod size_tests {
             3_704,
             "covariance + error state, plus the recorded NIS"
         );
+        // The smoothing recorder is three 21x21 matrices, four times the rest
+        // of the engine, so it is behind `alloc` and a default build does not
+        // have the field at all. A regression that puts it in unconditionally
+        // shows up here as 23 192.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            4_944,
+            if cfg!(feature = "alloc") { 23_200 } else { 4_944 },
             "whole engine"
         );
     }

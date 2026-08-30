@@ -218,6 +218,9 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         ("drifters ESKF", &report.filter, &report.filter_horizontal),
         ("drifters EqF", &report.eqf, &report.eqf_horizontal),
     ];
+    if let Some(s) = &report.rts {
+        rows.push(("drifters ESKF + RTS", s, &report.rts_horizontal));
+    }
     if let Some(s) = &report.smoothed {
         rows.push(("GNSS batch-smoothed", s, &report.smoothed_horizontal));
     }
