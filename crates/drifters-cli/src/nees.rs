@@ -476,14 +476,44 @@ mod tests {
         for seed in [1u64, 7, 42, 1234] {
             // 150 s at 100 Hz: enough epochs for the backward pass to have
             // something to carry, few enough to run in a debug build.
-            let (filtered, smoothed) = super::eskf::smoothing(150.0, seed, 0.01);
+            let r = super::eskf::smoothing(150.0, seed, 0.01);
             assert!(
-                filtered > 0.2,
-                "seed {seed}: the filter should have something to improve on, got {filtered:.4}"
+                r.filtered > 0.2,
+                "seed {seed}: the filter should have something to improve on, got {:.4}",
+                r.filtered
             );
             assert!(
-                smoothed < 0.75 * filtered,
-                "seed {seed}: smoothing gained too little — {filtered:.4} m to {smoothed:.4} m"
+                r.smoothed < 0.75 * r.filtered,
+                "seed {seed}: smoothing gained too little — {:.4} m to {:.4} m",
+                r.filtered,
+                r.smoothed
+            );
+            // The covariance, which the error comparison cannot see. Nine
+            // states, so a consistent estimator reads nine; the band is the
+            // practical factor of two this repository uses elsewhere, not the
+            // strict chi-squared interval that no real filter meets.
+            //
+            // This catches a grossly wrong covariance and nothing subtler —
+            // a backward pass that improves the states and leaves the
+            // covariance untouched reads about 6, which is inside any band
+            // wide enough for an ordinarily imperfect filter. That case is
+            // caught in `smoother.rs` instead, by requiring the covariance to
+            // actually shrink.
+            assert!(
+                (4.5..18.0).contains(&r.smoothed_nees),
+                "seed {seed}: smoothed NEES {:.2} is not near nine",
+                r.smoothed_nees
+            );
+            // Worth its own assertion because it is the opposite of what a
+            // reader expects: the *filter* is overconfident on this world,
+            // reading two to four times nine, and the backward pass lands far
+            // closer to consistent than the pass it came from.
+            assert!(
+                (r.smoothed_nees - 9.0).abs() < (r.filtered_nees - 9.0).abs(),
+                "seed {seed}: smoothing should not make consistency worse — \
+                 filtered {:.2}, smoothed {:.2}",
+                r.filtered_nees,
+                r.smoothed_nees
             );
         }
     }
@@ -653,6 +683,28 @@ pub mod eskf {
     use drifters_filter::state::N_STATE;
 
     /// Run the campaign. Returns the same shape of report as the EqF's.
+    /// What one smoothed run looked like.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Smoothing {
+        /// Filtered horizontal position error against truth, metres RMS.
+        pub filtered: f64,
+        /// Smoothed horizontal position error against truth, metres RMS.
+        pub smoothed: f64,
+        /// Mean normalised estimation error squared of the **filtered**
+        /// estimate against the filtered covariance, over the nine states
+        /// whose truth this world knows exactly.
+        pub filtered_nees: f64,
+        /// The same for the **smoothed** estimate and the smoothed covariance.
+        ///
+        /// Compared against `filtered_nees` rather than against nine. Both
+        /// should sit near nine, but the *ratio* is the sharper test: a
+        /// backward pass that improves the states and forgets to shrink the
+        /// covariance leaves the smoothed NEES far below the filtered one,
+        /// and an absolute band wide enough to accommodate an ordinarily
+        /// imperfect filter is too wide to catch that.
+        pub smoothed_nees: f64,
+    }
+
     /// Filtered and smoothed position error against exact truth, in metres
     /// RMS, over one run of the same world.
     ///
@@ -661,7 +713,7 @@ pub mod eskf {
     /// construction whether or not it is correct; here the truth is generated
     /// and the measurements are noisy samples of it, so an improvement is an
     /// improvement.
-    pub fn smoothing(seconds: f64, seed: u64, dt: f64) -> (f64, f64) {
+    pub fn smoothing(seconds: f64, seed: u64, dt: f64) -> Smoothing {
         let origin = Lla::from_degrees(30.44, 114.47, 20.0);
         let velocity = Ned {
             n: 8.0,
@@ -733,6 +785,7 @@ pub mod eskf {
         let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
         let mut filtered: Vec<(f64, f64)> = Vec::new();
 
+
         for k in 1..=steps {
             let t = k as f64 * dt;
             let truth_pos = truth_at(t);
@@ -777,6 +830,7 @@ pub mod eskf {
         let mut smoothed = vec![
             drifters_filter::smoother::Smoothed {
                 state: checkpoints[0].state,
+                correction: Default::default(),
                 covariance: checkpoints[0].posterior,
             };
             checkpoints.len()
@@ -794,7 +848,44 @@ pub mod eskf {
                     .horizontal_norm()
             })
             .collect();
-        (rms(&f), rms(&s))
+
+        // NEES of the smoothed estimate against the smoothed covariance. The
+        // bias truth is not recorded per epoch here, so this scores the nine
+        // states whose truth is exactly known — position, velocity and
+        // attitude — as their own marginal, which the leading block of P is.
+        let score = |state: &drifters_core::types::NavState, p: &drifters_filter::state::StateMatrix| -> Option<f64> {
+            let tow = state.time.tow;
+            let d = state.position().ned_from(truth_at(tow));
+            let dv = state.velocity().to_vec3() - velocity.to_vec3();
+            let phi = Quat::from_dcm(&state.pva.attitude.dcm.matmul(&r_nb.transpose()))
+                .to_rotation_vector();
+            let mut e = Matrix::<9, 1>::zeros();
+            for i in 0..3 {
+                e[(i, 0)] = [d.n, d.e, d.d][i];
+                e[(3 + i, 0)] = dv[i];
+                e[(6 + i, 0)] = phi[i];
+            }
+            // The leading block of P *is* the marginal covariance over these
+            // nine states, so this is a proper marginal rather than a slice.
+            let solved = Cholesky::new(&p.block::<9, 9>(0, 0))?.solve(&e);
+            Some((0..9).map(|i| e[(i, 0)] * solved[(i, 0)]).sum())
+        };
+        let mut filtered_nees = Running::new();
+        let mut smoothed_nees = Running::new();
+        for (c, x) in checkpoints.iter().zip(&smoothed) {
+            if let Some(q) = score(&c.state, &c.posterior) {
+                filtered_nees.push(q);
+            }
+            if let Some(q) = score(&x.state, &x.covariance) {
+                smoothed_nees.push(q);
+            }
+        }
+        Smoothing {
+            filtered: rms(&f),
+            smoothed: rms(&s),
+            filtered_nees: filtered_nees.mean(),
+            smoothed_nees: smoothed_nees.mean(),
+        }
     }
 
     pub fn run(runs: usize, seconds: f64, seed: u64, dt: f64, strength: f64) -> super::NeesReport {

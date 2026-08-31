@@ -441,3 +441,66 @@ Two bugs it caught while being written, both invisible on residuals:
 - **The checkpoint sealed after the wrong propagation.** A fix usually falls
   *inside* an IMU interval, so a checkpoint taken once the sample has been
   fully processed carries a transition matrix spanning past its own epoch.
+
+### The reference the smoother is checked against
+
+There is no published test set for RTS smoothing. KF-GINS is a forward filter
+and ships no backward pass, and no navigation dataset comes with a *smoothed*
+reference trajectory — so there is nothing to diff against. Worse, the obvious
+substitute is actively misleading: scoring a smoother on its residual against
+the measurements it was fitted to rewards a smoother that is wholly wrong.
+
+Two things stand in for it, and between them they are stronger than a reference
+trajectory would be.
+
+**Batch least-squares equivalence.** For a linear-Gaussian system the
+fixed-interval smoother and the least-squares fit over the whole run are the
+same estimator, so the gradient of the batch objective must vanish at the
+smoother's answer. `smoother.rs` runs a feedback Kalman filter over a
+well-scaled synthetic linear system, smooths it, and asserts that gradient is
+zero to one part in 10⁸ of the objective's own term scale. Checking the
+gradient rather than solving the batch problem keeps the reference independent
+of the thing being tested and needs no matrix inversion.
+
+This pins the answer rather than bounding it, which "the smoother beats the
+filter" cannot do. It is deliberately not run on the navigation model: the
+equivalence is exact only for a linear-Gaussian system, and the navigation
+covariances span twelve orders of magnitude between position and scale-factor
+states, which would put the *check's* conditioning in question rather than the
+recursion's correctness.
+
+**Mutation testing.** Every assertion here was verified to fail against a
+deliberately broken smoother:
+
+| mutation | caught by |
+|---|---|
+| the textbook recursion, dropping the known input | batch equivalence, and the truth comparison |
+| the known input added with the wrong sign | batch equivalence |
+| the smoother gain used untransposed | batch equivalence |
+| the covariance recursion dropped entirely | strict covariance decrease |
+
+The last is the interesting one. A backward pass that improves the states and
+leaves the covariance untouched passes everything else: the trajectory is
+better, the covariance has not *grown*, it is symmetric and positive definite,
+and its NEES reads about 6 against an expected 9 — inside any band wide enough
+for an ordinarily imperfect filter. Only requiring the covariance to strictly
+*shrink* catches it, which it must, because the smoother has more information
+than the filter at every epoch but the last.
+
+### The smoother is more consistent than the filter it came from
+
+Measured on the same synthetic world, NEES over the nine states whose truth is
+exact:
+
+| seed | filtered | smoothed |
+|---|---|---|
+| 1 | 21.09 | 9.55 |
+| 7 | 22.17 | 14.69 |
+| 42 | 33.68 | 10.63 |
+| 1234 | 37.33 | 12.20 |
+
+Expected is 9. The **forward filter** is two to four times overconfident here,
+which is the same defect [gsdc.md](gsdc.md) records against the real datasets,
+and the backward pass lands far closer to consistent. That is not what a reader
+expects — smoothing is normally sold as an accuracy improvement — so it has its
+own assertion rather than being left as a remark.

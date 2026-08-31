@@ -704,6 +704,7 @@ pub fn run_gsdc(
         let mut smoothed = vec![
             drifters_filter::smoother::Smoothed {
                 state: checkpoints[0].state,
+                correction: Default::default(),
                 covariance: checkpoints[0].posterior,
             };
             checkpoints.len()

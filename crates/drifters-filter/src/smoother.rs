@@ -100,6 +100,15 @@ pub struct Checkpoint {
 pub struct Smoothed {
     /// Navigation state with the backward correction applied.
     pub state: NavState,
+    /// The backward correction itself, in error-state coordinates.
+    ///
+    /// This is what the recursion actually computes; `state` is it applied to
+    /// the recorded nominal through [`crate::engine::apply_correction`], which
+    /// is not linear. Exposed because the linear quantity is the one that can
+    /// be checked exactly — the equivalence test in this module rests on it —
+    /// and because a caller propagating the correction into something other
+    /// than a `NavState` needs it. Zero at the final epoch by definition.
+    pub correction: StateVector,
     /// Smoothed covariance. Never larger than the filter's, in the sense that
     /// `Pᶠ − Pˢ` is positive semi-definite: the smoother strictly adds
     /// information.
@@ -151,6 +160,7 @@ pub fn smooth(checkpoints: &[Checkpoint], out: &mut [Smoothed]) -> Result<(), Sm
 
     out[last] = Smoothed {
         state: checkpoints[last].state,
+        correction: StateVector::zeros(),
         covariance: checkpoints[last].posterior,
     };
     // The smoothed error at the final epoch is zero by definition, so the
@@ -188,7 +198,11 @@ pub fn smooth(checkpoints: &[Checkpoint], out: &mut [Smoothed]) -> Result<(), Sm
 
         let mut state = checkpoints[k].state;
         crate::engine::apply_correction(&mut state, &error);
-        out[k] = Smoothed { state, covariance };
+        out[k] = Smoothed {
+            state,
+            correction: error,
+            covariance,
+        };
     }
     Ok(())
 }
@@ -203,6 +217,7 @@ pub const fn states() -> usize {
 mod tests {
     use super::*;
     use crate::state::N_STATE;
+    use drifters_core::math::Matrix;
 
     /// A checkpoint whose covariances and transition are plausible: a prior
     /// larger than the posterior, as an update makes it, and a transition that
@@ -210,6 +225,7 @@ mod tests {
     fn blank() -> Smoothed {
         Smoothed {
             state: NavState::default(),
+            correction: StateVector::zeros(),
             covariance: StateMatrix::zeros(),
         }
     }
@@ -228,6 +244,236 @@ mod tests {
             correction: c,
             transition,
         }
+    }
+
+    /// A deterministic generator, so a failure is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+        /// Box–Muller, one value per call.
+        fn normal(&mut self) -> f64 {
+            let (u, v) = (self.next().max(1e-12), self.next());
+            (-2.0 * u.ln()).sqrt() * (core::f64::consts::TAU * v).cos()
+        }
+    }
+
+    /// How many states the measurement touches.
+    const M: usize = 4;
+    const EPOCHS: usize = 12;
+    const Q_SCALE: f64 = 0.02;
+    const R_SCALE: f64 = 0.5;
+    const P0_SCALE: f64 = 1.0;
+
+    /// A well-scaled linear system: `Φ = I + 0.05 B`, all states order one.
+    ///
+    /// Deliberately not the navigation model. The batch equivalence below is
+    /// exact only for a linear-Gaussian system, and the navigation
+    /// covariances span twelve orders of magnitude between position and
+    /// scale-factor states, which would put the check's conditioning in
+    /// question rather than the recursion's correctness.
+    fn transition() -> StateMatrix {
+        let mut phi = StateMatrix::identity();
+        for i in 0..N_STATE {
+            phi.data[i][(i + 1) % N_STATE] += 0.05;
+            phi.data[i][(i + 7) % N_STATE] -= 0.03;
+        }
+        phi
+    }
+
+    /// Run a feedback Kalman filter over the linear system, recording exactly
+    /// what [`crate::GinsEngine`] records: the covariance either side of each
+    /// update, the correction fed back, and the transition between epochs.
+    ///
+    /// Returns the checkpoints and, for the objective, each epoch's
+    /// innovation.
+    fn linear_run() -> ([Checkpoint; EPOCHS], [[f64; M]; EPOCHS]) {
+        let phi = transition();
+        let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+
+        let mut truth = [0.0f64; N_STATE];
+        let mut nominal = [0.0f64; N_STATE];
+        for t in truth.iter_mut() {
+            *t = rng.normal() * P0_SCALE.sqrt();
+        }
+        let mut p = StateMatrix::identity() * P0_SCALE;
+
+        let mut checkpoints = [Checkpoint {
+            state: NavState::default(),
+            prior: StateMatrix::zeros(),
+            posterior: StateMatrix::zeros(),
+            correction: StateVector::zeros(),
+            transition: StateMatrix::identity(),
+        }; EPOCHS];
+        let mut innovations = [[0.0; M]; EPOCHS];
+
+        for k in 0..EPOCHS {
+            if k > 0 {
+                // Truth and nominal both propagate; only truth gets the noise.
+                let mut next_truth = [0.0; N_STATE];
+                let mut next_nominal = [0.0; N_STATE];
+                for i in 0..N_STATE {
+                    for j in 0..N_STATE {
+                        next_truth[i] += phi.data[i][j] * truth[j];
+                        next_nominal[i] += phi.data[i][j] * nominal[j];
+                    }
+                    next_truth[i] += rng.normal() * Q_SCALE.sqrt();
+                }
+                truth = next_truth;
+                nominal = next_nominal;
+                let mut scratch = StateMatrix::zeros();
+                phi.matmul_into(&p, &mut scratch);
+                scratch.mul_transpose_into(&phi, &mut p);
+                for i in 0..N_STATE {
+                    p.data[i][i] += Q_SCALE;
+                }
+                p.symmetrize();
+            }
+            let prior = p;
+
+            // Innovation: measured minus predicted, on the first M states.
+            let mut nu = [0.0; M];
+            for (i, n) in nu.iter_mut().enumerate() {
+                *n = truth[i] + rng.normal() * R_SCALE.sqrt() - nominal[i];
+            }
+
+            // S = H P Hᵀ + R, the leading M×M block plus R.
+            let mut s = Matrix::<M, M>::zeros();
+            for i in 0..M {
+                for j in 0..M {
+                    s[(i, j)] = p.data[i][j];
+                }
+                s[(i, i)] += R_SCALE;
+            }
+            // Kᵀ = S⁻¹ H P, so K = P Hᵀ S⁻¹ without forming an inverse.
+            let mut hp = Matrix::<M, N_STATE>::zeros();
+            for i in 0..M {
+                for j in 0..N_STATE {
+                    hp[(i, j)] = p.data[i][j];
+                }
+            }
+            let gain_t = Cholesky::new(&s).expect("innovation covariance").solve(&hp);
+
+            // The correction is what the nominal is *too large* by, matching
+            // `apply_correction`, which subtracts it.
+            let mut correction = StateVector::zeros();
+            for i in 0..N_STATE {
+                let mut acc = 0.0;
+                for m in 0..M {
+                    acc += gain_t[(m, i)] * nu[m];
+                }
+                correction[(i, 0)] = -acc;
+                nominal[i] -= correction[(i, 0)];
+            }
+
+            // P⁺ = (I − K H) P.
+            let mut posterior = p;
+            for i in 0..N_STATE {
+                for j in 0..N_STATE {
+                    let mut acc = 0.0;
+                    for m in 0..M {
+                        acc += gain_t[(m, i)] * p.data[m][j];
+                    }
+                    posterior.data[i][j] -= acc;
+                }
+            }
+            posterior.symmetrize();
+            p = posterior;
+
+            checkpoints[k] = Checkpoint {
+                state: NavState::default(),
+                prior,
+                posterior,
+                correction,
+                transition: if k == 0 {
+                    StateMatrix::identity()
+                } else {
+                    phi
+                },
+            };
+            innovations[k] = nu;
+        }
+        (checkpoints, innovations)
+    }
+
+    /// The smoothed trajectory must be the batch maximum-a-posteriori estimate.
+    ///
+    /// For a linear-Gaussian system the fixed-interval smoother and the
+    /// least-squares fit over the whole run are the *same estimator*, so the
+    /// gradient of the batch objective must vanish at the smoother's answer.
+    /// Checking the gradient rather than solving the batch problem keeps the
+    /// reference independent of the thing being tested and needs no matrix
+    /// inversion: with `Q = qI` and `P₀ = p₀I` every weight is a reciprocal.
+    ///
+    /// This is the strongest statement available about the recursion, and it
+    /// is stronger than "the smoother beats the filter": that only bounds the
+    /// answer, while this pins it. Nothing published offers a smoothed
+    /// reference trajectory for a navigation dataset, and a residual against
+    /// the measurements being fitted would pass for a smoother that was
+    /// entirely wrong.
+    #[test]
+    fn the_smoothed_trajectory_is_the_batch_least_squares_solution() {
+        let (checkpoints, innovations) = linear_run();
+        let mut out = [blank(); EPOCHS];
+        smooth(&checkpoints, &mut out).unwrap();
+        let phi = transition();
+
+        // e⁻ₖ = eₖ + δₖ, the error before epoch k's update.
+        let before = |k: usize| -> StateVector {
+            let mut v = out[k].correction;
+            v += &checkpoints[k].correction;
+            v
+        };
+        // rₖ = e⁻ₖ₊₁ − Φ eₖ, the dynamics residual across the interval.
+        let residual = |k: usize| -> StateVector {
+            let mut r = before(k + 1);
+            r -= &phi.matmul(&out[k].correction);
+            r
+        };
+
+        let mut worst: f64 = 0.0;
+        let mut scale: f64 = 0.0;
+        for (k, innovation) in innovations.iter().enumerate() {
+            let e_before = before(k);
+            let mut g = StateVector::zeros();
+
+            // Measurement: HᵀR⁻¹(H e⁻ₖ + νₖ), which touches the first M states.
+            for (m, nu) in innovation.iter().enumerate() {
+                g[(m, 0)] += (e_before[(m, 0)] + nu) / R_SCALE;
+            }
+            // Prior, at the first epoch only.
+            if k == 0 {
+                for i in 0..N_STATE {
+                    g[(i, 0)] += e_before[(i, 0)] / P0_SCALE;
+                }
+            }
+            // Dynamics, from the interval before and the interval after.
+            if k > 0 {
+                let r = residual(k - 1);
+                for i in 0..N_STATE {
+                    g[(i, 0)] += r[(i, 0)] / Q_SCALE;
+                }
+            }
+            if k + 1 < EPOCHS {
+                let r = residual(k);
+                let pull = phi.transpose().matmul(&r);
+                for i in 0..N_STATE {
+                    g[(i, 0)] -= pull[(i, 0)] / Q_SCALE;
+                    scale = scale.max((pull[(i, 0)] / Q_SCALE).abs());
+                }
+            }
+            for i in 0..N_STATE {
+                worst = worst.max(g[(i, 0)].abs());
+            }
+        }
+        assert!(scale > 1.0, "the objective's terms should be substantial, got {scale:.3e}");
+        assert!(
+            worst < 1.0e-8 * scale,
+            "the smoothed trajectory is not the least-squares optimum: \
+             worst gradient {worst:.3e} against a term scale of {scale:.3e}"
+        );
     }
 
     #[test]
@@ -266,6 +512,33 @@ mod tests {
         smooth(&points, &mut out).unwrap();
         assert_eq!(out[0].state.pva.position.height, 0.0);
         assert_eq!(out[0].state.pva.velocity.to_vec3().norm(), 0.0);
+    }
+
+    /// A backward pass that improves the states and leaves the covariance
+    /// alone passes every other test here: the trajectory is better, the
+    /// covariance has not grown, it is still symmetric and positive definite,
+    /// and a NEES band wide enough for an ordinarily imperfect filter accepts
+    /// the result. Only requiring the covariance to *shrink* catches it.
+    ///
+    /// It must shrink, because the smoother has strictly more information than
+    /// the filter at every epoch but the last.
+    #[test]
+    fn smoothing_strictly_reduces_the_covariance_where_information_was_added() {
+        let mut points = [checkpoint(1.0, 2.5, 0.0); 8];
+        for (i, p) in points.iter_mut().enumerate() {
+            p.correction[(0, 0)] = 0.1 * i as f64;
+        }
+        let mut out = [blank(); 8];
+        smooth(&points, &mut out).unwrap();
+        // Every epoch but the last has future measurements behind it.
+        for k in 0..points.len() - 1 {
+            let filtered: f64 = (0..N_STATE).map(|i| points[k].posterior.data[i][i]).sum();
+            let smoothed: f64 = (0..N_STATE).map(|i| out[k].covariance.data[i][i]).sum();
+            assert!(
+                smoothed < 0.999 * filtered,
+                "epoch {k}: the covariance did not shrink, {filtered:.6} to {smoothed:.6}"
+            );
+        }
     }
 
     #[test]
