@@ -57,6 +57,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod range;
 #[cfg(feature = "alloc")]
 pub mod smoother;
 pub mod config;

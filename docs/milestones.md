@@ -520,16 +520,27 @@ Each step is gated on a measurement rather than on the previous one compiling.
       the measurement models moved below the boundary so the desktop tooling
       exercises the same code the target runs.
       *Gate:* NEES and replay run against a `no_std` build of the filter.
-- [ ] **Tight coupling** — pseudorange and Doppler per satellite, receiver clock
-      states, working below four satellites. Its own milestone; needs ephemeris
-      and orbit/clock computation that does not exist here yet, and
-      [adr/0003](adr/0003-interop-boundary.md) keeps the AGPL option off the
-      default path.
-      *Gate:* GSDC urban-canyon segments, where loose coupling currently gains
-      nothing.
-- [ ] **RTS smoothing**, desktop only. Needs the stored forward history, hence
-      allocation.
-      *Gate:* smoothed NEES against filtered, on the synthetic campaign.
+- [x] **Tight coupling** — per-satellite pseudoranges, single-differenced within
+      each constellation so no clock states are needed and the footprint is
+      unchanged. In [`range`](../crates/drifters-filter/src/range.rs), `no_std`
+      and allocation-free, with per-row Huber reweighting in
+      [`Eskf::robustify`] because a chi-squared gate is all-or-nothing and one
+      non-line-of-sight return should cost a satellite rather than an epoch.
+      *Gate:* the one in [adr/0009](adr/0009-local-first-architecture.md) could
+      not be run — every GSDC epoch has 25+ satellites — so it became a
+      sky-thinning sweep. Tight wins below about twenty satellites, by 51 % at
+      twelve and by two orders of magnitude at eight, where the loose filter
+      diverges outright. It loses at full sky, 54 % worse out of sample.
+- [x] **RTS smoothing**, behind the additive `alloc` feature. In
+      [`smoother`](../crates/drifters-filter/src/smoother.rs). The backward
+      pass allocates nothing — it writes into a caller-provided slice — so only
+      recording the forward pass needs the feature, and the engine footprint is
+      unchanged by default.
+      *Gate:* passed. Against generated truth it halves the horizontal error,
+      and smoothed NEES lands at 9.6–14.7 against an expected 9 where the
+      filter itself reads 21–37. Also checked against the batch least-squares
+      solution, which for a linear-Gaussian system is the same estimator, and
+      mutation-tested — see [testing.md](testing.md).
 
 **Why now.** The four findings are in [adr/0009](adr/0009-local-first-architecture.md)
 in full: `f32` is blocked by the *frame* rather than by the filter; the

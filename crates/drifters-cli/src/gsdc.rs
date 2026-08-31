@@ -469,6 +469,15 @@ pub struct GnssOptions {
     pub position: PositionSource,
     /// A reference station and how to use it, for differential corrections.
     pub base: Option<(crate::rinex::Base, crate::differential::Settings)>,
+    /// Keep only this many satellites per epoch, the highest in the sky.
+    ///
+    /// A diagnostic. Every epoch of every GSDC trace has twenty-five or more
+    /// satellites, so the dataset cannot exercise a filter's behaviour when
+    /// the sky is poor — which is the case tight coupling exists for.
+    /// Thinning the sky constructs it. Applied before anything else reads the
+    /// observations, so every path downstream sees the same restricted sky and
+    /// the comparison stays about the estimator.
+    pub max_satellites: Option<usize>,
 }
 
 impl Default for GnssOptions {
@@ -478,6 +487,7 @@ impl Default for GnssOptions {
             velocity: VelocitySource::None,
             position: PositionSource::File,
             base: None,
+            max_satellites: None,
         }
     }
 }
@@ -499,6 +509,7 @@ pub fn read_gnss(
         velocity,
         position: source,
         base: differential,
+        max_satellites,
     } = options;
     let (sigma, velocity, source) = (*sigma, *velocity, *source);
     let file = File::open(path)?;
@@ -686,6 +697,20 @@ pub fn read_gnss(
         }
     }
 
+    if let Some(&keep) = max_satellites.as_ref() {
+        for e in epochs.iter_mut() {
+            if e.ranges.len() <= keep {
+                continue;
+            }
+            // Highest first, then truncate: everything that degrades a
+            // pseudorange degrades toward the horizon, so a thinned sky should
+            // be the sky a receiver would still be tracking.
+            e.ranges
+                .sort_by(|a, b| b.elevation.total_cmp(&a.elevation));
+            e.ranges.truncate(keep);
+        }
+    }
+
     let quality: Vec<Option<crate::wls::Solution>> = epochs
         .iter()
         .map(|e| match source {
@@ -700,6 +725,15 @@ pub fn read_gnss(
         .zip(&quality)
         .map(|(e, q)| q.map_or(e.position, |q| q.position.to_lla()))
         .collect();
+    // Whether *this* epoch's satellites produced a solution, as against
+    // falling back to the column the file shipped. It matters only when the
+    // sky has been thinned: the file's solution was computed from the whole
+    // sky, so falling back to it would compare an estimator working with four
+    // satellites against one that had thirty, and the fallback is silent.
+    let solved: Vec<bool> = match (max_satellites, source) {
+        (Some(_), PositionSource::Solve(_)) => quality.iter().map(Option::is_some).collect(),
+        _ => vec![true; epochs.len()],
+    };
 
     // Then the carrier-phase position changes, one per adjacent pair.
     // `deltas[i]` spans epoch `i` to `i + 1`.
@@ -764,7 +798,15 @@ pub fn read_gnss(
         let mut fix = GnssFix {
             time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
             position,
-            position_std: sigma,
+            // An epoch too thin to solve carries no position, which is the
+            // whole case tight coupling exists for. Expressed as an
+            // effectively infinite sigma rather than a dropped fix, so the
+            // epoch still carries its velocity and the two paths stay aligned.
+            position_std: if solved[i] {
+                sigma
+            } else {
+                Vec3::splat(1.0e6)
+            },
             velocity: None,
             velocity_std: Vec3::ZERO,
         };

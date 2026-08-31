@@ -320,7 +320,10 @@ pub mod chi_squared {
     pub const P99: [F; 7] = [0.0, 6.635, 9.210, 11.345, 13.277, 15.086, 16.812];
     /// 99.9th percentile — the recommended default. Catches gross outliers
     /// while almost never rejecting a good measurement.
-    pub const P999: [F; 7] = [0.0, 10.828, 13.816, 16.266, 18.467, 20.515, 22.458];
+    pub const P999: [F; 17] = [
+        0.0, 10.828, 13.816, 16.266, 18.467, 20.515, 22.458, 24.322, 26.124, 27.877, 29.588,
+        31.264, 32.909, 34.528, 36.123, 37.697, 39.252,
+    ];
 }
 
 /// The running filter state: the error-state estimate and its covariance.
@@ -586,6 +589,50 @@ impl Eskf {
         self.covariance += &krkt;
         self.covariance.symmetrize();
         Ok(true)
+    }
+
+    /// Down-weight rows of a measurement whose innovations are too large to
+    /// believe, against the covariance the filter currently holds.
+    ///
+    /// A chi-squared gate is all-or-nothing: one bad row and the whole
+    /// measurement goes, including every good row beside it. That is the right
+    /// treatment for a three-component position fix, whose components fail
+    /// together, and the wrong one for a measurement carrying one row per
+    /// satellite — a single non-line-of-sight return should cost that
+    /// satellite, not the epoch.
+    ///
+    /// Each row's normalised innovation `z = |ν| / √Sᵢᵢ` is compared against
+    /// `huber`; beyond it the row's variance is scaled by `(z/k)²`, the
+    /// standard reweighting, which reduces the row's influence as `1/z` rather
+    /// than removing it. Rows that fit are untouched, and `huber ≤ 0` is a
+    /// no-op.
+    ///
+    /// Only the diagonal is scaled. Correlations between rows are a property
+    /// of how the measurement was formed — for single-differenced
+    /// pseudoranges, a shared reference satellite — and are left alone.
+    pub fn robustify<const M: usize>(&self, m: &mut crate::measurement::Measurement<M>, huber: F) {
+        if !huber.is_finite() || huber <= 0.0 {
+            return;
+        }
+        for row in 0..M {
+            // Sᵢᵢ = hᵢ P hᵢᵀ + Rᵢᵢ, the diagonal only: the whole innovation
+            // covariance is not needed to ask whether one row is plausible.
+            let mut variance = m.noise[(row, row)];
+            for i in 0..N_STATE {
+                let mut acc = 0.0;
+                for j in 0..N_STATE {
+                    acc += self.covariance.data[i][j] * m.jacobian[(row, j)];
+                }
+                variance += m.jacobian[(row, i)] * acc;
+            }
+            if !variance.is_finite() || variance <= 0.0 {
+                continue;
+            }
+            let z = m.innovation[(row, 0)].abs() / variance.sqrt();
+            if z > huber {
+                m.noise[(row, row)] *= (z / huber) * (z / huber);
+            }
+        }
     }
 
     /// Take the accumulated error state and reset it to zero.

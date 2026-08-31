@@ -252,3 +252,61 @@ file's solution, with `--sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale
 300`; they are correct for that configuration and are left as measured. The
 refit that the better GNSS forced, and the four-trace holdout under it, are in
 [gsdc-observables.md](gsdc-observables.md#in-the-rust-replay-and-what-it-does-to-the-filters).
+
+## Tight coupling, and why this dataset cannot judge it
+
+[`range`](../crates/drifters-filter/src/range.rs) feeds the filter per-satellite
+pseudoranges instead of a position fix. It differences them within each
+constellation rather than estimating receiver-clock states, which keeps the
+21-state filter and its 4 944-byte footprint exactly as they were — see
+[adr/0009](adr/0009-local-first-architecture.md) for why that trade was made
+against the ADR's original proposal.
+
+**On the four traces as delivered it is worse**: 2.729 → 4.198 out of sample,
+54 % worse. That result is real and is not the whole story.
+
+Every epoch of all four traces has **twenty-five or more satellites** — 5 293
+epochs, no exceptions. These are open-sky Bay Area drives. The case tight
+coupling exists for, where a snapshot solver has too little to work with, never
+occurs, so the aggregate measures the case it was not built for.
+
+Thinning the sky to the `n` highest satellites, with both paths given the same
+restricted observations:
+
+| satellites | A loose | A tight | C loose | C tight |
+|---|---|---|---|---|
+| 6 | 51.75 | **41.79** | 19.05 | **13.26** |
+| 8 | **1449.7** | **10.12** | 7.58 | 8.92 |
+| 10 | 76.11 | **7.29** | 7.66 | 7.67 |
+| 12 | 9.32 | **4.60** | 6.92 | **5.51** |
+| 16 | 5.54 | **3.80** | 5.96 | **4.20** |
+| 20 | 4.04 | **3.42** | 3.36 | 3.36 |
+| full | 3.47 | 3.32 | **2.52** | 3.35 |
+
+At eight satellites on trace A the solver fails outright, the loose filter goes
+unaided for long stretches and **diverges to 1 450 m**; the tight filter holds
+10 m. The crossover is around twenty satellites and the ordering is consistent
+on the held-out trace.
+
+Two things had to be right before any of that worked, and both are worth
+recording because neither is about tight coupling as such.
+
+**The batch solver's weights are the wrong weights for a filter.** A
+least-squares fit is scale-invariant, so `wls` only ever needed the *relative*
+sizes right; `σ = 0.3 + 16/sin(el)` is fine there and tells a filter that a
+zenith pseudorange is good to 16 m. Used directly it reads NIS 1.4 while barely
+correcting anything. Refitting the absolute scale on trace A gives
+`0.06 + 3.2/sin(el)`, against the 2.55 m measured above 60°.
+
+**A chi-squared gate is the wrong robustness for a per-satellite measurement.**
+It is all-or-nothing: one bad row discards the epoch and every good row with
+it. That is right for a three-component position fix, whose components fail
+together, and wrong here — a non-line-of-sight return should cost its satellite.
+[`Eskf::robustify`] down-weights each row against its own predicted innovation
+variance. Without it the score is 3.79 and NIS 36; with it, 3.31 and NIS 11.
+
+**Below seven satellites the single-difference formulation degrades too**, and
+that is a limitation of this design rather than of tight coupling. Differencing
+needs two satellites in one constellation, so four satellites spread across
+four constellations produce no measurement at all, where clock states would
+still have extracted something from each.

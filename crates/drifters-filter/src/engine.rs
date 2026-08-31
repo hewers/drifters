@@ -17,7 +17,9 @@ use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
-use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, StateMatrix, StateVector, V_ID};
+use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, StateVector, V_ID};
+#[cfg(feature = "alloc")]
+use crate::state::StateMatrix;
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SA_ID, SG_ID};
 
@@ -472,6 +474,39 @@ impl GinsEngine {
     /// Apply a height update. `height` is above the WGS-84 **ellipsoid**.
     pub fn apply_height(&mut self, height: F, sigma: F) -> Result<bool, FilterError> {
         let m = measurement::height(&self.state.pva, height, sigma);
+        self.apply(&m)
+    }
+
+    /// Apply a tightly-coupled GNSS update from per-satellite pseudoranges.
+    ///
+    /// `M` is how many single differences the update carries; see
+    /// [`crate::range`] for why differences rather than raw ranges, and what
+    /// happens when fewer than `M` are available.
+    ///
+    /// Returns `false` when no constellation had two usable satellites, or
+    /// when the update failed its chi-squared gate. Unlike [`add_gnss`] this
+    /// does not need a position solution, so it keeps working in the case that
+    /// motivates tight coupling: fewer satellites in view than a solver needs.
+    ///
+    /// [`add_gnss`]: GinsEngine::add_gnss
+    pub fn apply_pseudoranges<const M: usize>(
+        &mut self,
+        observations: &[crate::range::RangeObservation],
+        huber: F,
+    ) -> Result<bool, FilterError> {
+        let Some(mut m) = crate::range::single_differences::<M>(
+            &self.state.pva,
+            self.options.antenna_lever_arm,
+            observations,
+        ) else {
+            return Ok(false);
+        };
+        // Per-row, before the update. A pseudorange tail reaches hundreds of
+        // metres, and the loose path's robustness comes from the
+        // iteratively-reweighted solve that produced its position fix — which
+        // tight coupling does without. Without this the filter averages
+        // non-line-of-sight returns straight into the state.
+        self.filter.robustify(&mut m, huber);
         self.apply(&m)
     }
 

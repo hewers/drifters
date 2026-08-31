@@ -204,6 +204,63 @@ path, so this is either a permissive dependency or work to be done here. **This
 is the biggest item in the plan and should be scheduled as its own milestone,
 not folded into the others.**
 
+### Amended after building it
+
+Three things in the paragraph above turned out to be wrong.
+
+**The ephemeris cost is not there.** The GSDC files supply
+`SvPosition*EcefMeters` and `SvClockBiasMeters` per satellite per epoch, as
+[gsdc-observables.md](../gsdc-observables.md) records. Any receiver reporting
+raw pseudoranges generally reports these beside them, so the orbit and clock
+work belongs to whoever produced the observations. Tight coupling here is
+geometry and weighting, and it cost a 300-line module.
+
+**Clock states were the wrong design.** The number of them depends on which
+constellations are in view, and a fixed-size filter must then carry the worst
+case always — against a crate whose argument is a 4 944-byte engine.
+[`range`](../../crates/drifters-filter/src/range.rs) differences the ranges
+within each constellation instead, against that constellation's highest
+satellite. That cancels the receiver clock and the inter-system bias exactly,
+adds no states, and leaves the footprint untouched. It costs one satellite per
+constellation and correlates the rows, which the dense noise matrix carries.
+
+**The gate could not be run as written.** It named "GSDC urban-canyon segments,
+where loose coupling currently gains nothing" — and **every epoch of all four
+traces has twenty-five or more satellites**, 5 293 of them, without exception.
+These are open-sky drives. The dataset cannot exercise the case tight coupling
+exists for, so the gate was replaced by constructing it: thin the sky to the
+`n` highest satellites, feeding both paths the same restricted observations,
+and sweep `n`.
+
+Competition score, trace A and the held-out trace C:
+
+| satellites | A loose | A tight | C loose | C tight |
+|---|---|---|---|---|
+| 6 | 51.75 | **41.79** | 19.05 | **13.26** |
+| 8 | **1449.7** | **10.12** | 7.58 | 8.92 |
+| 10 | 76.11 | **7.29** | 7.66 | 7.67 |
+| 12 | 9.32 | **4.60** | 6.92 | **5.51** |
+| 16 | 5.54 | **3.80** | 5.96 | **4.20** |
+| 20 | 4.04 | **3.42** | 3.36 | 3.36 |
+| full sky | 3.47 | 3.32 | **2.52** | 3.35 |
+
+The decision turns on sky density, and the ADR's claim holds where it said it
+would. At eight satellites on trace A the snapshot solver fails, the loose
+filter receives nothing for long stretches and **diverges to 1 450 m**, while
+the tight filter holds 10 m. At full sky the order reverses: over the four
+traces as delivered, tight is 54 % *worse* out of sample, because a robust
+iteratively-reweighted solve over twenty-five satellites forms a better
+position than the filter forms from raw ranges. Innovation-based reweighting
+judges a satellite against a prediction that is itself uncertain, where the
+batch solve judges it against a converged answer.
+
+**Below seven satellites the single-difference formulation degrades too**, and
+that one is a genuine limitation of the choice made here rather than of tight
+coupling. Differencing needs two satellites in one constellation; four
+satellites spread across four constellations yield no measurement at all, where
+clock states would still have extracted information from each. If that regime
+matters more than the footprint, the trade should be revisited.
+
 **RTS smoothing** is desktop-only because it needs the stored forward history,
 which needs allocation. That placement is not merely pragmatic: the reverse-pass
 failure recorded above is the direct evidence that a backward *filter* is the
@@ -253,8 +310,10 @@ Each step is gated on a measurement, not on the previous one compiling.
 4. **Crate restructure**, measurement models moved below the `std` boundary.
    Gate: the NEES and replay harnesses run against a `no_std` build of the
    filter.
-5. **Tight coupling.** Its own milestone. Gate: GSDC urban-canyon segments, where
-   loose coupling currently gains nothing.
+5. **Tight coupling.** Done — see the amendment above. The gate as written was
+   unrunnable, because every GSDC epoch has 25+ satellites; it became a
+   sky-thinning sweep, which tight coupling passes below about twenty
+   satellites and fails at full sky.
 6. **RTS smoothing**, desktop only. Gate: smoothed NEES against filtered, on the
    synthetic campaign where truth is exact.
 

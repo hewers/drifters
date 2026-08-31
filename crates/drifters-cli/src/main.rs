@@ -181,6 +181,8 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             },
             raw_ranges: args.iter().any(|a| a == "--raw-ranges"),
             base: flag(args, "--base").map(PathBuf::from),
+            tight: args.iter().any(|a| a == "--tight"),
+            max_satellites: flag(args, "--max-satellites").and_then(|v| v.parse().ok()),
             alpha,
         },
         quiet,
@@ -199,8 +201,8 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== position error against ground truth (metres) ===");
     println!(
-        "{:<26} {:>9} {:>9} {:>9} {:>9}",
-        "", "horiz RMS", "vert RMS", "horiz max", "score"
+        "{:<26} {:>9} {:>9} {:>9} {:>8} {:>8} {:>9}",
+        "", "horiz RMS", "vert RMS", "horiz max", "p50", "p95", "score"
     );
     /// One row of the error table: what to call it, the error against truth,
     /// and its per-epoch horizontal error for the order statistics.
@@ -226,11 +228,16 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
     for (name, e, horizontal) in rows {
         let errors: Vec<f64> = horizontal.iter().map(|&(_, m)| m).collect();
+        // The score's two halves, because they move independently and a
+        // change that improves one while worsening the other is a different
+        // result from one that improves neither.
         println!(
-            "{name:<26} {:>9.3} {:>9.3} {:>9.3} {:>9.3}",
+            "{name:<26} {:>9.3} {:>9.3} {:>9.3} {:>8.3} {:>8.3} {:>9.3}",
             e.horizontal.rms(),
             e.down.rms(),
             e.horizontal.max(),
+            drifters_cli::stats::percentile(&errors, 0.50),
+            drifters_cli::stats::percentile(&errors, 0.95),
             drifters_cli::stats::gsdc_score(&errors),
         );
     }
@@ -251,6 +258,36 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             drifters_cli::stats::percentile(h, 0.95),
             v.horizontal.max(),
         );
+    }
+    if !report.filter_satellites.is_empty()
+        && report.filter_satellites.len() == report.filter_horizontal.len()
+    {
+        // Tight coupling exists for the epochs where the sky is poor, so the
+        // aggregate cannot answer whether it works: a trace that is mostly
+        // open sky averages away the case it was built for.
+        println!("\nfilter horizontal error by satellites in view (metres):");
+        println!("{:<14} {:>7} {:>9} {:>9} {:>9}", "satellites", "n", "median", "p95", "max");
+        for (lo, hi) in [(0usize, 15usize), (15, 20), (20, 25), (25, 100)] {
+            let mut errors: Vec<f64> = report
+                .filter_satellites
+                .iter()
+                .zip(&report.filter_horizontal)
+                .filter(|(n, _)| **n >= lo && **n < hi)
+                .map(|(_, (_, e))| *e)
+                .collect();
+            if errors.len() < 10 {
+                continue;
+            }
+            errors.sort_by(f64::total_cmp);
+            println!(
+                "{:<14} {:>7} {:>9.3} {:>9.3} {:>9.3}",
+                format!("{lo}-{}", if hi == 100 { "".to_string() } else { hi.to_string() }),
+                errors.len(),
+                drifters_cli::stats::percentile(&errors, 0.50),
+                drifters_cli::stats::percentile(&errors, 0.95),
+                errors[errors.len() - 1],
+            );
+        }
     }
     if !report.range_residual.is_empty() {
         // Broken out by elevation because the aggregate cannot answer the

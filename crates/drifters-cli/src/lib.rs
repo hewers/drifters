@@ -397,6 +397,13 @@ pub struct GsdcReport {
     pub gnss_velocity_horizontal: Vec<f64>,
     /// See [`GsdcReport::gnss_horizontal`].
     pub filter_horizontal: Vec<(f64, f64)>,
+    /// Usable satellites at each epoch, matching [`Self::filter_horizontal`].
+    ///
+    /// Tight coupling is supposed to earn its place where the sky is poor, so
+    /// the aggregate cannot answer the question it was built for: an average
+    /// over a trace that is mostly open sky is an average over the case it was
+    /// not for.
+    pub filter_satellites: Vec<usize>,
     /// See [`GsdcReport::gnss_horizontal`].
     pub eqf_horizontal: Vec<(f64, f64)>,
     /// Per-epoch trace for plotting.
@@ -437,6 +444,12 @@ pub struct GsdcOptions {
     /// A reference station's RINEX observation file, for differential
     /// corrections. See [`differential`].
     pub base: Option<std::path::PathBuf>,
+    /// Feed the ESKF per-satellite pseudoranges instead of a position fix.
+    /// See [`drifters_filter::range`].
+    pub tight: bool,
+    /// Diagnostic: thin the sky to this many satellites per epoch. See
+    /// [`gsdc::GnssOptions::max_satellites`].
+    pub max_satellites: Option<usize>,
     /// GCU convergence rate for the EqF. See [`crate::eqf`].
     pub alpha: f64,
 }
@@ -454,6 +467,8 @@ pub fn run_gsdc(
         velocity,
         raw_ranges,
         base,
+        tight,
+        max_satellites,
         alpha,
     } = options;
     let base = match base {
@@ -489,6 +504,7 @@ pub fn run_gsdc(
                 gsdc::PositionSource::File
             },
             base,
+            max_satellites,
         },
     )?;
     if corrected > 0 && !quiet {
@@ -565,6 +581,7 @@ pub fn run_gsdc(
         rts_horizontal: Vec::new(),
         smoothed: None,
         smoothed_horizontal: Vec::new(),
+        filter_satellites: Vec::new(),
         gnss_horizontal: Vec::new(),
         filter_horizontal: Vec::new(),
         eqf_horizontal: Vec::new(),
@@ -644,8 +661,70 @@ pub fn run_gsdc(
                 report.gnss_velocity_count += 1;
             }
 
-            engine.add_gnss(fix);
+            // Tight coupling consumes the ranges the epoch was solved from,
+            // so a position solution is never formed. Velocity still arrives
+            // loosely: it is a different observable, and the carrier-phase
+            // solve is better than anything these ranges would give.
+            if tight {
+                let mut without_position = fix;
+                without_position.position_std = drifters_core::math::Vec3::splat(1.0e6);
+                engine.add_gnss(without_position);
+            } else {
+                engine.add_gnss(fix);
+            }
             engine.add_imu(*sample)?;
+            if tight {
+                if let Some((_, obs)) = ranges.get(next - 1) {
+                    let mut tracked: Vec<drifters_filter::range::RangeObservation> =
+                        Vec::with_capacity(obs.len());
+                    // Not the batch solver's weights. A least-squares fit is
+                    // scale-invariant, so `wls` only ever needed the *relative*
+                    // sizes right; a filter weighs a measurement against its own
+                    // covariance and needs the absolute size. Using the batch
+                    // values directly leaves the filter believing a zenith
+                    // pseudorange is good to 16 m, and it reads NIS 1.4 while
+                    // barely correcting anything.
+                    //
+                    // Fitted on trace A, holding B, C and D out: sigma =
+                    // 0.06 + 3.2/sin(el) metres, so 3.3 m at zenith against the
+                    // 2.55 m measured there, and deliberately optimistic toward
+                    // the horizon because the Huber weighting below is what
+                    // handles that tail.
+                    let set = crate::wls::Settings {
+                        sigma_a: 0.06,
+                        sigma_b: 3.2,
+                        ..crate::wls::Settings::default()
+                    };
+                    for o in obs {
+                        // The same elevation mask the batch solver applies.
+                        // Everything below it is the 25-35 m multipath
+                        // population, and a filter has no way to discover that
+                        // an observation is bad before it has used it.
+                        if o.elevation < set.mask {
+                            continue;
+                        }
+                        tracked.push(drifters_filter::range::RangeObservation {
+                            constellation: o.constellation,
+                            satellite: drifters_core::math::Vec3::new(
+                                o.satellite[0],
+                                o.satellite[1],
+                                o.satellite[2],
+                            ),
+                            pseudorange: o.pseudorange,
+                            // The elevation weighting the batch solver uses, so
+                            // the two paths disagree about the estimator rather
+                            // than about the measurements.
+                            sigma: crate::robust::elevation_sigma(
+                                o.elevation,
+                                set.sigma_a,
+                                set.sigma_b,
+                            ),
+                        });
+                    }
+                    // 1.5 sigma, the same threshold the batch solver settled on.
+                    engine.apply_pseudoranges::<16>(&tracked, 1.5)?;
+                }
+            }
             report.processed += 1;
 
             match engine.last_nis() {
@@ -670,6 +749,16 @@ pub fn run_gsdc(
                 report
                     .filter_horizontal
                     .push((t, solution.ned_from(r).horizontal_norm()));
+                // Satellites above the mask, which is what either path had to
+                // work with at this epoch.
+                report.filter_satellites.push(
+                    ranges
+                        .get(next - 1)
+                        .map(|(_, obs)| {
+                            obs.iter().filter(|o| o.elevation >= 10.0).count()
+                        })
+                        .unwrap_or(0),
+                );
             }
             let ned = solution.ned_from(anchor);
             let residual = engine.antenna_position().ned_from(fix.position);
@@ -843,6 +932,8 @@ pub fn tune_gsdc(
                 velocity: gsdc::VelocitySource::Doppler,
                 raw_ranges,
                 base: None,
+                tight: false,
+                max_satellites: None,
                 alpha,
             },
             true,
