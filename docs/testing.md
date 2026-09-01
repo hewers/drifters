@@ -349,10 +349,43 @@ harness therefore reports stack and size and takes **no** timing measurement,
 rather than publishing a number that cannot be supported.
 
 The trap specific to this project: Cortex-M4F's FPU is **single precision**, and
-`drifters` uses `f64` throughout. Every float operation on that target is
-software-emulated, which is the dominant cost on real hardware and completely
-invisible under emulation. Timing claims need real silicon — that work is not
-done, and nothing in this repository claims otherwise.
+Timing claims need real silicon — that work is not done, and nothing in this
+repository claims otherwise.
+
+**Instructions retired can be measured, though, and they answer the useful
+half.** `qemu-system-arm -icount shift=0` advances the virtual clock one tick
+per instruction, so SysTick counts instructions; the harness reports
+`INSTRUCTIONS add_imu` under that flag and garbage without it. It cannot see
+pipeline stalls, flash wait states or FPU latency, so it is not a cycle count.
+What it measures exactly is how much *work* a change removes — and on a part
+whose FPU is single-precision, that is the whole soft-float question, since an
+`__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
+
+```bash
+cd cortex-m-harness && cargo run --release -- -icount shift=0
+```
+
+Measured per `add_imu` on `mps2-an386`:
+
+| configuration | instructions |
+|---|---|
+| 21-state, `f64` | 22 415 |
+| 21-state, `f32-covariance` | **13 238** |
+| 15-state (`reduced-state`) | **7 269** |
+
+So the single-precision covariance removes **41 %** of the work on this part,
+having cost nothing measurable in accuracy. Splitting the remainder by stubbing
+each stage out in turn:
+
+| component | scalar | instructions | share |
+|---|---|---|---|
+| covariance propagation (Thornton) | `f32` | 7 073 | 53 % |
+| earth-model latitude trigonometry | `f64` | 1 560 | 12 % |
+| transition matrix construction | `f64` | 1 396 | 11 % |
+| mechanization, state update, rest | `f64` | 3 209 | 24 % |
+
+That table is what a proposal to go further has to argue against, and it is
+worth having before the argument rather than after.
 
 ### Why this layer exists
 

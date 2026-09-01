@@ -203,6 +203,46 @@ fn main() -> ! {
 
     let peak = imu_step.max(zupt).max(height).max(gnss_step);
     hprintln!("");
+    // Instructions retired per `add_imu`, under `qemu -icount shift=0`.
+    //
+    // Only meaningful with that flag: `-icount shift=0` makes QEMU's virtual
+    // clock advance one tick per instruction, so SysTick counts instructions
+    // rather than time. Without it the number below is emulator wall-clock and
+    // means nothing — the runner in `.cargo/config.toml` does not pass it, so
+    // read this line only from an explicit `-icount` invocation. See
+    // docs/testing.md Layer 9.
+    //
+    // Not a cycle count. It cannot see pipeline stalls, flash wait states or
+    // the FPU's latencies, so it will not tell you how long anything takes.
+    // What it does measure exactly is how much *work* a change removes, which
+    // is what distinguishes soft-float from hardware: an `__aeabi_dmul` is tens
+    // of instructions and a `vmul.f32` is one. That is the question M9 could
+    // not answer without a board, and this answers the useful half of it.
+    {
+        let p = cortex_m::Peripherals::take();
+        if let Some(mut p) = p {
+            let syst = &mut p.SYST;
+            use cortex_m::peripheral::syst::SystClkSource;
+            syst.set_clock_source(SystClkSource::Core);
+            syst.set_reload(0x00FF_FFFF);
+            syst.clear_current();
+            syst.enable_counter();
+
+            // Warm, then measure a fixed batch.
+            for k in 0..50 {
+                let _ = engine.add_imu(sample(1.0 + 0.005 * k as f64));
+            }
+            let start = cortex_m::peripheral::SYST::get_current();
+            for k in 0..500 {
+                let _ = engine.add_imu(sample(2.0 + 0.005 * k as f64));
+            }
+            let end = cortex_m::peripheral::SYST::get_current();
+            // SysTick counts down.
+            let ticks = start.wrapping_sub(end) & 0x00FF_FFFF;
+            hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", ticks / 500);
+        }
+    }
+
     hprintln!("PEAK                           {}", peak);
 
     // A sanity check that the numbers above describe real work: the filter must
