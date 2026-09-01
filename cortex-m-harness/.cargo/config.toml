@@ -1,8 +1,11 @@
 [build]
 target = "thumbv7em-none-eabihf"
 
+# The linker script is applied by `build.rs`, not from here. `RUSTFLAGS`
+# replaces this table's `rustflags` key wholesale rather than appending to it,
+# so a caller that sets it — CI sets `-D warnings` — would drop the linker
+# script and produce firmware that locks up on boot. See `build.rs`.
 [target.thumbv7em-none-eabihf]
-rustflags = ["-C", "link-arg=-Tlink.x"]
 # `cargo run --release` boots the firmware under QEMU. AN386 is the Cortex-M4
 # FPGA image; swap to `mps2-an500 -cpu cortex-m7` for Cortex-M7.
 runner = """qemu-system-arm \

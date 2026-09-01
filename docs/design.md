@@ -208,13 +208,26 @@ filter to 15 states. Every matrix halves, and so does the stack:
 
 Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
 
-The two peak-stack figures are M8's, measured under QEMU before the covariance
-was factored, and have not been re-measured here — this machine has no QEMU, and
-CI is where that number comes from. They should be read as an upper bound rather
-than as current: the peak is set by `predict`'s four live `N_STATE`-square
-temporaries, 14 112 bytes at 21 states, which dominate a covariance of 1 848
-either way. CI re-measures the peak on every run against a 20 KiB ceiling, at
-both precisions.
+The peak-stack figures above are M8's. Re-measured under QEMU after the
+covariance was factored:
+
+| | `add_imu` | `apply_zupt` | peak |
+|---|---|---|---|
+| 21-state, `f64` | 16 528 | 18 904 | **18 904** |
+| 21-state, `f32-covariance` | 12 840 | 17 976 | **17 976** |
+| 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
+
+`f32-covariance` takes 22 % off `add_imu`, because Thornton's working array is
+the largest single object on that frame and it halves. It barely moves
+`apply_zupt`, because the held-state path works densely in `f64` regardless.
+
+The peak is now the **held-state update**, not `predict`. That path materialises
+`P` from the factors, applies the Joseph form to it and factors it back, so it
+carries three `StateMatrix` temporaries where the ordinary update carries none.
+A factored held-state update would remove it; Bierman's covariance update
+assumes an optimal gain and a held state is precisely a non-optimal one, so it
+cannot express this. CI re-measures the peak on every run against a 20 KiB
+ceiling, at both precisions.
 
 That is the difference between needing a 32 KiB task stack and fitting in
 16 KiB, which is what makes it the most useful lever available on a small part —

@@ -412,7 +412,14 @@ impl Eskf {
     /// which is the last point at which that can be detected — after this the
     /// factored form keeps it so by construction.
     pub fn set_covariance(&mut self, p: &StateMatrix) -> bool {
-        match Ud::from_covariance(p) {
+        let mut work = *p;
+        self.set_covariance_in_place(&mut work)
+    }
+
+    /// [`Self::set_covariance`], factoring in the caller's buffer rather than a
+    /// copy of it. `p` is left holding the factorisation's leftovers.
+    pub fn set_covariance_in_place(&mut self, p: &mut StateMatrix) -> bool {
+        match Ud::from_covariance_in_place(p) {
             Some(ud) => {
                 self.covariance = ud;
                 true
@@ -600,10 +607,27 @@ impl Eskf {
         if !self.covariance.is_healthy() {
             return Err(FilterError::Diverged);
         }
-        if !held.is_empty() {
-            return self.update_holding_dense(innovation, h, r, gate, held);
+        // Nothing but the dispatch lives in this frame. Both paths carry large
+        // stack temporaries and LLVM allocates a function's slots on entry, so
+        // a body here would be paid by whichever path was not taken — worth
+        // 6 KiB on the held-state path, which is the one already paying most.
+        if held.is_empty() {
+            self.update_factored(innovation, h, r, gate)
+        } else {
+            self.update_holding_dense(innovation, h, r, gate, held)
         }
+    }
 
+    /// The Bierman update: the ordinary path, for a measurement that holds
+    /// nothing.
+    #[inline(never)]
+    fn update_factored<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        gate: Option<F>,
+    ) -> Result<bool, FilterError> {
         // Bierman is scalar-sequential and assumes each row's noise is
         // independent of the others', so a dense `R` is whitened first: both
         // sides premultiplied by `L⁻¹`, which leaves rows of unit variance
@@ -680,6 +704,7 @@ impl Eskf {
     /// describing a filter that was not run. Refactoring afterwards costs an
     /// `O(n³/3)` sweep, which a zero-velocity update can afford and a
     /// per-sample propagation could not.
+    #[inline(never)]
     fn update_holding_dense<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -711,20 +736,27 @@ impl Eskf {
         let residual = *innovation - h.matmul(&self.dx);
         self.dx += k.matmul(&residual);
 
+        // Three `StateMatrix` temporaries were live here at once, which on the
+        // 21-state filter is 10 584 bytes of stack before counting `covariance`
+        // itself. `scratch` is dead after the Joseph product, so `K R Kᵀ` is
+        // computed into it afterwards rather than into a fourth buffer — the
+        // ordering is the only thing that changed.
         let mut scratch = StateMatrix::zeros();
         k.matmul_into(h, &mut scratch);
         let mut i_kh = StateMatrix::identity();
         i_kh -= &scratch;
 
-        let mut krkt = StateMatrix::zeros();
-        k.matmul(r).mul_transpose_into(&k, &mut krkt);
-
         i_kh.matmul_into(&covariance, &mut scratch);
         scratch.mul_transpose_into(&i_kh, &mut covariance);
-        covariance += &krkt;
+
+        k.matmul(r).mul_transpose_into(&k, &mut scratch);
+        covariance += &scratch;
         covariance.symmetrize();
 
-        if !self.set_covariance(&covariance) {
+        // Factoring in place: `covariance` is dead afterwards either way, and
+        // the copying form would put another 3 528 bytes on a frame that is
+        // already the deepest in the filter.
+        if !self.set_covariance_in_place(&mut covariance) {
             return Err(FilterError::Diverged);
         }
         Ok(true)

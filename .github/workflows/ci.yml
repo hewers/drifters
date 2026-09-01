@@ -238,6 +238,16 @@ jobs:
           targets: thumbv7em-none-eabihf
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      # Building is its own step so that "the harness does not compile" and
+      # "the harness overflowed its budget" are different red marks in the job
+      # list. They were the same one for three weeks; see docs/testing.md.
+      - name: build the harness in every configuration
+        working-directory: cortex-m-harness
+        run: |
+          cargo build --release
+          cargo build --release --features reduced-state
+          cargo build --release --features f32-covariance
+          cargo build --release --bin panic_audit
       - name: run harness under QEMU
         working-directory: cortex-m-harness
         run: |
@@ -246,8 +256,13 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
           # Ceiling, not a target. 20 KiB leaves headroom over the measured
-          # 16.5 KiB while still failing if a change reintroduces the
+          # 18.5 KiB while still failing if a change reintroduces the
           # expression-chained form that cost 35.3 KiB.
+          #
+          # This job could not build for three weeks — `cargo run` went
+          # ambiguous when a second binary was added — and in that window the
+          # peak grew 63 % unnoticed. A job that fails to build is a job that
+          # measures nothing, so the build is now a separate step above.
           test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
       - name: the 15-state configuration must fit a 16 KiB stack
         working-directory: cortex-m-harness
@@ -257,7 +272,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 9 504 B.
+          # not. Measured at 10 464 B.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
@@ -266,8 +281,8 @@ jobs:
           cargo run --release --features f32-covariance | tee f32.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
-          # Halving the covariance cannot make the stack grow. Same ceiling as
-          # the default build, which this must come in under.
+          # Halving the covariance cannot make the stack grow, and on the
+          # predict path it shrinks it by 22 %. Measured at 17 976 B.
           test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness

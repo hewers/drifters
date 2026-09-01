@@ -366,6 +366,25 @@ matrix arithmetic written as expressions creates a temporary per subexpression,
 and how many survive is a question about the optimiser, not about the source.
 It has to be measured.
 
+### And the measurement has to actually run
+
+This job stopped building for three weeks and nobody noticed, because the
+failure looked like every other red job: `cargo run` became ambiguous when a
+second binary was added to the harness, and the step failed before QEMU started.
+In that window the factored covariance took the peak from 16 432 B to 26 764 B —
+a 63 % regression, past this job's own ceiling — and the guard that existed to
+catch exactly that was silent, because a job that cannot build measures nothing.
+
+Underneath it was a second failure of the same kind. The harness got its linker
+script from `.cargo/config.toml`'s `target.*.rustflags`, and cargo lets the
+`RUSTFLAGS` environment variable *replace* that key rather than add to it. CI
+sets `RUSTFLAGS: -D warnings` for the whole workflow, so in CI the firmware
+linked without its linker script: it built, warned `cannot find entry symbol
+_start`, and locked the core up on boot with `can't escalate 3 to HardFault`.
+The link argument now comes from `build.rs`, which `RUSTFLAGS` does not
+override. Both are one-line causes that a green checkmark would never have
+distinguished from a healthy run.
+
 ## Layer 10 — the data path links no panic machinery
 
 `cortex-m-harness/src/bin/panic_audit.rs` is a firmware binary containing only

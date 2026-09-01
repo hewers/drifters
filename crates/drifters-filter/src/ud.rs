@@ -119,9 +119,20 @@ impl Ud {
     /// at which that can be true: everything downstream of here keeps `D`
     /// non-negative on its own.
     pub fn from_covariance(p: &StateMatrix) -> Option<Self> {
+        let mut work = *p;
+        Self::from_covariance_in_place(&mut work)
+    }
+
+    /// [`Self::from_covariance`], factoring in the caller's buffer.
+    ///
+    /// The sweep is destructive, so the copying variant above has to make one.
+    /// On a 21-state filter that copy is 3 528 bytes of stack, which matters on
+    /// the held-state update path where several `StateMatrix` temporaries are
+    /// already live at once. `p` is left holding the sweep's leftovers and must
+    /// be treated as consumed.
+    pub fn from_covariance_in_place(work: &mut StateMatrix) -> Option<Self> {
         // Upper-triangular Cholesky-like sweep, from the bottom right up, which
         // is the factorisation this form wants rather than the lower `L Lᵀ`.
-        let mut work = *p;
         let mut ud = Self {
             upper: [0.0; upper_len(N_STATE)],
             diagonal: [0.0; N_STATE],

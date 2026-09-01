@@ -253,6 +253,8 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 
 ### Stack
 
+As M8 left it:
+
 | operation | peak |
 |---|---|
 | `add_imu` (mechanize + predict) | 16 480 B |
@@ -262,6 +264,9 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 Down from a first measurement of **35 328 B**, against a documented *estimate*
 of ~11 000 B. Block-diagonal `Q`, in-place products and borrowing accumulation
 account for the 2.1× reduction, with bit-identical regression results.
+
+Re-measured after the factored covariance, which moved them — see
+[M14](#m14--local-first-architecture--proposed).
 
 ### Panic freedom
 
@@ -535,6 +540,27 @@ Each step is gated on a measurement rather than on the previous one compiling.
       remembering is that a dot product with a single accumulator is a
       dependency chain the compiler cannot vectorise. See
       [adr/0009](adr/0009-local-first-architecture.md).
+- [x] **Stack, re-measured after both.** The QEMU job had been failing to
+      *build* since M8 added a second binary to the harness, so nothing was
+      measured for three weeks and the factored covariance's effect on the
+      stack went unrecorded. It was a 63 % regression — 16 432 B to 26 764 B —
+      concentrated entirely in the update path, because the held-state update
+      has to materialise `P` from the factors, work on it densely, and factor
+      it back, and `update_inner` was reserving the Bierman path's locals
+      before branching to it. Splitting the two paths into separate frames and
+      removing two `StateMatrix` temporaries brought it to:
+
+      | configuration | `add_imu` | `apply_zupt` | peak |
+      |---|---|---|---|
+      | 21-state, `f64` | 16 528 | 18 904 | **18 904** |
+      | 21-state, `f32-covariance` | 12 840 | 17 976 | **17 976** |
+      | 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
+
+      `f32` takes 22 % off `add_imu` because Thornton's working array halves.
+      The remaining excess over M8's 16 432 is the held-state path's dense
+      round trip, which a factored held-state update would remove and Bierman
+      cannot express. Campaign results are bit-identical throughout.
+
 - [x] **Single-precision covariance**, `--features f32-covariance`, which the
       factored form is what made available: `cond(U√D) = √cond(P)`, so the 13.6
       digits ADR 0009 measured on raw `P` at fifteen minutes become 6.8, inside
