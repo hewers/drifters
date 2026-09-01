@@ -1,12 +1,15 @@
 # drifters — design
 
-A `no_std`, allocation-free error-state Kalman filter that fuses IMU, GNSS and
-auxiliary sensors into a pose (position, velocity, attitude) estimate, portable
-from a Cortex-M microcontroller to a Linux workstation.
+A `no_std`, allocation-free aided inertial navigation library that fuses IMU,
+GNSS and auxiliary sensors into an extended pose (position, velocity, attitude)
+estimate, portable from a Cortex-M microcontroller to a Linux workstation.
 
 The architecture follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS): a
-loosely-coupled 21-state error-state EKF over a local-level (NED) strapdown
-mechanization, with feedback correction after every measurement. KF-GINS is a
+21-state error-state EKF over a local-level (NED) strapdown mechanization, with
+feedback correction after every measurement. GNSS enters either as a position
+and velocity fix or as per-satellite pseudoranges; the covariance is held
+factored as `U D Uᵀ`; and a second estimator, the equivariant filter in
+`drifters-eqf`, runs the same interface over an `SE₂(3)` symmetry. KF-GINS is a
 teaching-grade reference implementation and its structure is well documented,
 which makes it a good thing to be *comparable to* — see
 [testing.md](testing.md) for the regression plan against its demo dataset.
@@ -21,16 +24,41 @@ which makes it a good thing to be *comparable to* — see
   formats, sockets, and threads live in separate crates.
 - Auditable numerics: every frame convention, unit and sign is stated in the
   type that carries it, and checked by a test.
-- Minimum dependencies. The `no_std` stack has exactly one: `libm`.
+- Minimum dependencies. `drifters-core` has exactly one, `libm`, and
+  `drifters-filter` and `drifters-eqf` add nothing to it. `drifters-proto` needs
+  `micropb` and `heapless` for the wire format; both are `no_std` and neither
+  allocates.
 
-**Non-goals (for now)**
+**Non-goals**
 
-- Tightly-coupled GNSS (per-satellite pseudorange/carrier observables). The
-  measurement interface is designed not to preclude it — see M7 — but the
-  initial target is loose coupling on a PVT solution.
-- Smoothing / batch optimisation. This is a causal, forward-only filter.
-- Orbital or high-dynamics regimes. The earth model and the Bowring geodetic
-  conversion are tuned for terrestrial navigation.
+- **Orbital and high-dynamics regimes.** The blocker is the mechanization, not
+  the arithmetic: a local-level NED frame carried by transport rate is a
+  surface parameterisation, and the gravity model is WGS-84 normal gravity on
+  the ellipsoid with no harmonic terms. The IMU error models are Gauss-Markov
+  processes with terrestrial correlation times. (Bowring is *not* the limit and
+  used to be named here as though it were — `lla_ecef_round_trips` holds it to
+  0.1 mm at 36 km altitude.)
+- **Factor graphs and full batch non-linear optimisation.** There is smoothing,
+  below, and a banded linear batch fit in `drifters-gnss`; neither is a general
+  back-end, and building one is not intended.
+- **GNSS attitude determination** from multiple antennas. One antenna, with a
+  configurable lever arm.
+
+**No longer non-goals.** Both of the following were listed here and have since
+been built, under [M14](milestones.md#m14--local-first-architecture--in-progress):
+
+- **Tightly-coupled GNSS.** [`range`](../crates/drifters-filter/src/range.rs)
+  takes per-satellite pseudoranges, single-differenced within each constellation
+  so no receiver-clock states are needed and the filter's footprint is
+  unchanged. It keeps working below the four satellites a position solution
+  needs, and wins below about twenty. Carrier phase is handled on the desktop
+  side, as time-differenced carrier phase in `drifters-gnss`, rather than in the
+  filter.
+- **Smoothing.** [`smoother`](../crates/drifters-filter/src/smoother.rs) is a
+  Rauch–Tung–Striebel backward pass, always compiled and allocation-free — it
+  writes into a caller-provided slice, so a bounded window is a fixed-lag
+  smoother that runs on the target. The filter itself is still causal and
+  forward-only; the smoother is a second pass over what the first recorded.
 
 ## Crate layout
 
@@ -39,25 +67,41 @@ accidentally pull in a host-only dependency.
 
 ```
 drifters-core      no_std, no alloc, deps: libm
-                   math (Matrix/Vec3/Quat), WGS-84 earth model, frames, time,
-                   sensor and state types
+                   math (Matrix/Vec3/Quat), WGS-84 earth model, frames, local
+                   frame, time, sensor and state types
         ▲
-        │
-drifters-filter    no_std, no alloc, deps: drifters-core
-                   INS mechanization, 21-state ESKF, the GinsEngine
+        ├────────────────────────┐
+        │                        │
+drifters-filter            drifters-eqf
+no_std, no alloc           no_std, no alloc
+INS mechanization,         equivariant filter over SE2(3),
+21-state ESKF over a       self-calibrating lever arm
+U D Ut covariance, the
+GinsEngine, tightly-
+coupled ranges, RTS
+smoothing
         ▲
-        ├───────────────┬────────────────────┐
-        │               │                    │
-drifters-proto    drifters-interop     drifters-cli
-no_std            std ONLY             std
-protobuf codecs   nav-types /          file-driven replay
-                  gnss-rtk adapters    and validation
+        ├───────────────┬────────────────────┬──────────────────┐
+        │               │                    │                  │
+drifters-proto    drifters-interop     drifters-gnss      drifters-cli
+no_std, no alloc  std ONLY             std                std
+micropb/heapless  nav-types /          raw observables:   file-driven replay
+protobuf codecs   gnss-rtk adapters    WLS, TDCP, RINEX,  and validation
+                                       DGNSS, batch fit
 ```
 
-Only `drifters-core` and `drifters-filter` — and optionally `drifters-proto` —
-are meant to be linked into firmware. `drifters-interop` is deliberately a
-separate crate because of a licensing boundary; see
-[adr/0003](adr/0003-interop-boundary.md).
+`drifters-filter::anchor` and `drifters-core::local` are also present, holding
+the local-frame and re-anchoring transforms. Nothing calls them: the state
+representation change they exist for is
+[parked](milestones.md#m14--local-first-architecture--in-progress) on
+measurements that said it would not pay.
+
+`drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are the
+firmware side: `no_std`, no allocator, and CI fails if any of them so much as
+names `extern crate alloc`. `drifters-gnss` is the desktop half and uses `std`
+deliberately — its solvers size themselves to a satellite count not known at
+compile time. `drifters-interop` is a separate crate because of a licensing
+boundary; see [adr/0003](adr/0003-interop-boundary.md).
 
 ## State model
 
@@ -326,9 +370,16 @@ No panics on the data path. Everything that can fail at runtime returns a
 - `ConfigError` — checked once, at `GinsEngine::new`. A zero sigma or a
   non-positive correlation time is rejected up front rather than surfacing as a
   `NaN` covariance thousands of samples later.
-- `FilterError::SingularInnovation` — the Cholesky factorisation of `H P Hᵀ + R`
-  failed. Almost always mis-specified measurement noise.
-- `FilterError::Diverged` — the covariance went non-finite.
+- `FilterError::SingularInnovation` — the innovation covariance was not positive
+  definite, so the measurement could not be applied. Almost always
+  mis-specified measurement noise, or a covariance that had already diverged.
+- `FilterError::Diverged` — the covariance contains a non-finite element.
+- `SmootherError::OutputTooShort` / `Singular(epoch)` — from the backward pass.
+  The second carries the epoch index, because which one it was is the first
+  thing worth knowing.
+
+All three implement `core::error::Error` unconditionally, so a `no_std` caller
+gets the trait without enabling a feature.
 
 Malformed samples (`dt <= 0`, non-finite fields, zero GNSS sigmas) are rejected
 at the ingest boundary rather than allowed to poison the state.
