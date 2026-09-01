@@ -43,28 +43,21 @@ overconfidence is untested — at the 120 s of the NEES campaign there are still
 it is a standing hazard on long runs and an argument for the factored form
 independent of `f32`.
 
-**Done, and it settled the `f32` question too.** The covariance is now carried
-as `U D Uᵀ`, so the numbers above apply to the wrong object: with `P = S Sᵀ` for
-`S = U√D`, the singular values of `S` are the square roots of `P`'s eigenvalues,
-and `cond(S) = √cond(P)`. The 13.6 digits after fifteen minutes become 6.8, and
-the extrapolated 15.4 over the full run becomes 7.7. That is the classical
-result that a factored filter is numerically equivalent to a dense one carrying
-twice the precision, and it is why `f32-covariance` — 7.2 digits — does not fail
-"within eleven seconds" the way a naive single-precision covariance would.
+Those figures describe a dense `P`. The covariance is carried as `U D Uᵀ`, and
+with `P = S Sᵀ` for `S = U√D` the singular values of `S` are the square roots of
+`P`'s eigenvalues, so `cond(S) = √cond(P)`. A factored filter is numerically
+equivalent to a dense one carrying twice the precision. The 13.6 digits after
+fifteen minutes become 6.8, inside `f32`'s 7.2, which is why single precision
+does not fail within eleven seconds the way a dense one would.
 
-It is not comfortable, though, and the arithmetic should be stated rather than
-rounded in its own favour: 7.7 digits needed against 7.2 available is *negative*
-half a digit of margin over the full run, where dense `f64` had positive half a
-digit. By this extrapolation single precision should be marginal exactly on the
-57-minute KF-GINS dataset — which is the run the campaign uses, and it comes out
-at 0.0330 m and NIS 1.459, identical to `f64` in every printed figure. So either
-the `t³` extrapolation overstates the late growth, or the ill-conditioned
-directions are ones the reported position does not depend on. Both are likely
-and neither is established here. The honest summary is that the predicted margin
-is gone and the measured degradation is nil, and a longer dataset is what would
-separate those. See
-[adr/0005](0005-scalar-type.md#revisited-2026-08-the-covariance-was-disqualified-for-the-wrong-reason)
-for the results and for the reasoning that ADR 0005 originally got wrong.
+Over the full run the same extrapolation gives 7.7, which is outside it — half a
+digit of margin short, where dense `f64` has half a digit spare. The measurement
+disagrees: the 57-minute KF-GINS run is the case in question, and
+`f32-covariance` returns 0.0330 m and NIS 1.459, identical to `f64` in every
+printed figure. Either the `t³` extrapolation overstates the late growth, or the
+ill-conditioned directions are ones the reported position does not depend on.
+Neither is established here, and a longer dataset would separate them. See
+[adr/0005](0005-scalar-type.md).
 
 **One filter is measurably overconfident.** `drifters nees`, on synthetic data
 drawn from each filter's own model, gives 23.6 against 21 for the EqF — about
@@ -116,52 +109,39 @@ p_B = R_BA (p_A − t_AB)      C_nb,B = R_BA C_nb,A
 v_B = R_BA v_A               P_B    = J P_A Jᵀ,  J block-diagonal in R_BA
 ```
 
-Retrofitting this is what the current code does badly. `Anchor` exists, but the
-EqF's `ε₁,ω` rotates the trajectory about the **global origin**, so the coupling
-between attitude and position grows with range — which is why a diagonal
-covariance is wrong away from the anchor, and why that fact was discovered twice
-by walking into it. Designed in, the range is bounded by construction and the
-coupling never grows.
+Rotating about a single global origin instead couples attitude to position more
+strongly the further the vehicle travels, which is what makes a diagonal
+covariance wrong away from the anchor. Bounding the range by construction keeps
+that coupling from growing.
 
-**Acceptance:** NEES must be *invariant under re-anchoring*. Moving the origin
+**Acceptance.** NEES must be invariant under re-anchoring: moving the origin
 mid-run changes the coordinates and nothing statistical, so a correct
-implementation shows no step in `drifters nees`. That is a sharp test and the
-instrument for it already exists.
+implementation shows no step in `drifters nees`.
 
-**Amended, having built the gate: it is necessary, not sufficient, and easy to
-build vacuous.** Written the obvious way it passed *every* mutation of the
-transform, including one that rotated nothing at all. Three independent causes,
-none visible from reading the test: a near-isotropic covariance fixture, under
-which `eᵀP⁻¹e` is invariant however you rotate it; a fixture separation of 1 km,
-whose 157 µrad rotation perturbs the quadratic form barely above `f32`'s noise;
-and a tolerance set by guesswork rather than from the measured floor, which is
-3.6e-13 at `f64` and 1.1e-7 at `f32`. Fixed by making the covariance strongly
-anisotropic within each rotating block, separating the test frames by 300 km —
-the algebra is exact at any separation, and the realistic 1 km case is checked
-for the property that actually depends on it — and setting the tolerance a
-decade above what was measured.
+That test is necessary and not sufficient. Invariance holds for any orthogonal
+`J`, the identity and the transpose of the right rotation included, because an
+orthogonal map preserves `eᵀP⁻¹e` by construction. What it pins is that the
+covariance transform and the error-state transform agree. Two further properties
+fix the rotation itself: re-anchoring twice equals re-anchoring once to the far
+frame, and the frame conversions reproduce the geodesic ones.
 
-**Necessary and not sufficient, separately from that.**
-Invariance holds for *any* orthogonal `J` — including the identity, and
-including the transpose of the right rotation — because an orthogonal map
-preserves `eᵀP⁻¹e` by construction. What the test actually pins is that the
-covariance transform and the error-state transform *agree*, which is worth
-having and is not the same claim. Two further properties are needed to fix the
-rotation itself: that re-anchoring twice equals re-anchoring once to the far
-frame, and that the frame conversions reproduce the geodesic ones. All three are
-in place and mutation-checked.
+Three conditions make the test able to detect anything, and each is a
+requirement on the fixture rather than on the code under test. The covariance
+must be strongly anisotropic within each rotating block, since `eᵀP⁻¹e` is
+invariant under any rotation of an isotropic `P`. The frames must be far enough
+apart that the rotation dominates the arithmetic — 300 km in the tests, where
+the algebra is identical and the margin is six decades, with the 1 km case
+checked separately. And the tolerance must come from the measured floor, which
+is 3.6e-13 at `f64` and 1.1e-7 at `f32`.
 
-**And the premise is measured.** Position as `f32` metres about an anchor, over
+**The premise, measured.** Position as `f32` metres about an anchor, over
 KF-GINS: 0.0330 m and NIS 1.486 at the origin, 0.0331 m and 1.562 at 1 km,
-0.0362 m and 2.941 at 5 km, 0.0525 m and 12.809 at 10 km. `f32` position works,
-and the anchor range is the only parameter — the frame was the obstacle, not the
-precision. NIS degrades well before accuracy does, so it sets the threshold:
+0.0362 m and 2.941 at 5 km, 0.0525 m and 12.809 at 10 km. `f32` position works
+and the anchor range is the only parameter — the frame is the obstacle, not the
+precision. NIS degrades before accuracy does, so it sets the threshold:
 re-anchor at **1 km**. Velocity is free at any range.
 
 ### 2. UD factorisation (Bierman–Thornton) replaces stored `P` — **done**
-
-Built and swapped in. Two things the section below got wrong are corrected at
-the end of it.
 
 Carry `P = U D Uᵀ` with `U` unit upper triangular and `D` diagonal, never `P`
 itself.
@@ -183,11 +163,10 @@ digits to 6.8 — already inside `f32`. Non-dimensionalising as well takes it to
 3.3 across the run above. Against `f32`'s 7.2 that is close to four digits of
 margin, and it is what turns single precision from marginal into comfortable.
 
-The two mechanisms are complementary rather than alternative, and the reason is
-worth stating: most of `cond(P)` is an artefact of *units*, not of correlation —
-position in metres against gyro bias in rad/s. Scaling each state by its own
-standard deviation removes exactly that and leaves the genuine correlation
-structure, which is what
+The two mechanisms are complementary rather than alternative. Most of `cond(P)`
+is an artefact of units rather than of correlation — position in metres against
+gyro bias in rad/s. Scaling each state by its own standard deviation removes
+that and leaves the genuine correlation structure, which is what
 `non_dimensionalising_removes_unit_induced_conditioning` and
 `genuine_correlation_survives_scaling` pin down.
 
@@ -258,32 +237,13 @@ run against an embedded build. The measurement models must move down.
 
 ### 5. Tight coupling, and RTS smoothing on the desktop side
 
-**Tightly coupled** means the filter consumes pseudorange and Doppler per
-satellite rather than a position solution, and gains receiver clock bias and
-drift as states (plus inter-system biases where constellations are mixed). It
-keeps working below four satellites, which is the case that matters and the one
-the GSDC traces expose.
+**Tightly coupled** means the filter consumes pseudorange per satellite rather
+than a position solution. It keeps working below the four satellites a position
+fix needs, which is the case that matters.
 
-The cost is honest and large: it needs ephemeris and satellite orbit and clock
-computation, which the current design deliberately does not have.
-[adr/0003](0003-interop-boundary.md) keeps `gnss-rtk` (AGPL) off the default
-path, so this is either a permissive dependency or work to be done here. **This
-is the biggest item in the plan and should be scheduled as its own milestone,
-not folded into the others.**
-
-### Amended after building it
-
-Three things in the paragraph above turned out to be wrong.
-
-**The ephemeris cost is not there.** The GSDC files supply
-`SvPosition*EcefMeters` and `SvClockBiasMeters` per satellite per epoch, as
-[gsdc-observables.md](../gsdc-observables.md) records. Any receiver reporting
-raw pseudoranges generally reports these beside them, so the orbit and clock
-work belongs to whoever produced the observations. Tight coupling here is
-geometry and weighting, and it cost a 300-line module.
-
-**Clock states were the wrong design.** The number of them depends on which
-constellations are in view, and a fixed-size filter must then carry the worst
+**No clock states.** The obvious design gives the filter receiver clock bias and
+drift, plus an inter-system bias per constellation. The number of those depends
+on which constellations are in view, so a fixed-size filter must carry the worst
 case always — against a crate whose argument is a 3 240-byte engine.
 [`range`](../../crates/drifters-filter/src/range.rs) differences the ranges
 within each constellation instead, against that constellation's highest
@@ -291,13 +251,20 @@ satellite. That cancels the receiver clock and the inter-system bias exactly,
 adds no states, and leaves the footprint untouched. It costs one satellite per
 constellation and correlates the rows, which the dense noise matrix carries.
 
-**The gate could not be run as written.** It named "GSDC urban-canyon segments,
-where loose coupling currently gains nothing" — and **every epoch of all four
-traces has twenty-five or more satellites**, 5 293 of them, without exception.
-These are open-sky drives. The dataset cannot exercise the case tight coupling
-exists for, so the gate was replaced by constructing it: thin the sky to the
-`n` highest satellites, feeding both paths the same restricted observations,
-and sweep `n`.
+**No ephemeris work either.** The GSDC files supply `SvPosition*EcefMeters` and
+`SvClockBiasMeters` per satellite per epoch, as
+[gsdc-observables.md](../gsdc-observables.md) records, and a receiver reporting
+raw pseudoranges generally reports these beside them. Orbit and clock
+computation belongs to whoever produced the observations, which keeps
+[adr/0003](0003-interop-boundary.md)'s AGPL boundary intact. What is left is
+geometry and weighting: a 300-line module.
+
+**Acceptance, and why it is a sweep.** The natural gate — urban-canyon segments
+where loose coupling gains nothing — cannot be run on this data. Every epoch of
+all four GSDC traces has twenty-five or more satellites, 5 293 of them without
+exception; these are open-sky drives. The gate is therefore constructed: thin
+the sky to the `n` highest satellites, feed both paths the same restricted
+observations, and sweep `n`.
 
 Competition score, trace A and the held-out trace C:
 
@@ -405,51 +372,51 @@ Cheaper, and the GCU sweep suggests rejection matters on this data. Rejected as
 insufficient: below four satellites there is no position solution to reject
 outliers *from*.
 
-### Amended after building it
+## Measured, having built the factorisation
 
-**The storage claim held; the constraint about `R` did not.** 231 scalars
-against 441, and the engine went from 4 920 bytes to 3 240 — a third off, the
-largest single saving it has had. But this section said "present measurements
-are already diagonal", and tight coupling has since introduced a dense `R`:
+**Storage.** 231 scalars against 441, and the engine went from 4 920 bytes to
+3 240 — the largest single saving it has had.
+
+**A dense `R` has to be whitened.** Bierman is scalar-sequential and assumes
+each row's noise is independent of the others'. Tight coupling breaks that:
 single-differenced pseudoranges all carry the reference satellite's error.
-`ud::Whitened` premultiplies by the inverse Cholesky factor, and feeding
-correlated rows to a scalar-sequential update without it is not an
-approximation but an error — a silent one, which a test pins by showing the
-naive version return a visibly smaller covariance without complaint.
+`ud::Whitened` premultiplies by the inverse Cholesky factor. Feeding correlated
+rows in without it is an error rather than an approximation, and a quiet one — a
+test pins it by showing the naive version return a visibly smaller covariance
+without complaint.
 
-**It is faster, and the reason is not the flop count.** Thornton does about 22 k
-multiply-adds per propagation against the dense form's 37 k, so it should have
-been quicker from the start. The first version was **2.7× slower**. Three fixes,
-each measured:
+**Speed does not follow from the flop count.** Thornton does about 22 k
+multiply-adds per propagation against the dense form's 37 k, and a direct
+translation still ran 2.7× slower than dense. Three changes, each measured:
 
 | | ns per covariance propagation |
 |---|---|
 | dense, for comparison | 5 230 |
-| first working version | 15 129 |
+| direct translation | 15 129 |
 | packing `U` by column rather than by row | 10 877 |
 | padding the augmented width to a vector multiple | 5 589 |
 | eight independent accumulators in the dot products | **4 017** |
 
-The last is the one worth remembering. A dot product written with a single
-running sum is a chain of floating-point additions, and the compiler may not
-reassociate it — so it cannot vectorise, and the loop runs at the latency of
-one add per element. That alone was worth 28 %, and it is the difference
-between a factored filter being slower than a dense one and being faster.
+The accumulators matter most. A dot product written with a single running sum is
+a chain of floating-point additions that the compiler may not reassociate, so it
+cannot vectorise and the loop runs at the latency of one add per element. That
+alone is worth 28 %, and it is the difference between a factored filter being
+slower than a dense one and being faster.
 
-Column packing matters because both hot loops walk a *column*: `Φ U`
-accumulates down one and Gram-Schmidt writes one. Row-major made both strided
-and needed a multiply and a divide per element for the offset.
+Column packing matters because both hot loops walk a column: `Φ U` accumulates
+down one and Gram-Schmidt writes one. Row-major makes both strided, and needs a
+multiply and a divide per element for the offset.
 
-**The trapezoidal discretisation was dropped, having been shown to be worth
-nothing.** `Ud::predict_trapezoidal` reproduces the dense form's
-`½dt(ΦQΦᵀ + Q)` exactly — a test pins it to the last digit, which is what made
-the swap checkable at all. It is not what runs: it needs `[ΦG, G]` rather than
-`G`, eighteen more columns through the Gram-Schmidt, and across the change
-KF-GINS reports the same 0.0330 m and the same 1.459 NIS to four figures while
-the NEES campaign moves from 14.569 to 14.565, inside its own Monte Carlo
-noise. Second order in `dt` is nothing to keep at 200 Hz.
+**The trapezoidal discretisation is not worth its cost.**
+`Ud::predict_trapezoidal` reproduces the dense form's `½dt(ΦQΦᵀ + Q)` exactly,
+and a test pins it to the last digit, which is what makes the swap checkable at
+all. It is not what runs: it needs `[ΦG, G]` rather than `G`, eighteen more
+columns through the Gram-Schmidt, and across the change KF-GINS reports the same
+0.0330 m and the same 1.459 NIS to four figures while the NEES campaign moves
+from 14.569 to 14.565, inside its own Monte Carlo noise. Second order in `dt` is
+nothing to keep at 200 Hz.
 
-**Measured end to end**, against the dense implementation on the same machine:
+**End to end**, against the dense implementation on the same machine:
 
 | | dense | factored |
 |---|---|---|
@@ -460,9 +427,8 @@ noise. Second order in `dt` is nothing to keep at 200 Hz.
 | KF-GINS horizontal | 0.0330 m | 0.0330 m |
 | ESKF NEES, expected 15 | 13.877 | 13.874 |
 
-**On the target this should be a larger win, and that is not measured here.**
-x86 vectorises; a Cortex-M4F does not, and carries `f64` in software, so the
-flop count is the whole story there — 22 k against 37 k. The bare-metal harness
-deliberately reports stack and size rather than cycles, because QEMU models no
-pipeline. Instruction counts under `-icount` would be a fair A/B and are not
-yet wired up.
+**The win is larger on the target.** x86 vectorises; a Cortex-M4F does not, and
+carries `f64` in software. Instructions retired per `add_imu` on `mps2-an386`,
+under `qemu -icount shift=0`: 22 415 in double precision, **13 238** with
+`f32-covariance`, which the factorisation is what allows. Cycles still need a
+board, since QEMU models no pipeline.

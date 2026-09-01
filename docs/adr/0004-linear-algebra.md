@@ -58,8 +58,8 @@ The `Real` trait carries these methods so call sites read naturally
 
 ### The "anything that links `std`" caveat
 
-There is one exception to "one implementation everywhere", and it is worth
-knowing about because it looks like a bug when first encountered.
+There is one exception to "one implementation everywhere". It looks like a bug
+when first encountered.
 
 `std` defines **inherent** methods on `f64` — `sin`, `sqrt`, `atan2` — and
 inherent methods take precedence over trait methods at resolution time. So in any

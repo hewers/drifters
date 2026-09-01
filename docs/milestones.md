@@ -283,17 +283,14 @@ invisible in the source:
 
 ### f32
 
-Measured and rejected as a global switch: `f32` latitude costs **0.76 m per
-ULP** against a measured 0.033 m residual budget. That part stands.
+Rejected as a global switch: `f32` latitude costs **0.76 m per ULP** against a
+measured 0.033 m residual budget.
 
-The covariance was rejected in the same breath, and that part did not stand.
-The reason given — its diagonal spans 8.4 decimal digits against `f32`'s 7.2 —
-compared a span *across* elements with precision *within* one, which is a
-category error for a floating-point format. Once the covariance was stored
-factored, `--features f32-covariance` turned out to change nothing measurable:
-KF-GINS 0.0330 m, NIS 1.459, GSDC 3.244, NEES 13.874, all identical to `f64`.
-The full account, including what the real obstacle had been, is in
-[adr/0005](adr/0005-scalar-type.md#revisited-2026-08-the-covariance-was-disqualified-for-the-wrong-reason).
+The covariance is a separate question, and once it is stored factored the answer
+differs. `--features f32-covariance` changes nothing measurable — KF-GINS
+0.0330 m, NIS 1.459, GSDC 3.244, NEES 13.874, each matching `f64` — and removes
+41 % of the instructions retired per `add_imu` on Cortex-M4. Reasoning in
+[adr/0005](adr/0005-scalar-type.md).
 
 Mixed precision for the *states* remains open and belongs in M9.
 
