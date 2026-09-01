@@ -128,7 +128,20 @@ mid-run changes the coordinates and nothing statistical, so a correct
 implementation shows no step in `drifters nees`. That is a sharp test and the
 instrument for it already exists.
 
-**Amended, having built the gate: it is necessary and not sufficient.**
+**Amended, having built the gate: it is necessary, not sufficient, and easy to
+build vacuous.** Written the obvious way it passed *every* mutation of the
+transform, including one that rotated nothing at all. Three independent causes,
+none visible from reading the test: a near-isotropic covariance fixture, under
+which `eᵀP⁻¹e` is invariant however you rotate it; a fixture separation of 1 km,
+whose 157 µrad rotation perturbs the quadratic form barely above `f32`'s noise;
+and a tolerance set by guesswork rather than from the measured floor, which is
+3.6e-13 at `f64` and 1.1e-7 at `f32`. Fixed by making the covariance strongly
+anisotropic within each rotating block, separating the test frames by 300 km —
+the algebra is exact at any separation, and the realistic 1 km case is checked
+for the property that actually depends on it — and setting the tolerance a
+decade above what was measured.
+
+**Necessary and not sufficient, separately from that.**
 Invariance holds for *any* orthogonal `J` — including the identity, and
 including the transpose of the right rotation — because an orthogonal map
 preserves `eᵀP⁻¹e` by construction. What the test actually pins is that the

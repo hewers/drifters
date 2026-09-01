@@ -566,14 +566,24 @@ Each step is gated on a measurement rather than on the previous one compiling.
       — the block-diagonal Jacobian, the covariance transform `P ← J P Jᵀ`, and
       the ADR's NEES-invariance gate.
 
-      **The gate is necessary and not sufficient**, which matters given how much
-      of this project's history is instruments that agreed with themselves.
-      Invariance holds for *any* orthogonal `J`, so it cannot alone tell the
-      right rotation from its transpose. What it tests is that the covariance
-      and error-state transforms agree. Composition and the geodesic round trip
-      pin the rotation itself. All three are mutation-checked: rotating nothing,
-      rotating the body-frame bias blocks too, and transposing the rotation are
-      each caught.
+      **The gate is necessary, not sufficient, and was vacuous three times
+      over** — which matters given how much of this project's history is
+      instruments that agreed with themselves. Invariance holds for *any*
+      orthogonal `J`, so it cannot alone tell the right rotation from its
+      transpose; what it tests is that the covariance and error-state transforms
+      agree, and composition plus the geodesic round trip pin the rotation
+      itself.
+
+      Written the obvious way, it passed every mutation including one that
+      rotated nothing. Three causes, none visible from reading it: a
+      near-isotropic fixture, under which `eᵀP⁻¹e` is invariant however you
+      rotate it; a 1 km fixture separation, whose 157 µrad rotation sits barely
+      above `f32`'s noise; and a tolerance guessed rather than measured. Now the
+      fixture is strongly anisotropic within each rotating block, the test
+      frames are 300 km apart — the algebra is exact at any separation, and 1 km
+      is checked separately for the property that needs it — and the tolerance
+      is a decade above the measured floor of 3.6e-13 at `f64` and 1.1e-7 at
+      `f32`. All four mutations are caught at both precisions.
 
       **What is left** is the part the ADR calls a rewrite rather than an edit:
       `NavState` still holds geodetic position, so nothing is anchored yet. The
