@@ -187,7 +187,7 @@ fn reverse_pass(
 
     // Walk the fixes downwards alongside the samples.
     let mut next_fix = gnss.len();
-    while next_fix > 0 && gnss[next_fix - 1].time.tow > end {
+    while next_fix > 0 && gnss[next_fix - 1].time.tow() > end {
         next_fix -= 1;
     }
 
@@ -264,7 +264,7 @@ fn reverse_pass(
     // with the earlier sample's rate offsets the whole integration by one step.
     let mut later: Option<&ImuSample> = None;
     for sample in imu.iter().rev() {
-        let tow = sample.time.tow;
+        let tow = sample.time.tow();
         if tow > end {
             later = Some(sample);
             continue;
@@ -276,7 +276,7 @@ fn reverse_pass(
             later = Some(sample);
             continue;
         };
-        let dt = next.time.tow - tow;
+        let dt = next.time.tow() - tow;
         later = Some(sample);
         if !(dt > 0.0 && dt < 1.0) {
             continue;
@@ -295,7 +295,7 @@ fn reverse_pass(
         }
         filter.propagate(&input, -dt, noise);
 
-        while next_fix > 0 && gnss[next_fix - 1].time.tow >= tow {
+        while next_fix > 0 && gnss[next_fix - 1].time.tow() >= tow {
             next_fix -= 1;
             let fix = gnss[next_fix];
             let sigma = fix.position_std;
@@ -344,7 +344,7 @@ fn course(gnss: &[GnssFix], from: usize, anchor: &Anchor, step: isize) -> Option
         }
         let other = gnss[i as usize];
         let d = anchor.to_local(other.position) - base;
-        let dt = here.time.tow - other.time.tow;
+        let dt = here.time.tow() - other.time.tow();
         if dt.abs() < 1e-6 {
             continue;
         }
@@ -371,7 +371,7 @@ pub fn replay_eqf(
     quiet: bool,
 ) -> EqfReport {
     let mut next_fix = 0usize;
-    while next_fix < gnss.len() && gnss[next_fix].time.tow < config.start_time {
+    while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
         next_fix += 1;
     }
     let anchor = Anchor::new(
@@ -442,7 +442,7 @@ pub fn replay_eqf(
     let mut previous = config.start_time;
 
     for sample in imu {
-        let tow = sample.time.tow;
+        let tow = sample.time.tow();
         if tow < config.start_time {
             previous = tow;
             continue;
@@ -474,7 +474,7 @@ pub fn replay_eqf(
         filter.propagate(&input, dt, &noise);
         report.processed += 1;
 
-        if next_fix < gnss.len() && gnss[next_fix].time.tow <= tow {
+        if next_fix < gnss.len() && gnss[next_fix].time.tow() <= tow {
             let fix = gnss[next_fix];
             next_fix += 1;
 
@@ -746,8 +746,8 @@ pub fn replay_gsdc_eqf(
 
     let mut next = 0usize;
     for sample in imu {
-        let t = sample.time.tow;
-        if t < first.time.tow {
+        let t = sample.time.tow();
+        if t < first.time.tow() {
             continue;
         }
         // `sample.dt` and not a timestamp difference: `gyro()` and `accel()`
@@ -760,7 +760,7 @@ pub fn replay_gsdc_eqf(
         }
         filter.propagate(&Input::new(sample.gyro(), sample.accel()), dt, &noise);
 
-        if next < fixes.len() && fixes[next].time.tow <= t {
+        if next < fixes.len() && fixes[next].time.tow() <= t {
             let fix = fixes[next];
             next += 1;
 

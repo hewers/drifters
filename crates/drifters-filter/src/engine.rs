@@ -637,7 +637,7 @@ mod tests {
         e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
         let after = e.nav_state().position();
         assert_eq!(before.lat, after.lat);
-        assert_eq!(e.timestamp().tow, 0.01);
+        assert_eq!(e.timestamp().tow(), 0.01);
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
         );
         e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
         assert!(e.pending_gnss.is_none());
-        assert_relative_eq!(e.timestamp().tow, 0.02, epsilon = 1e-12);
+        assert_relative_eq!(e.timestamp().tow(), 0.02, epsilon = 1e-12);
     }
 
     #[test]

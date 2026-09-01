@@ -118,7 +118,7 @@ pub fn read_imu(path: &Path, week: u32) -> Result<Vec<ImuSample>, DataError> {
             None => {
                 previous_time = Some(tow);
                 samples.push(ImuSample {
-                    time: GpsTime { week, tow },
+                    time: GpsTime::new(week, tow),
                     dt: 0.0,
                     dtheta: Vec3::ZERO,
                     dvel: Vec3::ZERO,
@@ -129,7 +129,7 @@ pub fn read_imu(path: &Path, week: u32) -> Result<Vec<ImuSample>, DataError> {
         previous_time = Some(tow);
 
         samples.push(ImuSample {
-            time: GpsTime { week, tow },
+            time: GpsTime::new(week, tow),
             dt,
             dtheta: Vec3::new(values[1], values[2], values[3]),
             dvel: Vec3::new(values[4], values[5], values[6]),
@@ -156,10 +156,7 @@ pub fn read_gnss(path: &Path, week: u32) -> Result<Vec<GnssFix>, DataError> {
             });
         }
         fixes.push(GnssFix {
-            time: GpsTime {
-                week,
-                tow: values[0],
-            },
+            time: GpsTime::new(week, values[0]),
             position: Lla::from_degrees(values[1], values[2], values[3]),
             position_std: Vec3::new(values[4], values[5], values[6]),
             velocity: None,

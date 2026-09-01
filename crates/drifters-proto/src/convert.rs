@@ -107,19 +107,19 @@ macro_rules! require {
 
 impl From<&GpsTime> for pb::GpsTime {
     fn from(t: &GpsTime) -> Self {
+        // The wire format stays a week and a time of week: it is a separate
+        // compatibility surface from the Rust API, and the accessors give the
+        // same values the fields used to.
         Self {
-            r#week: t.week,
-            r#tow_s: t.tow,
+            r#week: t.week(),
+            r#tow_s: t.tow(),
         }
     }
 }
 
 impl From<&pb::GpsTime> for GpsTime {
     fn from(t: &pb::GpsTime) -> Self {
-        Self {
-            week: t.r#week,
-            tow: t.r#tow_s,
-        }
+        Self::new(t.r#week, t.r#tow_s)
     }
 }
 
@@ -608,10 +608,7 @@ mod tests {
     }
 
     fn sample_time() -> GpsTime {
-        GpsTime {
-            week: 2311,
-            tow: 345_678.125,
-        }
+        GpsTime::new(2311, 345_678.125)
     }
 
     fn sample_position() -> Lla {
@@ -630,8 +627,8 @@ mod tests {
         };
         let back: ImuSample = round_trip::<_, pb::ImuSample>(&original);
         // `double` is a fixed64 on the wire, so every value is bit-exact.
-        assert_eq!(back.time.week, original.time.week);
-        assert_eq!(back.time.tow, original.time.tow);
+        assert_eq!(back.time.week(), original.time.week());
+        assert_eq!(back.time.tow(), original.time.tow());
         assert_eq!(back.dt, original.dt);
         assert_eq!(back.dtheta, original.dtheta);
         assert_eq!(back.dvel, original.dvel);
@@ -760,7 +757,7 @@ mod tests {
         let back = state_matrix(&decoded).expect("valid covariance");
 
         assert_eq!(back, p);
-        assert_eq!(GpsTime::from(decoded.r#time().unwrap()).week, 2311);
+        assert_eq!(GpsTime::from(decoded.r#time().unwrap()).week(), 2311);
     }
 
     #[test]
@@ -1044,10 +1041,7 @@ mod decode_robustness {
         use micropb::{MessageEncode, PbEncoder};
 
         let fix = GnssFix::position_only(
-            GpsTime {
-                week: 2311,
-                tow: 345_678.125,
-            },
+            GpsTime::new(2311, 345_678.125),
             Lla::from_degrees(30.5, 114.3, 25.0),
             Vec3::splat(1.5),
         );

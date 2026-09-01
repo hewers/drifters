@@ -800,7 +800,7 @@ pub mod eskf {
             ba = ba * decay + rng.normal_vec3(Vec3::splat(accel_bias_sigma * walk));
 
             let sample = ImuSample {
-                time: GpsTime { week: 0, tow: t },
+                time: GpsTime::new(0, t),
                 dt,
                 dtheta: (omega + bg) * dt + rng.normal_vec3(Vec3::splat(gyro_arw * dt.sqrt())),
                 dvel: (force + ba) * dt + rng.normal_vec3(Vec3::splat(accel_vrw * dt.sqrt())),
@@ -808,7 +808,7 @@ pub mod eskf {
             if k % per_second == 0 {
                 let jitter = rng.normal_vec3(gnss_sigma);
                 engine.add_gnss(GnssFix::position_only(
-                    GpsTime { week: 0, tow: t },
+                    GpsTime::new(0, t),
                     truth_pos.shifted(Ned {
                         n: jitter.x,
                         e: jitter.y,
@@ -821,8 +821,8 @@ pub mod eskf {
                 break;
             }
             if let Some(c) = engine.take_checkpoint() {
-                let e = engine.nav_state().position().ned_from(truth_at(c.state.time.tow));
-                filtered.push((c.state.time.tow, e.horizontal_norm()));
+                let e = engine.nav_state().position().ned_from(truth_at(c.state.time.tow()));
+                filtered.push((c.state.time.tow(), e.horizontal_norm()));
                 checkpoints.push(c);
             }
         }
@@ -844,7 +844,7 @@ pub mod eskf {
             .map(|x| {
                 x.state
                     .position()
-                    .ned_from(truth_at(x.state.time.tow))
+                    .ned_from(truth_at(x.state.time.tow()))
                     .horizontal_norm()
             })
             .collect();
@@ -854,7 +854,7 @@ pub mod eskf {
         // states whose truth is exactly known — position, velocity and
         // attitude — as their own marginal, which the leading block of P is.
         let score = |state: &drifters_core::types::NavState, p: &drifters_filter::state::StateMatrix| -> Option<f64> {
-            let tow = state.time.tow;
+            let tow = state.time.tow();
             let d = state.position().ned_from(truth_at(tow));
             let dv = state.velocity().to_vec3() - velocity.to_vec3();
             let phi = Quat::from_dcm(&state.pva.attitude.dcm.matmul(&r_nb.transpose()))
@@ -1002,7 +1002,7 @@ pub mod eskf {
                 ba = ba * decay + rng.normal_vec3(Vec3::splat(accel_bias_sigma * walk));
 
                 let sample = ImuSample {
-                    time: GpsTime { week: 0, tow: t },
+                    time: GpsTime::new(0, t),
                     dt,
                     dtheta: (omega + bg) * dt + rng.normal_vec3(Vec3::splat(gyro_arw * dt.sqrt())),
                     dvel: (force + ba) * dt + rng.normal_vec3(Vec3::splat(accel_vrw * dt.sqrt())),
@@ -1011,7 +1011,7 @@ pub mod eskf {
                 if k % (1.0 / dt).round() as usize == 0 {
                     let jitter = rng.normal_vec3(gnss_sigma);
                     engine.add_gnss(GnssFix::position_only(
-                        GpsTime { week: 0, tow: t },
+                        GpsTime::new(0, t),
                         truth_pos.shifted(Ned {
                             n: jitter.x,
                             e: jitter.y,

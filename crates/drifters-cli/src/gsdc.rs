@@ -45,7 +45,7 @@ use std::path::Path;
 
 use drifters_core::frames::{Ecef, Lla, Ned};
 use drifters_core::math::{Cholesky, Euler, Matrix, Vec3};
-use drifters_core::time::GpsTime;
+use drifters_core::time::{GpsTime, LEAP_SECONDS_2017};
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_core::F;
 
@@ -191,7 +191,13 @@ pub fn read_imu(path: &Path) -> Result<(Vec<ImuSample>, f64), DataError> {
             continue;
         }
         samples.push(ImuSample {
-            time: GpsTime::from_tow(g.t),
+            // Real GPS time, not the device's boot clock. The three readers
+            // agree either way — they all subtract the same offset — but a
+            // boot clock cannot be matched against anything outside this
+            // phone, and a `GpsTime` that is secretly seconds-since-boot is
+            // the kind of thing that costs an afternoon when a RINEX file
+            // turns up. See `drifters_core::time`.
+            time: GpsTime::from_unix_seconds(g.t + utc_offset, LEAP_SECONDS_2017),
             dt,
             dtheta: g.v * dt,
             dvel: a.v * dt,
@@ -231,13 +237,6 @@ struct RangeColumns {
     /// them would make the common path fail for the sake of the rare one.
     svid: Option<usize>,
     frequency: Option<usize>,
-    /// `ArrivalTimeNanosSinceGpsEpoch`, the one column in the file that is
-    /// already GPS time. The pipeline's own timestamps are Unix seconds
-    /// reduced modulo a week — self-consistent, and fine while everything is
-    /// compared against everything else in the same file, but eighteen leap
-    /// seconds and a different epoch away from what a RINEX file means by
-    /// seconds of week.
-    arrival: Option<usize>,
     sat: [usize; 3],
     velocity: Option<[usize; 3]>,
 }
@@ -258,7 +257,6 @@ impl RangeColumns {
             state: h.at("State").ok()?,
             svid: h.at("Svid").ok(),
             frequency: h.at("CarrierFrequencyHz").ok(),
-            arrival: h.at("ArrivalTimeNanosSinceGpsEpoch").ok(),
             sat: [
                 h.at("SvPositionXEcefMeters").ok()?,
                 h.at("SvPositionYEcefMeters").ok()?,
@@ -285,13 +283,6 @@ impl RangeColumns {
             return 0;
         };
         crate::rinex::band_of_frequency((hz * 1.0e-6).round() as u32).unwrap_or(0)
-    }
-
-    /// True GPS seconds of week for a row, for matching against an archive.
-    fn gps_tow(&self, p: &[&str]) -> Option<f64> {
-        const SECONDS_PER_WEEK: f64 = 604_800.0;
-        let ns = field(p, self.arrival?).parse::<f64>().ok()?;
-        Some((ns * 1.0e-9).rem_euclid(SECONDS_PER_WEEK))
     }
 
     /// One row's satellite state, for building differential corrections.
@@ -501,7 +492,7 @@ impl Default for GnssOptions {
 /// receiver velocity — see [`solve_doppler`].
 pub fn read_gnss(
     path: &Path,
-    utc_offset: f64,
+    lag: f64,
     options: &GnssOptions,
 ) -> Result<GnssTrace, DataError> {
     let GnssOptions {
@@ -568,7 +559,6 @@ pub fn read_gnss(
         ranges: Vec<crate::wls::Observation>,
         carriers: Vec<crate::tdcp::Carrier>,
         satellites_seen: Vec<crate::differential::SatelliteState>,
-        gps_tow: Option<f64>,
     }
     let mut fixes: Vec<GnssFix> = Vec::new();
     let mut current: Option<Epoch> = None;
@@ -612,7 +602,6 @@ pub fn read_gnss(
                 ranges: Vec::new(),
                 carriers: Vec::new(),
                 satellites_seen: Vec::new(),
-                gps_tow: None,
             });
         }
 
@@ -622,9 +611,6 @@ pub fn read_gnss(
             }
             if let Some(s) = c.satellite(&parts) {
                 e.satellites_seen.push(s);
-            }
-            if e.gps_tow.is_none() {
-                e.gps_tow = c.gps_tow(&parts);
             }
         }
 
@@ -670,7 +656,15 @@ pub fn read_gnss(
     // measured, so the two must not both be in the pseudorange.
     let mut corrected = 0usize;
     if let Some((base, set)) = differential.as_ref() {
-        let times: Vec<f64> = epochs.iter().map(|e| e.gps_tow.unwrap_or(-1.0)).collect();
+        // The same conversion the fixes get. Before the readers used real GPS
+        // time this needed `ArrivalTimeNanosSinceGpsEpoch` — the one column in
+        // the file that was already GPS time — because the pipeline's own
+        // timestamps were seconds since the phone booted and could not be
+        // matched against an archive.
+        let times: Vec<f64> = epochs
+            .iter()
+            .map(|e| GpsTime::from_unix_seconds(e.utc * 1.0e-3, LEAP_SECONDS_2017).tow())
+            .collect();
         // A nominal rover position for the transmission-time difference. One
         // for the whole trace is enough: it enters only through a difference
         // of travel times, and a kilometre of it is three nanoseconds.
@@ -796,7 +790,10 @@ pub fn read_gnss(
     for (i, e) in epochs.iter().enumerate() {
         let position = positions[i];
         let mut fix = GnssFix {
-            time: GpsTime::from_tow(e.utc * 1.0e-3 - utc_offset),
+            // `lag` is the diagnostic sweep, not a clock offset: the readers
+            // all convert from UTC on their own now, so nothing has to be
+            // aligned by hand and a shift here means a shift.
+            time: GpsTime::from_unix_seconds(e.utc * 1.0e-3 - lag, LEAP_SECONDS_2017),
             position,
             // An epoch too thin to solve carries no position, which is the
             // whole case tight coupling exists for. Expressed as an
@@ -856,7 +853,7 @@ pub fn read_gnss(
         PositionSource::Solve(_) => epochs
             .into_iter()
             .map(|e| {
-                let t = e.gps_tow.unwrap_or(f64::NAN);
+                let t = GpsTime::from_unix_seconds(e.utc * 1.0e-3, LEAP_SECONDS_2017).tow();
                 ((t, e.ranges), (t, e.satellites_seen))
             })
             .unzip(),
@@ -873,7 +870,7 @@ pub fn read_gnss(
 }
 
 /// Read `ground_truth.csv`.
-pub fn read_truth(path: &Path, utc_offset: f64) -> Result<Truth, DataError> {
+pub fn read_truth(path: &Path) -> Result<Truth, DataError> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
     let header = Header::parse(
@@ -901,7 +898,10 @@ pub fn read_truth(path: &Path, utc_offset: f64) -> Result<Truth, DataError> {
         ) else {
             continue;
         };
-        samples.push((t * 1.0e-3 - utc_offset, Lla::from_degrees(lat, lon, alt)));
+        samples.push((
+            GpsTime::from_unix_seconds(t * 1.0e-3, LEAP_SECONDS_2017).tow(),
+            Lla::from_degrees(lat, lon, alt),
+        ));
     }
     Truth::new(samples).map_err(|e| DataError::Config(e.to_string()))
 }
@@ -927,9 +927,9 @@ pub fn read_truth(path: &Path, utc_offset: f64) -> Result<Truth, DataError> {
 pub fn coarse_align(imu: &[ImuSample], gnss: &[GnssFix], window: f64) -> Euler {
     let mut f = Vec3::ZERO;
     let mut n = 0.0;
-    let start = imu.first().map(|s| s.time.tow).unwrap_or(0.0);
+    let start = imu.first().map(|s| s.time.tow()).unwrap_or(0.0);
     for s in imu {
-        if s.time.tow - start > window {
+        if s.time.tow() - start > window {
             break;
         }
         if s.dt > 0.0 {
@@ -1364,16 +1364,24 @@ mod tests {
         let p = tmp(
             "gnss.csv",
             "utcTimeMillis,WlsPositionXEcefMeters,WlsPositionYEcefMeters,WlsPositionZEcefMeters\n\
-             1000,-2694000,-4293000,3857000\n\
-             1000,-2694000,-4293000,3857000\n\
-             1000,-2694000,-4293000,3857000\n\
-             2000,-2694001,-4293001,3857001\n\
-             2000,-2694001,-4293001,3857001\n",
+             1684527052000,-2694000,-4293000,3857000\n\
+             1684527052000,-2694000,-4293000,3857000\n\
+             1684527052000,-2694000,-4293000,3857000\n\
+             1684527053000,-2694001,-4293001,3857001\n\
+             1684527053000,-2694001,-4293001,3857001\n",
         );
         let fixes = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
-        assert_relative_eq!(fixes[0].time.tow, 1.0, epsilon = 1e-9);
+        // Real GPS time, so a real timestamp: 2023-05-19T20:10:52Z is
+        // 504 670 s into GPS week 2 262, eighteen leap seconds on from UTC.
+        assert_eq!(fixes[0].time.week(), 2_262);
+        assert_relative_eq!(fixes[0].time.tow(), 504_670.0, epsilon = 1e-6);
+        assert_relative_eq!(
+            fixes[1].time.seconds_since(fixes[0].time),
+            1.0,
+            epsilon = 1e-9
+        );
     }
 
     #[test]
@@ -1394,12 +1402,14 @@ mod tests {
         let p = tmp(
             "truth.csv",
             "MessageType,Provider,LatitudeDegrees,LongitudeDegrees,AltitudeMeters,UnixTimeMillis\n\
-             Fix,GT,37.4282903,-122.0725281,-28.2,2000\n\
-             Fix,GT,37.4282803,-122.0725181,-28.1,1000\n",
+             Fix,GT,37.4282903,-122.0725281,-28.2,1684527053000\n\
+             Fix,GT,37.4282803,-122.0725181,-28.1,1684527052000\n",
         );
-        let t = read_truth(&p, 0.0).unwrap();
+        let t = read_truth(&p).unwrap();
         assert_eq!(t.len(), 2);
-        assert_eq!(t.span(), (1.0, 2.0));
+        // Sorted, and on the same GPS time base the fixes use, or a lookup
+        // would silently find nothing.
+        assert_eq!(t.span(), (504_670.0, 504_671.0));
     }
 
     #[test]

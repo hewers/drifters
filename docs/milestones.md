@@ -511,7 +511,22 @@ Each step is gated on a measurement rather than on the previous one compiling.
       Positive-definiteness by construction, half the precision requirement,
       231 scalars against 441, no square roots.
       *Gate:* NEES unchanged or better on both estimators, zero abandoned runs.
-- [ ] **`u64` nanosecond time**, with `dt` from an integer difference.
+- [x] **`u64` nanosecond time**, with `dt` from an integer difference.
+      [`GpsTime`](../crates/drifters-core/src/time.rs) is now a private
+      `u64` of nanoseconds since the GPS epoch; `week()` and `tow()` are
+      accessors, so the protobuf wire format is untouched.
+      *Gate:* every measured result identical — KF-GINS 0.0330 m horizontal,
+      GSDC 4.577 / 3.243 / 2.799 — which is the point, since everything
+      downstream uses differences. The engine also shrank 24 bytes, a week
+      plus an `f64` having padded to sixteen where a `u64` is eight.
+
+      The motivating defect was not precision. An `f64` time of week already
+      resolves 0.12 ns; what it could not do was say *which* epoch it meant.
+      The GSDC readers were on the device's boot clock, `from_tow` accepted
+      that as readily as anything else, and matching against a RINEX archive
+      then failed with no visible cause. The constructors now each name an
+      epoch and scale, and a Unix time cannot be converted without stating a
+      leap-second count — it is not recoverable from the value.
 - [ ] **Non-dimensionalised states, then the `f32` evaluation.**
       *Gate:* NEES at both precisions, side by side. This is where
       [adr/0005](adr/0005-scalar-type.md)'s question gets a new answer, or its

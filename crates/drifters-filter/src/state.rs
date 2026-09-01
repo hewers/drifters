@@ -150,10 +150,14 @@ mod size_tests {
         // The smoothing recorder is three 21x21 matrices, four times the rest
         // of the engine, so it is behind `alloc` and a default build does not
         // have the field at all. A regression that puts it in unconditionally
-        // shows up here as 23 192.
+        // shows up here as 23 168.
+        //
+        // Was 4 944 until `GpsTime` became a single `u64`: a week plus an
+        // `f64` time of week padded to sixteen bytes, and the engine carries
+        // two navigation states.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            if cfg!(feature = "alloc") { 23_200 } else { 4_944 },
+            if cfg!(feature = "alloc") { 23_168 } else { 4_920 },
             "whole engine"
         );
     }

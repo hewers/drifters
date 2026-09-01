@@ -177,10 +177,7 @@ pub fn ecef_velocity_to_ned(position: Lla, velocity: Ecef) -> Ned {
 pub fn gps_time_from_epoch(epoch: gnss_rtk::prelude::Epoch) -> GpsTime {
     let seconds = epoch.to_gpst_seconds();
     let week = (seconds / SECONDS_PER_WEEK).floor();
-    GpsTime {
-        week: week.max(0.0) as u32,
-        tow: seconds - week * SECONDS_PER_WEEK,
-    }
+    GpsTime::new(week.max(0.0) as u32, seconds - week * SECONDS_PER_WEEK)
 }
 
 #[cfg(test)]

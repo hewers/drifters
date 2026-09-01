@@ -189,7 +189,7 @@ pub fn replay(
 
     let mut next_fix = 0usize;
     // Skip fixes that precede the processing window; they can never be used.
-    while next_fix < gnss.len() && gnss[next_fix].time.tow < config.start_time {
+    while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
         next_fix += 1;
     }
 
@@ -203,7 +203,7 @@ pub fn replay(
         .unwrap_or(config.options.initial_state.position);
 
     for sample in imu {
-        let tow = sample.time.tow;
+        let tow = sample.time.tow();
         if tow < config.start_time {
             continue;
         }
@@ -212,7 +212,7 @@ pub fn replay(
         }
 
         // Queue the fix that falls in this interval, if any.
-        if next_fix < gnss.len() && gnss[next_fix].time.tow <= tow {
+        if next_fix < gnss.len() && gnss[next_fix].time.tow() <= tow {
             let fix = gnss[next_fix];
             next_fix += 1;
 
@@ -292,8 +292,8 @@ pub(crate) fn write_row(
     writeln!(
         nav,
         "{} {:.9} {:.12} {:.12} {:.6} {:.6} {:.6} {:.6} {:.9} {:.9} {:.9}",
-        state.time.week,
-        state.time.tow,
+        state.time.week(),
+        state.time.tow(),
         p.lat * RAD_TO_DEG,
         p.lon * RAD_TO_DEG,
         p.height,
@@ -309,7 +309,7 @@ pub(crate) fn write_row(
     writeln!(
         err,
         "{:.9} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e} {:.9e}",
-        state.time.tow,
+        state.time.tow(),
         ie.gyro_bias.x,
         ie.gyro_bias.y,
         ie.gyro_bias.z,
@@ -325,7 +325,7 @@ pub(crate) fn write_row(
     )?;
 
     let sigmas = engine.std_deviations();
-    write!(std_out, "{:.9}", state.time.tow)?;
+    write!(std_out, "{:.9}", state.time.tow())?;
     for s in sigmas {
         write!(std_out, " {s:.9e}")?;
     }
@@ -478,7 +478,7 @@ pub fn run_gsdc(
         )),
         None => None,
     };
-    let (mut imu, utc_offset) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
+    let (mut imu, _) = gsdc::read_imu(&dir.join("device_imu.csv"))?;
     // Diagnostic: 0 ignores rotation entirely, -1 flips the sign convention.
     if gyro_scale != 1.0 {
         for s in imu.iter_mut() {
@@ -494,7 +494,7 @@ pub fn run_gsdc(
         ..
     } = gsdc::read_gnss(
         &dir.join("device_gnss.csv"),
-        utc_offset - gnss_lag,
+        gnss_lag,
         &gsdc::GnssOptions {
             sigma,
             velocity,
@@ -510,7 +510,7 @@ pub fn run_gsdc(
     if corrected > 0 && !quiet {
         eprintln!("differential: corrected {corrected} observations");
     }
-    let reference = gsdc::read_truth(&dir.join("ground_truth.csv"), utc_offset)?;
+    let reference = gsdc::read_truth(&dir.join("ground_truth.csv"))?;
 
     if !quiet {
         eprintln!(
@@ -597,7 +597,7 @@ pub fn run_gsdc(
     // pass over the same file, and the fixes carry the pipeline's own clock
     // convention while the ranges carry true GPS time.
     for ((_, obs), fix) in ranges.iter().zip(&fixes) {
-        let Some(truth) = reference.at(fix.time.tow) else {
+        let Some(truth) = reference.at(fix.time.tow()) else {
             continue;
         };
         let t = truth.to_ecef();
@@ -633,27 +633,27 @@ pub fn run_gsdc(
     engine.record(true);
     let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
     for sample in &imu {
-        let t = sample.time.tow;
-        if t < first.time.tow {
+        let t = sample.time.tow();
+        if t < first.time.tow() {
             continue;
         }
-        if next < fixes.len() && fixes[next].time.tow <= t {
+        if next < fixes.len() && fixes[next].time.tow() <= t {
             let fix = fixes[next];
             next += 1;
             // Score the phone's own solution on the same epochs, so the two are
             // compared on identical ground.
             report
                 .gnss_only
-                .push(&reference, fix.time.tow, fix.position);
-            if let Some(r) = reference.at(fix.time.tow) {
+                .push(&reference, fix.time.tow(), fix.position);
+            if let Some(r) = reference.at(fix.time.tow()) {
                 report
                     .gnss_horizontal
-                    .push((fix.time.tow, fix.position.ned_from(r).horizontal_norm()));
+                    .push((fix.time.tow(), fix.position.ned_from(r).horizontal_norm()));
             }
             // Half a second either side, matching the one-second epoch
             // spacing, so the truth velocity is the average over the same
             // interval the measurement describes.
-            if let (Some(v), Some(t)) = (fix.velocity, reference.velocity_at(fix.time.tow, 0.5)) {
+            if let (Some(v), Some(t)) = (fix.velocity, reference.velocity_at(fix.time.tow(), 0.5)) {
                 report.gnss_velocity.push_ned(v.n - t.n, v.e - t.e, v.d - t.d);
                 report
                     .gnss_velocity_horizontal
@@ -802,7 +802,7 @@ pub fn run_gsdc(
             Ok(()) => {
                 let mut stats = truth::ErrorStats::new();
                 for s in &smoothed {
-                    let tow = s.state.time.tow;
+                    let tow = s.state.time.tow();
                     stats.push(&reference, tow, s.state.pva.position);
                     if let Some(r) = reference.at(tow) {
                         report
@@ -887,11 +887,11 @@ pub fn run_gsdc(
             let mut stats = truth::ErrorStats::new();
             for (f, p) in fixes.iter().zip(&fitted) {
                 let lla = to_lla(p);
-                stats.push(&reference, f.time.tow, lla);
-                if let Some(r) = reference.at(f.time.tow) {
+                stats.push(&reference, f.time.tow(), lla);
+                if let Some(r) = reference.at(f.time.tow()) {
                     report
                         .smoothed_horizontal
-                        .push((f.time.tow, lla.ned_from(r).horizontal_norm()));
+                        .push((f.time.tow(), lla.ned_from(r).horizontal_norm()));
                 }
             }
             report.smoothed = Some(stats);
