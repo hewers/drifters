@@ -253,6 +253,43 @@ file's solution, with `--sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale
 refit that the better GNSS forced, and the four-trace holdout under it, are in
 [gsdc-observables.md](gsdc-observables.md#in-the-rust-replay-and-what-it-does-to-the-filters).
 
+## RTS smoothing, and why it loses here
+
+| | horiz RMS | p50 | p95 | score |
+|---|---|---|---|---|
+| drifters ESKF | 2.915 | 1.700 | 4.787 | **3.244** |
+| drifters ESKF + RTS | 3.208 | 1.709 | 5.902 | 3.805 |
+
+The smoother costs 17 % on the competition metric, and almost all of it is tail:
+the median is unmoved and the 95th percentile is 23 % worse. The worst case
+actually improves, 17.5 m to 16.1 m.
+
+Sweeping the IMU noise scale shows the smoother tracking the forward filter's
+consistency rather than its accuracy:
+
+| `--imu-scale` | NIS (expect 3.0) | ESKF | + RTS | RTS |
+|---|---|---|---|---|
+| 25 | 5.105 | 3.885 | 3.445 | −11.3 % |
+| 50 | 3.347 | 3.937 | 3.464 | −12.0 % |
+| 100 | 1.624 | 3.686 | 3.408 | −7.5 % |
+| 200 | 0.689 | 4.031 | 3.995 | −0.9 % |
+| 400 | 0.228 | **3.244** | 3.805 | +17.3 % |
+| 800 | 0.202 | 3.375 | 4.061 | +20.3 % |
+
+Smoothing gains 7–12 % wherever the filter is anywhere near consistent, and
+loses only at the inflated tunings — which are the ones that give the *filter*
+its best score. The published configuration sits at ×400 for that reason, and
+the smoother cannot survive the trade.
+
+Inflation is not the mechanism, though. [testing.md](testing.md) isolates it
+against generated truth: at 50× the smoother still gains 46.5 %. What removes
+the gain is **correlation between consecutive fix errors**, which RTS assumes
+away and multipath supplies. So the two rows above share a cause — an inflated
+tuning is what a filter needs when its measurement errors are correlated, and
+correlated errors are what the smoother cannot handle.
+
+For this dataset, at the tuning that scores best, the answer is not to smooth.
+
 ## Tight coupling, and why this dataset cannot judge it
 
 [`range`](../crates/drifters-filter/src/range.rs) feeds the filter per-satellite

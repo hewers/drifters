@@ -565,8 +565,41 @@ trajectory. Horizontal RMS over 150 s:
 | 42 | 0.399 m | 0.173 m | −57 % |
 | 1234 | 0.375 m | 0.156 m | −59 % |
 
-Halving the error is what RTS should deliver on a well-tuned filter, and the
-test asserts a gain of at least 25 % on each seed.
+Halving the error is what RTS should deliver on a well-tuned filter fed
+independent measurements, and the test asserts a gain of at least 25 % on each
+seed.
+
+### What the smoother needs from the measurements
+
+RTS is optimal for **white** measurement noise. Carrying the fix error as an
+AR(1) process instead, at constant marginal variance so correlation varies and
+magnitude does not:
+
+| fix-error correlation ρ | filtered | smoothed | gain |
+|---|---|---|---|
+| 0 | 0.401 m | 0.204 m | −49.1 % |
+| 0.8 | 0.713 m | 0.475 m | −33.3 % |
+| 0.95 | 0.715 m | 0.613 m | −14.3 % |
+| 0.99 | 0.521 m | 0.493 m | −5.5 % |
+
+Consecutive fixes then share an error the recursion cannot model, and the
+backward pass fits it as though it were trajectory. Inflating the filter's
+process noise does *not* do this — at 50× the gain is still −46.5 % — though the
+two compound: 50× with ρ = 0.95 leaves −4.0 %.
+`correlated_fix_error_erodes_what_the_smoother_gains` pins the relationship.
+
+This is why the smoother **costs 17 %** on the GSDC competition metric at the
+tuning [gsdc.md](gsdc.md) reports, and gains 7–12 % at tunings where the forward
+filter is near-consistent. Almost all of the loss is in the tail: the median
+moves 1.700 m to 1.709 m while the 95th percentile moves 4.787 m to 5.902 m,
+which is the shape of a few correlated excursions being fitted rather than
+rejected.
+
+It is also the limit of what the controlled harness explains. Correlation erodes
+the gain to nearly nothing but does not reverse its sign, so a real phone trace
+carries at least one ingredient beyond it — most likely the heavy-tailed
+multipath the tuning discussion in the README already measures at a
+mean-to-median ratio of 2.1–3.3.
 
 **What this test catches.** The textbook RTS recursion returns *exactly zero*
 on a feedback error-state filter — every correction is fed into the nominal and

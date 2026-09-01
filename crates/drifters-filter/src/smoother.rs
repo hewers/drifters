@@ -56,19 +56,38 @@
 //!
 //! Both passes are about as consistent as each other: normalised estimation
 //! error squared over the nine exactly-known states reads 8.9 filtered against
-//! 11.0 smoothed, expected 9. An earlier version of this note claimed the
-//! smoother repaired a badly overconfident filter; that was an artefact of the
-//! measuring harness, which had the attitude and bias error signs backwards.
-//! The filter was consistent all along.
+//! 11.0 smoothed, expected 9.
 //!
-//! It is not always a gain. A smoother leans on the process model harder than
-//! a filter does, because it carries information backward *through* the
-//! dynamics, so a model that is wrong hurts it more. On the GSDC phone traces,
-//! where the IMU needs its noise inflated four-hundredfold to be usable and
-//! the GNSS errors are multipath rather than Gaussian, smoothing makes the
-//! score slightly worse — 3.24 m to 3.81 m. That is the model being wrong, not
-//! the recursion, and it is worth knowing before reaching for a smoother to
-//! rescue a badly-tuned filter.
+//! # It is not always a gain
+//!
+//! RTS is the optimal linear smoother for **white** measurement noise, and that
+//! is the assumption most likely to fail. GNSS multipath persists over seconds,
+//! so consecutive fixes share an error the recursion cannot model and the
+//! backward pass fits it as though it were trajectory.
+//!
+//! Carrying the fix error as an AR(1) process at constant marginal variance,
+//! which varies correlation without varying magnitude:
+//!
+//! | correlation ρ | filtered | smoothed | gain |
+//! |---|---|---|---|
+//! | 0 | 0.401 m | 0.204 m | −49.1 % |
+//! | 0.8 | 0.713 m | 0.475 m | −33.3 % |
+//! | 0.95 | 0.715 m | 0.613 m | −14.3 % |
+//! | 0.99 | 0.521 m | 0.493 m | −5.5 % |
+//!
+//! An inflated process noise is **not** what does this: at 50× the gain is
+//! still −46.5 %. The two compound — 50× with ρ = 0.95 leaves −4.0 % — but
+//! correlation is the term that matters.
+//!
+//! On the GSDC phone traces the smoother costs 17 % on the competition metric,
+//! 3.24 m to 3.81 m, at the tuning `docs/gsdc.md` reports. At tunings where the
+//! forward filter is near-consistent it gains 7–12 % on the same data. Almost
+//! all of the loss is in the tail: the median moves 1.700 m to 1.709 m while
+//! the 95th percentile moves 4.787 m to 5.902 m.
+//!
+//! So: smooth when the measurement errors are close to independent between
+//! epochs, and score the result against the filter's own output rather than
+//! assuming it improved.
 //!
 //! # Allocation-free
 //!

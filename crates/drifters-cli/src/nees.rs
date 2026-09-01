@@ -492,12 +492,64 @@ mod tests {
     /// A backward pass that returns zeros — which the textbook recursion does
     /// on a feedback error-state filter, see [`drifters_filter::smoother`] —
     /// scores exactly equal to the filter and fails this.
+    /// What the smoother needs from the measurements, and what it does when it
+    /// does not get it.
+    ///
+    /// RTS is the optimal linear smoother for *white* measurement noise. GNSS
+    /// error is not white: multipath persists over seconds, so consecutive
+    /// fixes share an error the recursion has no way to model. The backward
+    /// pass then fits that shared error as though it were trajectory.
+    ///
+    /// The fixes here carry an AR(1) error whose marginal variance is held
+    /// constant, so this varies correlation alone and not magnitude. Measured
+    /// over four seeds, the gain decays from −49 % at ρ = 0 to −5.5 % at
+    /// ρ = 0.99, monotonically.
+    ///
+    /// Process-noise inflation on its own does *not* do this: at 50× the gain
+    /// is still −46.5 %. The two compound — 50× with ρ = 0.95 leaves −4.0 % —
+    /// but correlation is the term that matters.
+    ///
+    /// This is the reason RTS costs 17 % on the GSDC competition metric at the
+    /// tuning `docs/gsdc.md` reports, and gains 7–12 % at tunings where the
+    /// forward filter is near-consistent.
+    #[test]
+    fn correlated_fix_error_erodes_what_the_smoother_gains() {
+        let gain = |rho: f64| {
+            let (mut f, mut s) = (0.0, 0.0);
+            for seed in [1u64, 7, 42, 1234] {
+                let r = super::eskf::smoothing(150.0, seed, 0.01, 1.0, rho);
+                f += r.filtered;
+                s += r.smoothed;
+            }
+            (s - f) / f
+        };
+
+        let white = gain(0.0);
+        let correlated = gain(0.95);
+        assert!(
+            white < -0.40,
+            "white measurement noise should let the smoother gain heavily, got {:+.1}%",
+            white * 100.0
+        );
+        assert!(
+            correlated > white + 0.25,
+            "correlation should erode the gain: {:+.1}% at rho 0 against {:+.1}% at rho 0.95",
+            white * 100.0,
+            correlated * 100.0
+        );
+        assert!(
+            correlated < 0.0,
+            "the smoother should still not actively harm this filter, got {:+.1}%",
+            correlated * 100.0
+        );
+    }
+
     #[test]
     fn rts_smoothing_halves_the_position_error_against_truth() {
         for seed in [1u64, 7, 42, 1234] {
             // 150 s at 100 Hz: enough epochs for the backward pass to have
             // something to carry, few enough to run in a debug build.
-            let r = super::eskf::smoothing(150.0, seed, 0.01);
+            let r = super::eskf::smoothing(150.0, seed, 0.01, 1.0, 0.0);
             assert!(
                 r.filtered > 0.2,
                 "seed {seed}: the filter should have something to improve on, got {:.4}",
@@ -732,7 +784,17 @@ pub mod eskf {
     /// construction whether or not it is correct; here the truth is generated
     /// and the measurements are noisy samples of it, so an improvement is an
     /// improvement.
-    pub fn smoothing(seconds: f64, seed: u64, dt: f64) -> Smoothing {
+    /// `inflation` scales the process noise the *filter* is given, leaving the
+    /// trajectory and its sampling alone. At 1.0 the filter's model matches the
+    /// world exactly. Above it the filter is conservative, which is the state
+    /// a tuning fitted for accuracy rather than consistency leaves it in.
+    pub fn smoothing(
+        seconds: f64,
+        seed: u64,
+        dt: f64,
+        inflation: f64,
+        fix_correlation: f64,
+    ) -> Smoothing {
         let origin = Lla::from_degrees(30.44, 114.47, 20.0);
         let velocity = Ned {
             n: 8.0,
@@ -786,8 +848,19 @@ pub mod eskf {
             },
             attitude,
         );
+        let options = GinsOptions {
+            imu_noise: drifters_core::types::ImuNoise {
+                gyro_arw: noise.gyro_arw * inflation,
+                accel_vrw: noise.accel_vrw * inflation,
+                gyro_bias_std: noise.gyro_bias_std * inflation,
+                accel_bias_std: noise.accel_bias_std * inflation,
+                ..noise
+            },
+            ..options
+        };
         let mut engine = GinsEngine::new(options).expect("valid options");
         engine.record(true);
+        let mut fix_error = Vec3::ZERO;
 
         let truth_at = |t: f64| {
             start.shifted(Ned {
@@ -824,7 +897,18 @@ pub mod eskf {
                 dvel: (force + ba) * dt + rng.normal_vec3(Vec3::splat(accel_vrw * dt.sqrt())),
             };
             if k % per_second == 0 {
-                let jitter = rng.normal_vec3(gnss_sigma);
+                // AR(1) fix error. The innovation is scaled by `sqrt(1 - rho²)`
+                // so the marginal variance is `gnss_sigma` at every
+                // correlation, which separates correlation from magnitude.
+                let rho = fix_correlation;
+                let fresh = rng.normal_vec3(gnss_sigma);
+                fix_error = fix_error * rho
+                    + Vec3::new(
+                        fresh.x * (1.0 - rho * rho).sqrt(),
+                        fresh.y * (1.0 - rho * rho).sqrt(),
+                        fresh.z * (1.0 - rho * rho).sqrt(),
+                    );
+                let jitter = fix_error;
                 engine.add_gnss(GnssFix::position_only(
                     GpsTime::new(0, t),
                     truth_pos.shifted(Ned {

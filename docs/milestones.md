@@ -735,6 +735,15 @@ the GSDC holdout table are regression tests for it, not assumptions.
 A filter that cannot be *seen* is hard to trust. The replay already computes
 everything needed; it just aggregates it away.
 
+
+      **Where it loses.** On the GSDC phone traces the smoother costs 17 % on
+      the competition metric at the published tuning, almost all of it in the
+      95th percentile. The cause is correlation between consecutive fix errors,
+      which RTS assumes away: against generated truth the gain decays from
+      −49 % at zero correlation to −5.5 % at ρ = 0.99, while inflating the
+      process noise 50× leaves it at −46.5 %. Documented in
+      [gsdc.md](gsdc.md) and [testing.md](testing.md), and pinned by
+      `correlated_fix_error_erodes_what_the_smoother_gains`.
 - [x] Replay carries a per-epoch trace: residuals, NIS, positions
 - [x] `drifters plot` renders trajectory, error trace and NIS as **SVG**
 - [x] Figure generated from the KF-GINS run, committed, shown in the README
