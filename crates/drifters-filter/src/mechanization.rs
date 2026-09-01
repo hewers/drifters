@@ -14,7 +14,7 @@
 //! the old and new velocity, then attitude. Reordering changes the result at
 //! second order.
 
-use drifters_core::earth::Wgs84;
+use drifters_core::earth::Local;
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Mat3, Quat, Vec3};
 use drifters_core::types::{Attitude, ImuSample, Pva};
@@ -60,20 +60,24 @@ fn compensated_angle_increment(pre: &ImuSample, cur: &ImuSample) -> Vec3 {
 }
 
 /// Gravity and Coriolis velocity increment over `dt` at the given state.
+///
+/// Takes the earth model already evaluated: three of the quantities below share
+/// one latitude, and evaluating it once is the difference between one `sin_cos`
+/// and four.
 #[inline]
-fn gravity_coriolis_increment(position: Lla, velocity: Ned, dt: F) -> Vec3 {
-    let w_ie = Wgs84::omega_ie_n(position.lat);
-    let w_en = Wgs84::omega_en_n(position.lat, position.height, velocity.to_vec3());
-    let g = Wgs84::gravity_n(position.lat, position.height);
+fn gravity_coriolis_increment(local: &Local, velocity: Ned, dt: F) -> Vec3 {
+    let w_ie = local.omega_ie_n();
+    let w_en = local.omega_en_n(velocity.to_vec3());
+    let g = local.gravity_n();
     (g - (w_ie * 2.0 + w_en).cross(velocity.to_vec3())) * dt
 }
 
 /// Rotate the body-frame specific-force increment into the navigation frame,
 /// accounting for the navigation frame itself rotating during the interval.
 #[inline]
-fn specific_force_to_nav(position: Lla, velocity: Ned, dcm: Mat3, dvel_body: Vec3, dt: F) -> Vec3 {
-    let w_ie = Wgs84::omega_ie_n(position.lat);
-    let w_en = Wgs84::omega_en_n(position.lat, position.height, velocity.to_vec3());
+fn specific_force_to_nav(local: &Local, velocity: Ned, dcm: Mat3, dvel_body: Vec3, dt: F) -> Vec3 {
+    let w_ie = local.omega_ie_n();
+    let w_en = local.omega_en_n(velocity.to_vec3());
     // First-order approximation of the frame rotation over half the interval.
     let zeta = (w_ie + w_en) * (dt * 0.5);
     let c_nn = Mat3::identity() - zeta.skew();
@@ -86,28 +90,24 @@ fn update_velocity(previous: &Pva, imu_pre: &ImuSample, imu_cur: &ImuSample) -> 
 
     // Pass 1: increments evaluated at the start of the interval, used only to
     // extrapolate to the midpoint.
+    let start = Local::at(previous.position.lat, previous.position.height);
     let dv_f = specific_force_to_nav(
-        previous.position,
+        &start,
         previous.velocity,
         previous.attitude.dcm,
         dvel_body,
         dt,
     );
-    let dv_g = gravity_coriolis_increment(previous.position, previous.velocity, dt);
+    let dv_g = gravity_coriolis_increment(&start, previous.velocity, dt);
     let mid_velocity = Ned::from_vec3(previous.velocity.to_vec3() + (dv_f + dv_g) * 0.5);
     let mid_position = previous
         .position
         .shifted_linear(Ned::from_vec3(mid_velocity.to_vec3() * (dt * 0.5)));
 
     // Pass 2: the real update, with the earth terms taken at the midpoint.
-    let dv_f = specific_force_to_nav(
-        mid_position,
-        mid_velocity,
-        previous.attitude.dcm,
-        dvel_body,
-        dt,
-    );
-    let dv_g = gravity_coriolis_increment(mid_position, mid_velocity, dt);
+    let mid = Local::at(mid_position.lat, mid_position.height);
+    let dv_f = specific_force_to_nav(&mid, mid_velocity, previous.attitude.dcm, dvel_body, dt);
+    let dv_g = gravity_coriolis_increment(&mid, mid_velocity, dt);
     Ned::from_vec3(previous.velocity.to_vec3() + dv_f + dv_g)
 }
 
@@ -121,7 +121,7 @@ fn update_position(previous: &Pva, velocity: Ned, dt: F) -> Lla {
     let displacement = Ned::from_vec3(mid_velocity.to_vec3() * dt);
     // The displacement is a midpoint quantity, so it must be converted to
     // geodetic units with the midpoint radii, then applied to the start.
-    let delta = Wgs84::dr_inv(mid_position.lat, mid_position.height) * displacement.to_vec3();
+    let delta = Local::at(mid_position.lat, mid_position.height).dr_inv() * displacement.to_vec3();
     Lla {
         lat: previous.position.lat + delta.x,
         lon: previous.position.lon + delta.y,
@@ -147,12 +147,9 @@ fn update_attitude(
     // Navigation frame rotation over the interval: earth rate plus transport
     // rate. Negated because we need the rotation of the *old* n-frame into the
     // new one.
-    let w_ie = Wgs84::omega_ie_n(mid_position.lat);
-    let w_en = Wgs84::omega_en_n(
-        mid_position.lat,
-        mid_position.height,
-        mid_velocity.to_vec3(),
-    );
+    let mid = Local::at(mid_position.lat, mid_position.height);
+    let w_ie = mid.omega_ie_n();
+    let w_en = mid.omega_en_n(mid_velocity.to_vec3());
     let q_nn = Quat::from_rotation_vector(-(w_ie + w_en) * dt);
 
     // Body frame rotation over the interval, coning-corrected.
@@ -165,6 +162,7 @@ fn update_attitude(
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use drifters_core::earth::Wgs84;
     use drifters_core::math::{Real, DEG_TO_RAD};
     use drifters_core::time::GpsTime;
 

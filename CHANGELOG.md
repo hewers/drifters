@@ -14,6 +14,12 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`drifters-core::earth::Local`** — the earth model evaluated once at a
+  geodetic position, answering gravity, earth rate, transport rate and the radii
+  of curvature from a single `sin_cos`. The free functions on `Wgs84` each
+  compute their own, and the mechanization calls them about twelve times per
+  IMU sample. Bit-identical results, and 10.4 % off the instructions retired per
+  `add_imu` on Cortex-M4.
 - **`drifters-core::local`** — `LocalFrame`, a local Cartesian frame in NED
   metres about an explicit geodetic origin, with exact conversions through ECEF
   and the rotation between two frames. Groundwork for

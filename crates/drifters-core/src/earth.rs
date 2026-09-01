@@ -126,9 +126,147 @@ impl Wgs84 {
     }
 }
 
+/// The earth model evaluated once at a geodetic position.
+///
+/// Every quantity here depends on latitude through a single `sin_cos`, and the
+/// mechanization needs most of them several times per IMU sample at the same
+/// point: gravity, earth rate, transport rate and the radii of curvature. The
+/// free functions on [`Wgs84`] each evaluate their own, so a step that calls
+/// six of them evaluates six.
+///
+/// Building one of these and asking it for each quantity gives the same numbers
+/// from one evaluation. Nothing is approximated and no state is cached between
+/// samples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Local {
+    sin_lat: F,
+    cos_lat: F,
+    /// Meridian radius of curvature, `R_M`.
+    rm: F,
+    /// Prime-vertical radius of curvature, `R_N`.
+    rn: F,
+    height: F,
+}
+
+impl Local {
+    /// Evaluate at a geodetic latitude (radians) and height (metres).
+    #[inline]
+    pub fn at(lat: F, height: F) -> Self {
+        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        use crate::math::Real;
+        let (sin_lat, cos_lat) = lat.sin_cos();
+        let t = 1.0 - Wgs84::E2 * sin_lat * sin_lat;
+        let sqrt_t = t.sqrt();
+        Self {
+            sin_lat,
+            cos_lat,
+            rm: Wgs84::A * (1.0 - Wgs84::E2) / (t * sqrt_t),
+            rn: Wgs84::A / sqrt_t,
+            height,
+        }
+    }
+
+    /// `(R_M, R_N)`, the meridian and prime-vertical radii of curvature.
+    #[inline]
+    pub fn radii(&self) -> (F, F) {
+        (self.rm, self.rn)
+    }
+
+    /// `sin` and `cos` of the latitude.
+    #[inline]
+    pub fn sin_cos(&self) -> (F, F) {
+        (self.sin_lat, self.cos_lat)
+    }
+
+    /// Normal gravity magnitude, m/s², positive downwards. See
+    /// [`Wgs84::gravity`].
+    #[inline]
+    pub fn gravity(&self) -> F {
+        let s2 = self.sin_lat * self.sin_lat;
+        let g0 = 9.780_326_771_5 * (1.0 + 0.005_279_041_4 * s2 + 0.000_023_271_8 * s2 * s2);
+        g0 + self.height * (0.000_000_004_397_731_1 * s2 - 0.000_003_087_691_089_1)
+            + 0.000_000_000_000_721_1 * self.height * self.height
+    }
+
+    /// Normal gravity as a NED vector.
+    #[inline]
+    pub fn gravity_n(&self) -> Vec3 {
+        Vec3::new(0.0, 0.0, self.gravity())
+    }
+
+    /// Earth rotation rate in NED, `ω_ie^n`.
+    #[inline]
+    pub fn omega_ie_n(&self) -> Vec3 {
+        Vec3::new(
+            Wgs84::OMEGA * self.cos_lat,
+            0.0,
+            -Wgs84::OMEGA * self.sin_lat,
+        )
+    }
+
+    /// Transport rate `ω_en^n` for a ground velocity in NED.
+    #[inline]
+    pub fn omega_en_n(&self, vel_ned: Vec3) -> Vec3 {
+        Vec3::new(
+            vel_ned.y / (self.rn + self.height),
+            -vel_ned.x / (self.rm + self.height),
+            -vel_ned.y * self.sin_lat / (self.cos_lat * (self.rn + self.height)),
+        )
+    }
+
+    /// `diag(R_M + h, (R_N + h)·cos(lat), −1)`. See [`Wgs84::dr`].
+    #[inline]
+    pub fn dr(&self) -> Mat3 {
+        Vec3::new(
+            self.rm + self.height,
+            (self.rn + self.height) * self.cos_lat,
+            -1.0,
+        )
+        .to_diag()
+    }
+
+    /// The inverse of [`Local::dr`].
+    #[inline]
+    pub fn dr_inv(&self) -> Mat3 {
+        Vec3::new(
+            1.0 / (self.rm + self.height),
+            1.0 / ((self.rn + self.height) * self.cos_lat),
+            -1.0,
+        )
+        .to_diag()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Local` must return exactly what the free functions do, bit for bit.
+    /// It exists to evaluate the trigonometry once, not to compute anything
+    /// different.
+    #[test]
+    fn local_agrees_with_the_free_functions_exactly() {
+        for lat_deg in [-77.85, -33.87, 0.0, 30.53, 51.5, 78.2] {
+            for height in [-400.0, 0.0, 25.0, 8_848.0] {
+                let lat = lat_deg * crate::math::DEG_TO_RAD;
+                let l = Local::at(lat, height);
+                let vel = Vec3::new(8.0, -3.0, 0.4);
+
+                assert_eq!(l.radii(), Wgs84::radii(lat), "radii at {lat_deg}");
+                assert_eq!(l.gravity(), Wgs84::gravity(lat, height), "gravity");
+                assert_eq!(l.gravity_n(), Wgs84::gravity_n(lat, height), "gravity_n");
+                assert_eq!(l.omega_ie_n(), Wgs84::omega_ie_n(lat), "omega_ie_n");
+                assert_eq!(
+                    l.omega_en_n(vel),
+                    Wgs84::omega_en_n(lat, height, vel),
+                    "omega_en_n"
+                );
+                assert_eq!(l.dr(), Wgs84::dr(lat, height), "dr");
+                assert_eq!(l.dr_inv(), Wgs84::dr_inv(lat, height), "dr_inv");
+            }
+        }
+    }
+
     use crate::math::DEG_TO_RAD;
     use approx::assert_relative_eq;
 

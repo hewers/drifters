@@ -596,12 +596,15 @@ Each step is gated on a measurement rather than on the previous one compiling.
       never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
       anchor, and doing the arithmetic in `f32` would cost more.
 
-      Two cheaper things are worth more, together, and cost no precision at
-      all: the earth-model latitude trigonometry is 1 560 instructions (12 %)
-      recomputed every sample on a latitude that moves 2e-8 rad per sample, and
-      the transition matrix is 1 396 (11 %) built in `f64` and immediately
-      narrowed for a covariance that is already `f32`. Neither needs the state
-      representation to change. See [testing.md](testing.md) for the table.
+      One cheaper thing was worth more and cost no precision: the earth model
+      was evaluated afresh at every call site, about twelve `sin`/`cos` per
+      sample at two distinct latitudes.
+      [`Local`](../crates/drifters-core/src/earth.rs) evaluates once, which took
+      `add_imu` from 13 238 to 11 868 — 10.4 % — with bit-identical results.
+      Building the transition matrix in `f32` was measured and left: 986
+      instructions, 8.3 %, of which single precision might return half, against
+      either a second copy of the Jacobian or a lower-precision Φ recorded for
+      the smoother. See [testing.md](testing.md).
 
       The frame machinery stays: it is built, tested and costs nothing unused,
       and it is the right design if a much longer run or a genuinely global

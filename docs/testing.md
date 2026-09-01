@@ -369,20 +369,23 @@ Measured per `add_imu` on `mps2-an386`:
 
 | configuration | instructions |
 |---|---|
-| 21-state, `f64` | 22 415 |
-| 21-state, `f32-covariance` | **13 238** |
-| 15-state (`reduced-state`) | **7 269** |
+| 21-state, `f64` | **21 398** |
+| 21-state, `f32-covariance` | **11 868** |
+| 15-state (`reduced-state`) | **5 911** |
 
-So the single-precision covariance removes **41 %** of the work on this part,
-having cost nothing measurable in accuracy. Splitting the remainder by stubbing
-each stage out in turn:
+The single-precision covariance removes 45 % of the work on this part, having
+cost nothing measurable in accuracy.
 
-| component | scalar | instructions | share |
-|---|---|---|---|
-| covariance propagation (Thornton) | `f32` | 7 073 | 53 % |
-| earth-model latitude trigonometry | `f64` | 1 560 | 12 % |
-| transition matrix construction | `f64` | 1 396 | 11 % |
-| mechanization, state update, rest | `f64` | 3 209 | 24 % |
+**Stub one stage out at a time, and leave the rest running.** Stubbing two at
+once gives a number that is not the cost of either: with the covariance
+propagation disabled, the transition matrix appeared to cost 1 396 instructions,
+because the optimiser could then discard most of what built it. Measured against
+the shipping configuration it is 986.
+
+A stub also has to leave the filter doing the same work. Replacing the
+transition matrix with a dense fill read 7 419 — apparently a saving of 4 449 —
+because the fill was rank-deficient, Thornton found a non-positive pivot and
+returned early. The number was a measurement of the filter giving up.
 
 That table is what a proposal to go further has to argue against, and it is
 worth having before the argument rather than after.
@@ -394,13 +397,28 @@ if it converts as well as the covariance did. It is
 [parked](milestones.md#m14--local-first-architecture--in-progress) on that
 number.
 
-`core::simd` beat it, from a two-line change. Expressing the lane-split dot
-products as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
+Two things beat it.
+
+**Evaluating the earth model once per point.** `Wgs84::radii`, `gravity`,
+`omega_ie_n`, `omega_en_n` and `dr_inv` each compute their own `sin`/`cos`, and
+the mechanization calls them about twelve times per sample at two distinct
+latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
+answers all of them, which took `add_imu` from 13 238 to **11 868** with
+`f32-covariance` — 10.4 % — and 22 415 to 21 398 without. Results are
+bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it to
+that.
+
+**`core::simd`**, from a two-line change. Expressing the lane-split dot products
+as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
 | `f64` | 22 336 | 21 422 | −4 % |
 | `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
+
+(Measured before the earth-model change above, so both baselines are the older
+ones. The two are independent — one is the covariance recursion, the other the
+mechanization.)
 
 On a part with no SIMD unit at all, because eight lanes lower to eight
 independent FPU operations without the iterator machinery the hand-written form
@@ -421,6 +439,12 @@ survey:
 - **`generic_const_exprs`** would let `Ud::predict` be generic over the noise
   channel count instead of naming `N_NOISE`. The filter has exactly one noise
   shape, so the workaround costs a comment and nothing else.
+- **Building the transition matrix in `f32`.** It is narrowed for Thornton
+  immediately, so under the default build nothing would lose precision. It costs
+  986 instructions, 8.3 % of `add_imu`, of which single precision might return
+  half. Paying that in either a second copy of the Jacobian — the most subtle
+  code in the filter — or a lower-precision Φ recorded for the smoother is not
+  worth 4 %.
 
 ### Why this layer exists
 

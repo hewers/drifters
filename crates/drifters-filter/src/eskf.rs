@@ -2,7 +2,7 @@
 //!
 //! See `docs/state-model.md` for the derivation of every block below.
 
-use drifters_core::earth::Wgs84;
+use drifters_core::earth::{Local, Wgs84};
 // `Real` supplies the no_std float math. Anything that links `std` — the test
 // harness, or this crate's own `std` feature — makes `std`'s inherent
 // `f64::sin_cos` visible, and inherent methods win over trait methods, so the
@@ -32,19 +32,22 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
 
     let lat = state.position.lat;
     let h = state.position.height;
-    let (rm, rn) = Wgs84::radii(lat);
+    // One evaluation of the earth model: five of the quantities below share a
+    // latitude, and the free functions each compute their own trigonometry.
+    let local = Local::at(lat, h);
+    let (rm, rn) = local.radii();
     let rmh = rm + h;
     let rnh = rn + h;
-    let (sin_lat, cos_lat) = lat.sin_cos();
+    let (sin_lat, cos_lat) = local.sin_cos();
     let tan_lat = sin_lat / cos_lat;
     let sec2_lat = 1.0 / (cos_lat * cos_lat);
     let v = state.velocity.to_vec3();
     let (vn, ve, vd) = (v.x, v.y, v.z);
     let w = Wgs84::OMEGA;
-    let gravity = Wgs84::gravity(lat, h);
+    let gravity = local.gravity();
 
-    let w_ie = Wgs84::omega_ie_n(lat);
-    let w_en = Wgs84::omega_en_n(lat, h, v);
+    let w_ie = local.omega_ie_n();
+    let w_en = local.omega_en_n(v);
 
     // --- position error ---------------------------------------------------
     // δṙ = δv plus the terms from the local radii changing with position.
