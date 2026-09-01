@@ -154,8 +154,7 @@ impl core::fmt::Display for SmootherError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for SmootherError {}
+impl core::error::Error for SmootherError {}
 
 /// Run the backward pass.
 ///

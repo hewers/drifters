@@ -523,7 +523,7 @@ than separately.
 
 Each step is gated on a measurement rather than on the previous one compiling.
 
-- [ ] **Local frame native, with re-anchoring.** Position is local Cartesian
+- [~] **Local frame native, with re-anchoring** — *parked, see below.* Position is local Cartesian
       metres about an explicit origin, everywhere; geodetic only at the I/O
       boundary. Re-anchoring transforms state *and* covariance through the
       rotation between the two NED frames.
@@ -585,10 +585,30 @@ Each step is gated on a measurement rather than on the previous one compiling.
       is a decade above the measured floor of 3.6e-13 at `f64` and 1.1e-7 at
       `f32`. All four mutations are caught at both precisions.
 
-      **What is left** is the part the ADR calls a rewrite rather than an edit:
-      `NavState` still holds geodetic position, so nothing is anchored yet. The
-      remaining work is the state representation, the transition matrix's
-      position rows, every position measurement Jacobian, and the proto schema.
+      **Parked, on the numbers.** What is left is the part the ADR calls a
+      rewrite rather than an edit: `NavState` still holds geodetic position, so
+      nothing is anchored yet, and the remaining work is the state
+      representation, the transition matrix's position rows, every position
+      measurement Jacobian and the proto schema.
+
+      Instructions retired per `add_imu` on `mps2-an386` say it does not pay.
+      `f32-covariance` already took the build from 22 415 to 13 238 — 41 % —
+      and of what remains the mechanization is 3 209, or 24 %. Even converting
+      as well as the covariance did, at 56 %, the rewrite is worth about 13 %
+      of current, and it buys that by spending accuracy the covariance change
+      never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
+      anchor, and doing the arithmetic in `f32` would cost more.
+
+      Two cheaper things are worth more, together, and cost no precision at
+      all: the earth-model latitude trigonometry is 1 560 instructions (12 %)
+      recomputed every sample on a latitude that moves 2e-8 rad per sample, and
+      the transition matrix is 1 396 (11 %) built in `f64` and immediately
+      narrowed for a covariance that is already `f32`. Neither needs the state
+      representation to change. See [testing.md](testing.md) for the table.
+
+      The frame machinery stays: it is built, tested and costs nothing unused,
+      and it is the right design if a much longer run or a genuinely global
+      `f32` state ever makes the rewrite pay.
 - [x] **UD factorisation, Bierman–Thornton.** `P = U D Uᵀ`, never stored `P`.
       In [`ud`](../crates/drifters-filter/src/ud.rs), and the filter carries it:
       231 scalars against 441, positive-definiteness by construction, no square

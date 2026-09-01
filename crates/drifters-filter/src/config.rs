@@ -208,8 +208,7 @@ impl core::fmt::Display for ConfigError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for ConfigError {}
+impl core::error::Error for ConfigError {}
 
 /// Initial one-sigma values as a flat 21-element array in state order.
 pub(crate) fn initial_std_vector(options: &GinsOptions) -> [F; crate::state::N_STATE] {

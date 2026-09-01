@@ -19,6 +19,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
   and the rotation between two frames. Groundwork for
   [M14](docs/milestones.md)'s local-first state; nothing on the data path uses
   it yet.
+- **`Error` impls are unconditional.** `ConfigError`, `FilterError` and
+  `SmootherError` implement `core::error::Error` rather than `std::error::Error`
+  behind the `std` feature, so a `no_std` user gets them without enabling
+  anything. The `std` feature remains, for the `libm`-versus-platform question
+  in [`adr/0004`](docs/adr/0004-linear-algebra.md).
+- **`--cfg drifters_nightly_simd`** — expresses the lane-split dot products as
+  `core::simd` vectors. Nightly only, off by default, and not a cargo feature so
+  that `--all-features` on stable is unaffected. Worth 17.5 % of the
+  instructions retired per `add_imu` on Cortex-M4 with `f32-covariance`.
 - **`drifters-filter::anchor`** — the re-anchoring transform: the
   block-diagonal Jacobian (rotation on position, velocity and attitude error;
   identity on the body-frame IMU errors) and `P ← J P Jᵀ` over the factored

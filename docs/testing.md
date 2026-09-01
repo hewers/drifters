@@ -387,6 +387,41 @@ each stage out in turn:
 That table is what a proposal to go further has to argue against, and it is
 worth having before the argument rather than after.
 
+### What it argued against, and what it argued for
+
+The local-frame rewrite in M14 targets the mechanization row — 24 %, and only
+if it converts as well as the covariance did. It is
+[parked](milestones.md#m14--local-first-architecture--in-progress) on that
+number.
+
+`core::simd` beat it, from a two-line change. Expressing the lane-split dot
+products as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
+
+| | scalar | `core::simd` | |
+|---|---|---|---|
+| `f64` | 22 336 | 21 422 | −4 % |
+| `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
+
+On a part with no SIMD unit at all, because eight lanes lower to eight
+independent FPU operations without the iterator machinery the hand-written form
+leaves for the optimiser to undo. It needs nightly, so it is behind
+`--cfg drifters_nightly_simd` — a cfg rather than a cargo feature, so that
+`--all-features` on stable cannot reach a nightly-only attribute — with a
+non-blocking CI job so it cannot rot.
+
+Two things did *not* survive the same scrutiny, which is the useful half of a
+survey:
+
+- **`slice::as_chunks::<8>`** says what the lane loop means — a const-generic
+  chunk size, so no division to prove and no bound to check — and measured at
+  13 209 instructions against the hand-indexed 13 238, which is nothing. It is
+  stable since 1.88 and this crate's floor is 1.85, held so firmware on a
+  pinned toolchain can use it. Clippy's MSRV lint caught it; a tidier spelling
+  is not worth the floor.
+- **`generic_const_exprs`** would let `Ud::predict` be generic over the noise
+  channel count instead of naming `N_NOISE`. The filter has exactly one noise
+  shape, so the workaround costs a comment and nothing else.
+
 ### Why this layer exists
 
 The `docs/design.md` budget previously carried an estimate of ~11 KiB, reasoned

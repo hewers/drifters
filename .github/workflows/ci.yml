@@ -299,6 +299,30 @@ jobs:
             echo "no panic machinery linked [${features:-default}]"
           done
 
+  # `portable_simd` is opt-in through `--cfg drifters_nightly_simd`, not a cargo
+  # feature, so that `--all-features` on stable does not try to enable a
+  # nightly-only attribute. Nothing here gates a release; it runs so the path
+  # cannot rot silently between now and stabilisation, because an unbuilt
+  # configuration is not a configuration and this repository has learnt that
+  # the expensive way.
+  nightly_simd:
+    name: portable_simd (nightly, optional)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: build and test with portable_simd
+        env:
+          RUSTFLAGS: --cfg drifters_nightly_simd
+        run: |
+          cargo test -p drifters-filter
+          cargo test -p drifters-filter --features f32-covariance
+          cargo build -p drifters-filter --target thumbv7em-none-eabihf --features f32-covariance
+
   # Licence and advisory auditing.
   #
   # Deliberately run on the DEFAULT feature set. `gnss-rtk` is AGPL-3.0 and is

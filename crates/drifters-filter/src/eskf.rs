@@ -373,8 +373,7 @@ impl core::fmt::Display for FilterError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for FilterError {}
+impl core::error::Error for FilterError {}
 
 impl Eskf {
     /// Start with a zero error state and a diagonal covariance built from the

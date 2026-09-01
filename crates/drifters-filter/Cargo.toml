@@ -57,6 +57,10 @@ std = ["drifters-core/std"]
 smoothing = []
 
 [lints.rust]
+# `portable_simd` is opt-in through a cfg rather than a cargo feature, so that
+# `--all-features` on stable does not try to enable a nightly-only attribute.
+# Build it with: RUSTFLAGS="--cfg drifters_nightly_simd" cargo +nightly ...
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(drifters_nightly_simd)'] }
 missing_docs = "warn"
 unsafe_code = "forbid"
 

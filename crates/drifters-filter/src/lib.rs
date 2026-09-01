@@ -49,6 +49,7 @@
 //! - [`state`] — the error-state index map.
 //! - [`config`] — configuration and its validation.
 
+#![cfg_attr(drifters_nightly_simd, feature(portable_simd))]
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

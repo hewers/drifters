@@ -413,25 +413,47 @@ impl Ud {
 /// difference between the factored form being slower than a dense matrix
 /// product and being faster.
 ///
-/// Written with indices rather than as `a.chunks_exact(LANES).zip(...)`, which
-/// is the natural spelling. `Zip::new` is outlined for that pair of iterator
-/// types, and once it is the constant chunk size no longer reaches
-/// `ChunksExact::size_hint`'s division — leaving a `panic_const_div_by_zero`
-/// path in a binary that must link no panic machinery. See docs/testing.md
+/// Indexed rather than written as `a.chunks_exact(LANES).zip(...)`, which is the
+/// natural spelling and leaves a panic in the binary: `ChunksExact` carries its
+/// chunk size as a runtime field, so `size_hint`'s division needs a
+/// divide-by-zero check, and once `Zip::new` is outlined for that pair of
+/// iterator types the constant `8` stops reaching it. The check then survives
+/// into a binary that must link no panic machinery — see docs/testing.md
 /// Layer 10. Indexing a fixed-size array under `base + LANES <= W` is something
-/// the optimiser proves without help, and it costs nothing to do so: measured
-/// against the `chunks_exact` form it is the same 3.87 µs propagation.
+/// the optimiser proves without help.
+///
+/// `slice::as_chunks::<LANES>` says this properly — a const-generic size, so no
+/// division and no bound to prove — and was measured at 13 209 instructions per
+/// `add_imu` against this form's 13 238, which is nothing. It is stable since
+/// 1.88 and this crate's floor is 1.85, held so that firmware on a pinned
+/// toolchain can use it. A tidier spelling is not worth that, so the loop
+/// stays; if the floor ever rises for a real reason, this is the first thing to
+/// change.
 #[inline]
 fn lane_dot<const W: usize>(a: &[Scalar; W], b: &[Scalar; W]) -> Scalar {
-    let mut partial = [0.0 as Scalar; LANES];
-    let mut base = 0;
-    while base + LANES <= W {
-        for (lane, p) in partial.iter_mut().enumerate() {
-            *p += a[base + lane] * b[base + lane];
+    #[cfg(drifters_nightly_simd)]
+    {
+        use core::simd::{num::SimdFloat, Simd};
+        let mut acc = Simd::<Scalar, LANES>::splat(0.0);
+        let (a_lanes, _) = a.as_chunks::<LANES>();
+        let (b_lanes, _) = b.as_chunks::<LANES>();
+        for (x, y) in a_lanes.iter().zip(b_lanes) {
+            acc += Simd::from_array(*x) * Simd::from_array(*y);
         }
-        base += LANES;
+        return acc.reduce_sum();
     }
-    partial.iter().sum()
+    #[cfg(not(drifters_nightly_simd))]
+    {
+        let mut partial = [0.0 as Scalar; LANES];
+        let mut base = 0;
+        while base + LANES <= W {
+            for (lane, p) in partial.iter_mut().enumerate() {
+                *p += a[base + lane] * b[base + lane];
+            }
+            base += LANES;
+        }
+        partial.iter().sum()
+    }
 }
 
 impl Ud {
