@@ -6,7 +6,7 @@ with the sensor errors that corrupt it, and runs the same code on a Cortex-M
 microcontroller as on a workstation.
 
 *Aided* rather than simply inertial, because the IMU drives
-the propagation while corrections are from GNSS, barometric, magnetic and odometric.
+the propagation with corrections from GNSS, barometric, magnetic and odometric.
 *Extended pose* rather than pose, because velocity is a
 state and not a by-product.
 
@@ -24,9 +24,7 @@ Two estimators over the same interface:
 What differs from the reference implementations is that this is `no_std`,
 allocation-free, sans-IO, and measured on bare metal.
 
-## Measured, not asserted
-
-Every number here is produced by a test in this repository.
+## Measurements produced by tests in repo
 
 | | measured |
 |---|---|
