@@ -529,6 +529,56 @@ Each step is gated on a measurement rather than on the previous one compiling.
       rotation between the two NED frames.
       *Gate:* NEES invariant across a re-anchor; KF-GINS and GSDC accuracy
       unchanged.
+
+      **Measured first, because the whole milestone rests on one number.**
+      Carrying position as `f32` metres about an anchor, over KF-GINS, at
+      increasing anchor range:
+
+      | anchor range | horizontal RMS | NIS (`f64` gives 1.459) |
+      |---|---|---|
+      | 0 m | 0.0330 m | 1.486 |
+      | 500 m | 0.0330 m | 1.523 |
+      | 1 km | 0.0331 m | 1.562 |
+      | 2 km | 0.0334 m | 1.668 |
+      | 3 km | 0.0335 m | 1.722 |
+      | 5 km | 0.0362 m | 2.941 |
+      | 10 km | 0.0525 m | 12.809 |
+
+      So `f32` position works and **range is the only design parameter** —
+      which is [adr/0005](adr/0005-scalar-type.md)'s conclusion turned inside
+      out: the frame was the obstacle, not the precision. A latitude in radians
+      costs 0.76 m per ULP wherever you stand; a local coordinate costs
+      `6e-8 × range`, so the error is something the design controls rather than
+      something it inherits.
+
+      **NIS fails before accuracy does, and that sets the threshold.** At 5 km
+      the horizontal RMS is still respectable — ten per cent off — while NIS has
+      doubled, because quantisation is entering the innovations as noise the
+      filter does not model. A quietly inconsistent filter is worse than a
+      visibly inaccurate one, so the threshold comes from NIS: **re-anchor at
+      1 km**, costing 0.0001 m and seven per cent of NIS. Velocity is free at
+      any range and was measured to change nothing.
+
+      **Built so far:** [`drifters_core::local::LocalFrame`](../crates/drifters-core/src/local.rs)
+      — exact geodesic conversions through ECEF, and the rotation between two
+      frames, which at 1 km is 157 µrad and so is emphatically not a
+      translation; and [`drifters_filter::anchor`](../crates/drifters-filter/src/anchor.rs)
+      — the block-diagonal Jacobian, the covariance transform `P ← J P Jᵀ`, and
+      the ADR's NEES-invariance gate.
+
+      **The gate is necessary and not sufficient**, which matters given how much
+      of this project's history is instruments that agreed with themselves.
+      Invariance holds for *any* orthogonal `J`, so it cannot alone tell the
+      right rotation from its transpose. What it tests is that the covariance
+      and error-state transforms agree. Composition and the geodesic round trip
+      pin the rotation itself. All three are mutation-checked: rotating nothing,
+      rotating the body-frame bias blocks too, and transposing the rotation are
+      each caught.
+
+      **What is left** is the part the ADR calls a rewrite rather than an edit:
+      `NavState` still holds geodetic position, so nothing is anchored yet. The
+      remaining work is the state representation, the transition matrix's
+      position rows, every position measurement Jacobian, and the proto schema.
 - [x] **UD factorisation, Bierman–Thornton.** `P = U D Uᵀ`, never stored `P`.
       In [`ud`](../crates/drifters-filter/src/ud.rs), and the filter carries it:
       231 scalars against 441, positive-definiteness by construction, no square

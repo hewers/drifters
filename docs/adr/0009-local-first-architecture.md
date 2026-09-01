@@ -128,6 +128,23 @@ mid-run changes the coordinates and nothing statistical, so a correct
 implementation shows no step in `drifters nees`. That is a sharp test and the
 instrument for it already exists.
 
+**Amended, having built the gate: it is necessary and not sufficient.**
+Invariance holds for *any* orthogonal `J` — including the identity, and
+including the transpose of the right rotation — because an orthogonal map
+preserves `eᵀP⁻¹e` by construction. What the test actually pins is that the
+covariance transform and the error-state transform *agree*, which is worth
+having and is not the same claim. Two further properties are needed to fix the
+rotation itself: that re-anchoring twice equals re-anchoring once to the far
+frame, and that the frame conversions reproduce the geodesic ones. All three are
+in place and mutation-checked.
+
+**And the premise is measured.** Position as `f32` metres about an anchor, over
+KF-GINS: 0.0330 m and NIS 1.486 at the origin, 0.0331 m and 1.562 at 1 km,
+0.0362 m and 2.941 at 5 km, 0.0525 m and 12.809 at 10 km. `f32` position works,
+and the anchor range is the only parameter — the frame was the obstacle, not the
+precision. NIS degrades well before accuracy does, so it sets the threshold:
+re-anchor at **1 km**. Velocity is free at any range.
+
 ### 2. UD factorisation (Bierman–Thornton) replaces stored `P` — **done**
 
 Built and swapped in. Two things the section below got wrong are corrected at

@@ -56,6 +56,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod anchor;
 pub mod config;
 pub mod engine;
 pub mod eskf;

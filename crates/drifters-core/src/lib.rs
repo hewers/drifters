@@ -30,6 +30,7 @@
 
 pub mod earth;
 pub mod frames;
+pub mod local;
 pub mod math;
 pub mod time;
 pub mod types;

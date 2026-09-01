@@ -12,7 +12,17 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`drifters-core::local`** — `LocalFrame`, a local Cartesian frame in NED
+  metres about an explicit geodetic origin, with exact conversions through ECEF
+  and the rotation between two frames. Groundwork for
+  [M14](docs/milestones.md)'s local-first state; nothing on the data path uses
+  it yet.
+- **`drifters-filter::anchor`** — the re-anchoring transform: the
+  block-diagonal Jacobian (rotation on position, velocity and attitude error;
+  identity on the body-frame IMU errors) and `P ← J P Jᵀ` over the factored
+  covariance.
 
 ## [0.1.0] — unreleased
 
