@@ -3,7 +3,7 @@
 A `no_std`, allocation-free **aided inertial navigation** library in Rust. It
 estimates *extended pose* — position, velocity and attitude together — along
 with the sensor errors that corrupt it, and runs the same code on a Cortex-M
-microcontroller and on a workstation.
+microcontroller as on a workstation.
 
 *Aided* rather than simply inertial, because only the IMU is: it alone drives
 the propagation, and GNSS, barometric, magnetic and odometric aiding all enter
