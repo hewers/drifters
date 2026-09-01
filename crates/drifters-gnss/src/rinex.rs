@@ -348,7 +348,10 @@ mod tests {
 
     fn tmp(name: &str, body: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("drifters-rinex-{name}"));
-        File::create(&p).unwrap().write_all(body.as_bytes()).unwrap();
+        File::create(&p)
+            .unwrap()
+            .write_all(body.as_bytes())
+            .unwrap();
         p
     }
 
@@ -381,13 +384,13 @@ mod tests {
         const C5: usize = 4;
         const S1: usize = 5;
         let mut s = String::from(concat!(
-"     2.11           OBSERVATION DATA    M (MIXED)           RINEX VERSION / TYPE\n",
-"SLAC                                                        MARKER NAME\n",
-" -2703115.2660 -4291768.3440  3854247.9550                  APPROX POSITION XYZ\n",
-"     6    L1    L2    C1    P2    C5    S1                  # / TYPES OF OBSERV\n",
-"    30.0000                                                 INTERVAL\n",
-"                                                            END OF HEADER\n",
-" 23  5 19  0  0  0.0000000  0  3G10R06E25\n",
+            "     2.11           OBSERVATION DATA    M (MIXED)           RINEX VERSION / TYPE\n",
+            "SLAC                                                        MARKER NAME\n",
+            " -2703115.2660 -4291768.3440  3854247.9550                  APPROX POSITION XYZ\n",
+            "     6    L1    L2    C1    P2    C5    S1                  # / TYPES OF OBSERV\n",
+            "    30.0000                                                 INTERVAL\n",
+            "                                                            END OF HEADER\n",
+            " 23  5 19  0  0  0.0000000  0  3G10R06E25\n",
         ));
         s += &observation_lines(
             &[
@@ -480,11 +483,11 @@ mod tests {
 
     #[test]
     fn a_file_without_the_required_header_records_is_refused() {
-        let p = tmp("nopos.o", "     2.11           OBSERVATION DATA    M\nEND OF HEADER\n");
-        assert!(matches!(
-            read_base(&p, &["C1"]),
-            Err(RinexError::Header(_))
-        ));
+        let p = tmp(
+            "nopos.o",
+            "     2.11           OBSERVATION DATA    M\nEND OF HEADER\n",
+        );
+        assert!(matches!(read_base(&p, &["C1"]), Err(RinexError::Header(_))));
         let p = tmp(
             "notype.o",
             " -2703115.2660 -4291768.3440  3854247.9550                  APPROX POSITION XYZ\n\

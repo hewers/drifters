@@ -19,7 +19,7 @@
 //! A clock state per constellation is required, not optional: solving one
 //! common clock leaves 16.8 m of median residual.
 
-use crate::robust::{self, Clocks, Row, elevation_sigma, NX};
+use crate::robust::{self, elevation_sigma, Clocks, Row, NX};
 use drifters_core::frames::Ecef;
 use drifters_core::math::{Cholesky, Matrix};
 

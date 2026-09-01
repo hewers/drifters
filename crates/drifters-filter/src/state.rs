@@ -170,7 +170,11 @@ mod size_tests {
         // largest single saving the engine has had.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            if cfg!(feature = "smoothing") { 21_488 } else { 3_240 },
+            if cfg!(feature = "smoothing") {
+                21_488
+            } else {
+                3_240
+            },
             "whole engine"
         );
     }

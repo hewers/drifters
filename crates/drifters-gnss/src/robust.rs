@@ -172,8 +172,14 @@ mod tests {
         v.push(520.0);
         let (centre, scale) = centre_scale(&v);
         assert!((centre - 501.0).abs() < 0.11, "centre {centre}");
-        assert!(scale < 2.0, "scale should reflect the spread, not the offset: {scale}");
-        assert!((520.0 - centre) / scale > 9.0, "the outlier should be many sigmas out");
+        assert!(
+            scale < 2.0,
+            "scale should reflect the spread, not the offset: {scale}"
+        );
+        assert!(
+            (520.0 - centre) / scale > 9.0,
+            "the outlier should be many sigmas out"
+        );
     }
 
     #[test]
@@ -249,7 +255,10 @@ mod tests {
         let zenith = elevation_sigma(90.0, a, b);
         let low = elevation_sigma(15.0, a, b);
         assert!((zenith - 16.3).abs() < 1e-9);
-        assert!(low > 3.0 * zenith, "{low} should be far worse than {zenith}");
+        assert!(
+            low > 3.0 * zenith,
+            "{low} should be far worse than {zenith}"
+        );
         assert!(elevation_sigma(0.0, a, b).is_finite());
         assert!(elevation_sigma(-5.0, a, b).is_finite());
         // Below the 3° clamp every satellite gets the same large sigma.

@@ -17,9 +17,9 @@ use crate::state::{
     NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID, BA_ID, BGSTD_ID,
     BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
 };
-use crate::ud::{Ud, Whitened};
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SASTD_ID, SA_ID, SGSTD_ID, SG_ID};
+use crate::ud::{Ud, Whitened};
 
 /// Continuous-time error-state dynamics `F` for the phi-angle model.
 ///

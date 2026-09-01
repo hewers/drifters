@@ -53,17 +53,16 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-
 #[cfg(feature = "std")]
 extern crate std;
 
-pub mod range;
-pub mod smoother;
 pub mod config;
 pub mod engine;
 pub mod eskf;
 pub mod measurement;
 pub mod mechanization;
+pub mod range;
+pub mod smoother;
 pub mod state;
 pub mod ud;
 

@@ -36,7 +36,7 @@
 //! the solved position change degrades, because the satellites it discards
 //! were carrying the geometry.
 
-use crate::robust::{self, Clocks, Row, elevation_sigma};
+use crate::robust::{self, elevation_sigma, Clocks, Row};
 use drifters_core::frames::Ecef;
 use drifters_core::math::Vec3;
 
@@ -221,7 +221,10 @@ pub fn delta_position(
         detector: f64,
     }
     let mut pairs: Vec<Pair> = Vec::with_capacity(current.len());
-    for c in current.iter().filter(|c| c.usable() && c.elevation >= set.mask) {
+    for c in current
+        .iter()
+        .filter(|c| c.usable() && c.elevation >= set.mask)
+    {
         let Some(p) = previous.iter().find(|p| p.matches(c) && p.usable()) else {
             continue;
         };
@@ -373,7 +376,11 @@ mod tests {
         let (prev, curr) = epochs(at, truth, 10);
         let d = delta_position(&prev, &curr, 1.0, at, &Settings::default()).unwrap();
         assert_eq!(d.screened, 0);
-        assert!(err(&d, truth) < 1.0e-4, "delta error {:.2e} m", err(&d, truth));
+        assert!(
+            err(&d, truth) < 1.0e-4,
+            "delta error {:.2e} m",
+            err(&d, truth)
+        );
     }
 
     #[test]
@@ -389,8 +396,15 @@ mod tests {
         assert_eq!(curr[4].state, state::VALID, "the flag must stay clean");
 
         let d = delta_position(&prev, &curr, 1.0, at, &Settings::default()).unwrap();
-        assert_eq!(d.screened, 1, "the slipped satellite should be screened out");
-        assert!(err(&d, truth) < 1.0e-4, "delta error {:.2e} m", err(&d, truth));
+        assert_eq!(
+            d.screened, 1,
+            "the slipped satellite should be screened out"
+        );
+        assert!(
+            err(&d, truth) < 1.0e-4,
+            "delta error {:.2e} m",
+            err(&d, truth)
+        );
 
         // With the screen disabled the same slip is left to the Huber weight,
         // which is not enough on its own.
@@ -421,7 +435,11 @@ mod tests {
         }
         let d = delta_position(&prev, &curr, 1.0, at, &Settings::default()).unwrap();
         assert_eq!(d.screened, 0, "a common offset is clock, not slip");
-        assert!(err(&d, truth) < 1.0e-4, "delta error {:.2e} m", err(&d, truth));
+        assert!(
+            err(&d, truth) < 1.0e-4,
+            "delta error {:.2e} m",
+            err(&d, truth)
+        );
     }
 
     #[test]
@@ -445,7 +463,11 @@ mod tests {
 
         let d = delta_position(&prev, &curr, 1.0, at, &Settings::default()).unwrap();
         assert_eq!(d.screened, 0);
-        assert!(err(&d, truth) < 1.0e-4, "delta error {:.2e} m", err(&d, truth));
+        assert!(
+            err(&d, truth) < 1.0e-4,
+            "delta error {:.2e} m",
+            err(&d, truth)
+        );
     }
 
     #[test]
@@ -463,7 +485,11 @@ mod tests {
         let d = delta_position(&prev, &curr, 1.0, at, &Settings::default()).unwrap();
         assert_eq!(d.used, 10, "two rows should be gone before screening");
         assert_eq!(d.screened, 0);
-        assert!(err(&d, truth) < 1.0e-4, "delta error {:.2e} m", err(&d, truth));
+        assert!(
+            err(&d, truth) < 1.0e-4,
+            "delta error {:.2e} m",
+            err(&d, truth)
+        );
     }
 
     #[test]
@@ -492,6 +518,9 @@ mod tests {
         let off = Ecef::new(at.x + 8.0, at.y - 5.0, at.z + 6.0);
         let approx = delta_position(&prev, &curr, 1.0, off, &Settings::default()).unwrap();
         let moved = (approx.delta - exact.delta).norm();
-        assert!(moved < 1.0e-3, "a 11 m anchor error moved the solve {moved:.2e} m");
+        assert!(
+            moved < 1.0e-3,
+            "a 11 m anchor error moved the solve {moved:.2e} m"
+        );
     }
 }

@@ -31,10 +31,7 @@ fn main() {
     let mut errors: Vec<f64> = Vec::new();
     let mut used = 0usize;
     for epoch in &base.epochs {
-        let Some((_, sats)) = states
-            .iter()
-            .find(|(t, _)| (t - epoch.tow).abs() < 0.5)
-        else {
+        let Some((_, sats)) = states.iter().find(|(t, _)| (t - epoch.tow).abs() < 0.5) else {
             continue;
         };
         let obs: Vec<wls::Observation> = epoch

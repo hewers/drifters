@@ -169,7 +169,11 @@ fn solve_once(
 /// Huber weight for a residual of `r` against a one-sigma of `s`.
 fn huber(r: Vec3, s: Vec3, k: f64) -> f64 {
     let z = ((r.x / s.x).powi(2) + (r.y / s.y).powi(2) + (r.z / s.z).powi(2)).sqrt();
-    if z <= k { 1.0 } else { k / z.max(1e-12) }
+    if z <= k {
+        1.0
+    } else {
+        k / z.max(1e-12)
+    }
 }
 
 /// Fit a trajectory of `n` epochs to the anchors and links.
@@ -180,22 +184,12 @@ fn huber(r: Vec3, s: Vec3, k: f64) -> f64 {
 ///
 /// Anchors and links may be given in any order, and an epoch may carry several
 /// of either; they simply add to the normal equations.
-pub fn smooth(
-    n: usize,
-    anchors: &[Anchor],
-    links: &[Link],
-    set: &Settings,
-) -> Option<Vec<Vec3>> {
+pub fn smooth(n: usize, anchors: &[Anchor], links: &[Link], set: &Settings) -> Option<Vec<Vec3>> {
     if n == 0 || anchors.is_empty() {
         return None;
     }
     let usable = |s: Vec3| {
-        s.x.is_finite()
-            && s.y.is_finite()
-            && s.z.is_finite()
-            && s.x > 0.0
-            && s.y > 0.0
-            && s.z > 0.0
+        s.x.is_finite() && s.y.is_finite() && s.z.is_finite() && s.x > 0.0 && s.y > 0.0 && s.z > 0.0
     };
     if !anchors.iter().all(|a| usable(a.sigma)) || !links.iter().all(|l| usable(l.sigma)) {
         return None;
@@ -299,7 +293,10 @@ mod tests {
         .unwrap();
         let before = rms(&measured, &truth);
         let after = rms(&out, &truth);
-        assert!(before > 4.0, "the scene should be noisy to start: {before:.3}");
+        assert!(
+            before > 4.0,
+            "the scene should be noisy to start: {before:.3}"
+        );
         assert!(
             after < before / 8.0,
             "smoothing should average the noise down: {before:.3} -> {after:.3}"
@@ -310,7 +307,13 @@ mod tests {
     fn with_no_links_every_epoch_keeps_its_own_anchor() {
         // Nothing couples the epochs, so the fit is the measurement.
         let (_, measured) = scene(50, 5.0);
-        let out = smooth(measured.len(), &anchors(&measured, 5.0), &[], &Settings::default()).unwrap();
+        let out = smooth(
+            measured.len(),
+            &anchors(&measured, 5.0),
+            &[],
+            &Settings::default(),
+        )
+        .unwrap();
         assert!(rms(&out, &measured) < 1.0e-9);
     }
 
@@ -323,7 +326,13 @@ mod tests {
         for l in bad.iter_mut() {
             l.delta += Vec3::new(500.0, 0.0, 0.0);
         }
-        let out = smooth(truth.len(), &anchors(&truth, 0.01), &bad, &Settings::default()).unwrap();
+        let out = smooth(
+            truth.len(),
+            &anchors(&truth, 0.01),
+            &bad,
+            &Settings::default(),
+        )
+        .unwrap();
         assert!(rms(&out, &truth) < 0.05, "{:.4}", rms(&out, &truth));
     }
 
@@ -336,7 +345,13 @@ mod tests {
             position: truth[17],
             sigma: Vec3::splat(0.1),
         }];
-        let out = smooth(truth.len(), &one, &links(&truth, 0.01), &Settings::default()).unwrap();
+        let out = smooth(
+            truth.len(),
+            &one,
+            &links(&truth, 0.01),
+            &Settings::default(),
+        )
+        .unwrap();
         assert!(rms(&out, &truth) < 1.0e-6, "{:.2e}", rms(&out, &truth));
     }
 
@@ -360,24 +375,42 @@ mod tests {
     fn degenerate_input_is_refused_rather_than_producing_a_plausible_answer() {
         let (truth, _) = scene(10, 0.0);
         let good = anchors(&truth, 1.0);
-        assert!(smooth(0, &good, &[], &Settings::default()).is_none(), "no epochs");
-        assert!(smooth(10, &[], &links(&truth, 0.1), &Settings::default()).is_none(), "no anchors");
+        assert!(
+            smooth(0, &good, &[], &Settings::default()).is_none(),
+            "no epochs"
+        );
+        assert!(
+            smooth(10, &[], &links(&truth, 0.1), &Settings::default()).is_none(),
+            "no anchors"
+        );
 
         let mut zero = good.clone();
         zero[3].sigma = Vec3::ZERO;
-        assert!(smooth(10, &zero, &[], &Settings::default()).is_none(), "zero sigma");
+        assert!(
+            smooth(10, &zero, &[], &Settings::default()).is_none(),
+            "zero sigma"
+        );
 
         let mut nan = good.clone();
         nan[3].sigma = Vec3::splat(f64::NAN);
-        assert!(smooth(10, &nan, &[], &Settings::default()).is_none(), "non-finite sigma");
+        assert!(
+            smooth(10, &nan, &[], &Settings::default()).is_none(),
+            "non-finite sigma"
+        );
 
         let mut past_end = good.clone();
         past_end[3].index = 99;
-        assert!(smooth(10, &past_end, &[], &Settings::default()).is_none(), "index past the end");
+        assert!(
+            smooth(10, &past_end, &[], &Settings::default()).is_none(),
+            "index past the end"
+        );
 
         let mut link_past_end = links(&truth, 0.1);
         link_past_end[2].index = 9;
-        assert!(smooth(10, &good, &link_past_end, &Settings::default()).is_none(), "link past the end");
+        assert!(
+            smooth(10, &good, &link_past_end, &Settings::default()).is_none(),
+            "link past the end"
+        );
     }
 
     #[test]
@@ -388,8 +421,16 @@ mod tests {
         // against a perturbation is what catches a sign error in the normal
         // equations that a smoke test would miss.
         let a = vec![
-            Anchor { index: 0, position: Vec3::new(0.0, 0.0, 0.0), sigma: Vec3::splat(1.0) },
-            Anchor { index: 1, position: Vec3::new(10.0, 0.0, 0.0), sigma: Vec3::splat(1.0) },
+            Anchor {
+                index: 0,
+                position: Vec3::new(0.0, 0.0, 0.0),
+                sigma: Vec3::splat(1.0),
+            },
+            Anchor {
+                index: 1,
+                position: Vec3::new(10.0, 0.0, 0.0),
+                sigma: Vec3::splat(1.0),
+            },
         ];
         let l = vec![Link {
             index: 0,
@@ -401,9 +442,8 @@ mod tests {
         assert!((out[0].x - 10.0 / 3.0).abs() < 1e-12, "{}", out[0].x);
         assert!((out[1].x - 20.0 / 3.0).abs() < 1e-12, "{}", out[1].x);
 
-        let cost = |p: &[Vec3]| {
-            p[0].x * p[0].x + (p[1].x - 10.0).powi(2) + (p[1].x - p[0].x).powi(2)
-        };
+        let cost =
+            |p: &[Vec3]| p[0].x * p[0].x + (p[1].x - 10.0).powi(2) + (p[1].x - p[0].x).powi(2);
         let base = cost(&out);
         for step in [-1e-3, 1e-3] {
             for i in 0..2 {

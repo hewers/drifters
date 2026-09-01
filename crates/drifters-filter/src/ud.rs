@@ -377,10 +377,7 @@ impl Ud {
             for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
                 *x = q * p;
             }
-            for (chunk, pchunk) in weighted
-                .chunks_exact(LANES)
-                .zip(pivot.chunks_exact(LANES))
-            {
+            for (chunk, pchunk) in weighted.chunks_exact(LANES).zip(pivot.chunks_exact(LANES)) {
                 for l in 0..LANES {
                     partial[l] += chunk[l] * pchunk[l];
                 }
@@ -489,7 +486,10 @@ mod tests {
     struct Rng(u64);
     impl Rng {
         fn next(&mut self) -> F {
-            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             (self.0 >> 11) as F / (1u64 << 53) as F
         }
         fn signed(&mut self) -> F {
@@ -541,7 +541,10 @@ mod tests {
             let ud = Ud::from_covariance(&p).expect("positive definite");
             let back = ud.to_covariance();
             let worst = worst_relative(&p, &back);
-            assert!(worst < 1.0e-9, "seed {seed}: worst relative error {worst:.2e}");
+            assert!(
+                worst < 1.0e-9,
+                "seed {seed}: worst relative error {worst:.2e}"
+            );
         }
     }
 
@@ -721,7 +724,9 @@ mod tests {
                 2 => 2.0 * noise.gyro_bias_std.x * noise.gyro_bias_std.x / noise.correlation_time,
                 3 => 2.0 * noise.accel_bias_std.x * noise.accel_bias_std.x / noise.correlation_time,
                 4 => 2.0 * noise.gyro_scale_std.x * noise.gyro_scale_std.x / noise.correlation_time,
-                _ => 2.0 * noise.accel_scale_std.x * noise.accel_scale_std.x / noise.correlation_time,
+                _ => {
+                    2.0 * noise.accel_scale_std.x * noise.accel_scale_std.x / noise.correlation_time
+                }
             };
         }
 
@@ -799,8 +804,12 @@ mod tests {
             {
                 dense_failed_at = Some(step);
             }
-            ud.update(&hv, 1.0e-10).expect("the factored form stays well posed");
-            assert!(ud.is_healthy(), "step {step}: D went negative or non-finite");
+            ud.update(&hv, 1.0e-10)
+                .expect("the factored form stays well posed");
+            assert!(
+                ud.is_healthy(),
+                "step {step}: D went negative or non-finite"
+            );
         }
         assert!(
             dense_failed_at.is_some(),
@@ -828,7 +837,10 @@ mod tests {
             // Deliberately tiny measurement noise, which is what drives a
             // dense covariance indefinite.
             ud.update(&h, 1.0e-8).expect("well posed");
-            assert!(ud.is_healthy(), "step {step}: D went negative or non-finite");
+            assert!(
+                ud.is_healthy(),
+                "step {step}: D went negative or non-finite"
+            );
             for (i, d) in ud.diagonal().iter().enumerate() {
                 assert!(*d >= 0.0, "step {step}: D[{i}] = {d}");
             }
@@ -942,17 +954,26 @@ mod tests {
     #[test]
     fn degenerate_input_is_refused_rather_than_producing_a_factorisation() {
         let mut p = StateMatrix::zeros();
-        assert!(Ud::from_covariance(&p).is_none(), "a zero matrix is not a covariance");
+        assert!(
+            Ud::from_covariance(&p).is_none(),
+            "a zero matrix is not a covariance"
+        );
         for i in 0..N_STATE {
             p[(i, i)] = 1.0;
         }
         p[(3, 3)] = -1.0;
-        assert!(Ud::from_covariance(&p).is_none(), "a negative variance is not one either");
+        assert!(
+            Ud::from_covariance(&p).is_none(),
+            "a negative variance is not one either"
+        );
 
         let mut ud = Ud::from_variances(&[1.0; N_STATE]);
         let h = StateVector::zeros();
         assert!(ud.update(&h, 0.0).is_none(), "zero measurement noise");
         assert!(ud.update(&h, -1.0).is_none(), "negative measurement noise");
-        assert!(ud.update(&h, F::NAN).is_none(), "non-finite measurement noise");
+        assert!(
+            ud.update(&h, F::NAN).is_none(),
+            "non-finite measurement noise"
+        );
     }
 }

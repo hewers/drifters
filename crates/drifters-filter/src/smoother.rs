@@ -147,7 +147,9 @@ impl core::fmt::Display for SmootherError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::OutputTooShort => f.write_str("output slice shorter than the checkpoints"),
-            Self::Singular(i) => write!(f, "prior covariance at epoch {i} is not positive definite"),
+            Self::Singular(i) => {
+                write!(f, "prior covariance at epoch {i} is not positive definite")
+            }
         }
     }
 }
@@ -263,7 +265,10 @@ mod tests {
     struct Rng(u64);
     impl Rng {
         fn next(&mut self) -> f64 {
-            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             (self.0 >> 11) as f64 / (1u64 << 53) as f64
         }
         /// Box–Muller, one value per call.
@@ -400,11 +405,7 @@ mod tests {
                 prior,
                 posterior,
                 correction,
-                transition: if k == 0 {
-                    StateMatrix::identity()
-                } else {
-                    phi
-                },
+                transition: if k == 0 { StateMatrix::identity() } else { phi },
             };
             innovations[k] = nu;
         }
@@ -481,7 +482,10 @@ mod tests {
                 worst = worst.max(g[(i, 0)].abs());
             }
         }
-        assert!(scale > 1.0, "the objective's terms should be substantial, got {scale:.3e}");
+        assert!(
+            scale > 1.0,
+            "the objective's terms should be substantial, got {scale:.3e}"
+        );
         assert!(
             worst < 1.0e-8 * scale,
             "the smoothed trajectory is not the least-squares optimum: \
@@ -508,8 +512,8 @@ mod tests {
         let points = [checkpoint(1.0, 2.0, 0.0), checkpoint(1.0, 2.0, 3.0)];
         let mut out = [blank(); 2];
         smooth(&points, &mut out).unwrap();
-        let moved = out[0].state.pva.velocity.to_vec3().norm()
-            + out[0].state.pva.position.height.abs();
+        let moved =
+            out[0].state.pva.velocity.to_vec3().norm() + out[0].state.pva.position.height.abs();
         assert!(
             moved > 1.0e-9,
             "the backward correction should have moved epoch 0"
@@ -589,7 +593,10 @@ mod tests {
             for i in 0..N_STATE {
                 for j in 0..N_STATE {
                     let d = (s.covariance.data[i][j] - s.covariance.data[j][i]).abs();
-                    assert!(d < 1.0e-12, "epoch {k} is not symmetric at ({i},{j}): {d:e}");
+                    assert!(
+                        d < 1.0e-12,
+                        "epoch {k} is not symmetric at ({i},{j}): {d:e}"
+                    );
                 }
             }
             assert!(

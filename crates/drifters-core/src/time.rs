@@ -296,7 +296,11 @@ mod tests {
         for (week, tow) in [(0u32, 0.0), (2262, 504_670.0), (2311, 345_678.125)] {
             let t = GpsTime::new(week, tow);
             assert_eq!(t.week(), week);
-            assert!((t.tow() - tow).abs() < 1e-6, "{week}:{tow} gave {}", t.tow());
+            assert!(
+                (t.tow() - tow).abs() < 1e-6,
+                "{week}:{tow} gave {}",
+                t.tow()
+            );
         }
     }
 

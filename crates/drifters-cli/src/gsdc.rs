@@ -490,11 +490,7 @@ impl Default for GnssOptions {
 /// user-supplied assumption rather than a measurement — see the module docs.
 /// When `doppler` is set, each epoch's satellites are also used to solve for a
 /// receiver velocity — see [`solve_doppler`].
-pub fn read_gnss(
-    path: &Path,
-    lag: f64,
-    options: &GnssOptions,
-) -> Result<GnssTrace, DataError> {
+pub fn read_gnss(path: &Path, lag: f64, options: &GnssOptions) -> Result<GnssTrace, DataError> {
     let GnssOptions {
         sigma,
         velocity,
@@ -699,8 +695,7 @@ pub fn read_gnss(
             // Highest first, then truncate: everything that degrades a
             // pseudorange degrades toward the horizon, so a thinned sky should
             // be the sky a receiver would still be tracking.
-            e.ranges
-                .sort_by(|a, b| b.elevation.total_cmp(&a.elevation));
+            e.ranges.sort_by(|a, b| b.elevation.total_cmp(&a.elevation));
             e.ranges.truncate(keep);
         }
     }
@@ -799,11 +794,7 @@ pub fn read_gnss(
             // whole case tight coupling exists for. Expressed as an
             // effectively infinite sigma rather than a dropped fix, so the
             // epoch still carries its velocity and the two paths stay aligned.
-            position_std: if solved[i] {
-                sigma
-            } else {
-                Vec3::splat(1.0e6)
-            },
+            position_std: if solved[i] { sigma } else { Vec3::splat(1.0e6) },
             velocity: None,
             velocity_std: Vec3::ZERO,
         };
@@ -816,7 +807,10 @@ pub fn read_gnss(
         // good. Averaging the two deltas that meet at an epoch is a central
         // difference, which has no lag, and it recovers the whole advantage.
         if let (Some(before), Some(after)) = (
-            i.checked_sub(1).and_then(|j| deltas.get(j)).copied().flatten(),
+            i.checked_sub(1)
+                .and_then(|j| deltas.get(j))
+                .copied()
+                .flatten(),
             deltas.get(i).copied().flatten(),
         ) {
             let ecef = (before + after) * 0.5;
@@ -1013,7 +1007,11 @@ mod tests {
             // range the solver computes is the one written here.
             let theta = OMEGA_E * range / C;
             let (sin, cos) = theta.sin_cos();
-            let unrotated = [sat[0] * cos - sat[1] * sin, sat[0] * sin + sat[1] * cos, sat[2]];
+            let unrotated = [
+                sat[0] * cos - sat[1] * sin,
+                sat[0] * sin + sat[1] * cos,
+                sat[2],
+            ];
             // Split the true range into a raw reading and the corrections.
             let (iono, tropo, sv_clock, isb_ns) = (3.0, 7.0, -12.0, 4.0);
             let isb = isb_ns * C * 1.0e-9;
@@ -1041,7 +1039,16 @@ mod tests {
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
         let p = tmp("gnss-ranges.csv", &range_epoch(truth, 1234.5, &[9; 8]));
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: source,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         assert_eq!(fixes.len(), 1);
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
@@ -1052,13 +1059,25 @@ mod tests {
 
         // With the file's own column the same epoch stays at the 53 m seed,
         // confirming the solve did the work rather than the seed being right.
-        let file = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
+        let file = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: PositionSource::File,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         let seeded = file[0].position.to_ecef();
         let seed_err = ((seeded.x - truth.x).powi(2)
             + (seeded.y - truth.y).powi(2)
             + (seeded.z - truth.z).powi(2))
         .sqrt();
-        assert!(seed_err > 50.0, "seed should be far from truth: {seed_err:.1} m");
+        assert!(
+            seed_err > 50.0,
+            "seed should be far from truth: {seed_err:.1} m"
+        );
     }
 
     #[test]
@@ -1073,13 +1092,25 @@ mod tests {
         // three position states, one clock, and one redundant observation.
         let mixed = range_epoch(truth, 1234.5, &[9, 1, 9, 8, 9, 0, 9, 9]);
         let p = tmp("gnss-state.csv", &mixed);
-        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: source,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         let solved = fixes[0].position.to_ecef();
         let err = ((solved.x - truth.x).powi(2)
             + (solved.y - truth.y).powi(2)
             + (solved.z - truth.z).powi(2))
         .sqrt();
-        assert!(err < 0.5, "the five valid rows should still solve: {err:.4} m");
+        assert!(
+            err < 0.5,
+            "the five valid rows should still solve: {err:.4} m"
+        );
     }
 
     #[test]
@@ -1090,9 +1121,21 @@ mod tests {
         // the file's solution rather than dropping the epoch means enabling
         // the solver never costs a trace its fixes.
         let truth = Lla::new(37.4_f64.to_radians(), -122.1_f64.to_radians(), 30.0).to_ecef();
-        let p = tmp("gnss-thin.csv", &range_epoch(truth, 0.0, &[9, 9, 9, 9, 0, 0, 0, 0]));
+        let p = tmp(
+            "gnss-thin.csv",
+            &range_epoch(truth, 0.0, &[9, 9, 9, 9, 0, 0, 0, 0]),
+        );
         let source = PositionSource::Solve(crate::wls::Settings::default());
-        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: source, ..Default::default() }).unwrap().fixes;
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: source,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         assert_eq!(fixes.len(), 1, "the epoch should survive, not be dropped");
         let solved = fixes[0].position.to_ecef();
         // The file's seed, 53.9 m from truth, not a wild solve.
@@ -1100,7 +1143,10 @@ mod tests {
             + (solved.y - truth.y).powi(2)
             + (solved.z - truth.z).powi(2))
         .sqrt();
-        assert!((err - 53.85).abs() < 0.5, "expected the file seed: {err:.2} m");
+        assert!(
+            (err - 53.85).abs() < 0.5,
+            "expected the file seed: {err:.2} m"
+        );
     }
 
     /// Three epochs of carrier phase for a receiver moving at a constant
@@ -1115,11 +1161,7 @@ mod tests {
     /// scatter has anything to object to. Their Doppler is left telling the
     /// truth, because a cycle slip moves the carrier phase and not the
     /// frequency — which is the whole reason the cross-check works.
-    fn carrier_trace(
-        truth: Ecef,
-        velocity: [f64; 3],
-        rogue: Option<([f64; 3], usize)>,
-    ) -> String {
+    fn carrier_trace(truth: Ecef, velocity: [f64; 3], rogue: Option<([f64; 3], usize)>) -> String {
         const ORBIT: f64 = 26_560_000.0;
         let mut csv = String::from(
             "utcTimeMillis,WlsPositionXEcefMeters,WlsPositionYEcefMeters,\
@@ -1162,10 +1204,9 @@ mod tests {
                 truth.z + velocity[2] * step as f64,
             ];
             for (i, sv) in sats.iter().enumerate() {
-                let truthful = ((sv[0] - rx[0]).powi(2)
-                    + (sv[1] - rx[1]).powi(2)
-                    + (sv[2] - rx[2]).powi(2))
-                .sqrt();
+                let truthful =
+                    ((sv[0] - rx[0]).powi(2) + (sv[1] - rx[1]).powi(2) + (sv[2] - rx[2]).powi(2))
+                        .sqrt();
                 let unit = [
                     (rx[0] - sv[0]) / truthful,
                     (rx[1] - sv[1]) / truthful,
@@ -1190,9 +1231,13 @@ mod tests {
                 csv.push_str(&format!(
                     "{t},{:.6},{:.6},{:.6},{adr:.6},1,{i},1.575e9,{:.4},1,{rate:.6},0.0,\
                      {:.6},{:.6},{:.6},0.0,0.0,0.0,0.1\n",
-                    truth.x, truth.y, truth.z,
+                    truth.x,
+                    truth.y,
+                    truth.z,
                     (15.0 + 6.0 * i as f64),
-                    sv[0], sv[1], sv[2],
+                    sv[0],
+                    sv[1],
+                    sv[2],
                 ));
             }
         }
@@ -1217,7 +1262,8 @@ mod tests {
                 ..Default::default()
             },
         )
-            .unwrap().fixes;
+        .unwrap()
+        .fixes;
         assert_eq!(fixes.len(), 3);
 
         let v = fixes[1].velocity.expect("the middle epoch has both deltas");
@@ -1225,7 +1271,10 @@ mod tests {
             * Vec3::new(motion[0], motion[1], motion[2]);
         let e = (v.n - ned.x).hypot(v.e - ned.y).hypot(v.d - ned.z);
         assert!(e < 1.0e-3, "carrier velocity off by {e:.2e} m/s");
-        assert!(fixes[1].velocity_std.x < 0.1, "carrier epochs claim carrier accuracy");
+        assert!(
+            fixes[1].velocity_std.x < 0.1,
+            "carrier epochs claim carrier accuracy"
+        );
     }
 
     #[test]
@@ -1263,7 +1312,8 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap().fixes;
+        .unwrap()
+        .fixes;
         assert!(
             err(&fixes[1]) < 1.0,
             "the Doppler fallback should be roughly right: {:.3} m/s",
@@ -1284,7 +1334,8 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap().fixes;
+        .unwrap()
+        .fixes;
         assert!(
             err(&fixes[1]) > 100.0,
             "unchecked, the rogue phase should dominate: {:.1} m/s",
@@ -1370,7 +1421,16 @@ mod tests {
              1684527053000,-2694001,-4293001,3857001\n\
              1684527053000,-2694001,-4293001,3857001\n",
         );
-        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: PositionSource::File,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         assert_eq!(fixes.len(), 2, "one fix per epoch, not one per satellite");
         assert!(fixes[0].position.is_valid());
         // Real GPS time, so a real timestamp: 2023-05-19T20:10:52Z is
@@ -1393,7 +1453,16 @@ mod tests {
              2000,-2694000,-4293000,3857000\n\
              3000,,,\n",
         );
-        let fixes = read_gnss(&p, 0.0, &GnssOptions { position: PositionSource::File, ..Default::default() }).unwrap().fixes;
+        let fixes = read_gnss(
+            &p,
+            0.0,
+            &GnssOptions {
+                position: PositionSource::File,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .fixes;
         assert_eq!(fixes.len(), 1);
     }
 

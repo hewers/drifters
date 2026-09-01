@@ -39,9 +39,9 @@ fn main() {
     let pva = drifters_core::types::Pva {
         position: drifters_core::frames::Lla::from_degrees(30.5, 114.4, 25.0),
         velocity: drifters_core::frames::Ned::new(8.0, 3.0, 0.0),
-        attitude: drifters_core::types::Attitude::from_quat(
-            drifters_core::math::Quat::from_euler(0.02, -0.01, 0.6),
-        ),
+        attitude: drifters_core::types::Attitude::from_quat(drifters_core::math::Quat::from_euler(
+            0.02, -0.01, 0.6,
+        )),
     };
 
     let mut phi = transition_matrix(&pva, &imu, &noise);

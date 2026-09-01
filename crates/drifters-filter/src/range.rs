@@ -318,17 +318,17 @@ mod tests {
         let e = at.to_ecef();
         let radius = (e.x * e.x + e.y * e.y + e.z * e.z).sqrt();
         core::array::from_fn(|i| {
-                let el = (15.0 + 9.0 * i as F).to_radians();
-                let az = (137.508 * i as F).to_radians();
-                let range =
-                    -radius * el.sin() + (ORBIT * ORBIT - radius * radius * el.cos().powi(2)).sqrt();
-                let (east, north, up) = (
-                    range * el.cos() * az.sin(),
-                    range * el.cos() * az.cos(),
-                    range * el.sin(),
-                );
-                let (sla, cla) = at.lat.sin_cos();
-                let (slo, clo) = at.lon.sin_cos();
+            let el = (15.0 + 9.0 * i as F).to_radians();
+            let az = (137.508 * i as F).to_radians();
+            let range =
+                -radius * el.sin() + (ORBIT * ORBIT - radius * radius * el.cos().powi(2)).sqrt();
+            let (east, north, up) = (
+                range * el.cos() * az.sin(),
+                range * el.cos() * az.cos(),
+                range * el.sin(),
+            );
+            let (sla, cla) = at.lat.sin_cos();
+            let (slo, clo) = at.lon.sin_cos();
             Vec3::new(
                 e.x - slo * east - sla * clo * north + cla * clo * up,
                 e.y + clo * east - sla * slo * north + cla * slo * up,
@@ -393,7 +393,10 @@ mod tests {
             .filter(|&r| (0..N_STATE).any(|c| m.jacobian[(r, c)].abs() > 0.0))
             .count();
         assert_eq!(informative, 1);
-        assert!(m.noise[(1, 1)] > 0.0, "padding must keep the noise invertible");
+        assert!(
+            m.noise[(1, 1)] > 0.0,
+            "padding must keep the noise invertible"
+        );
     }
 
     #[test]
@@ -490,15 +493,22 @@ mod tests {
         let satellites = sky::<6>(truth);
         let obs = observe(truth, &satellites, 0.0, &[1]);
         let without = single_differences::<6>(&state_at(truth), Vec3::ZERO, &obs).unwrap();
-        let with = single_differences::<6>(&state_at(truth), Vec3::new(1.5, 0.0, -0.8), &obs).unwrap();
+        let with =
+            single_differences::<6>(&state_at(truth), Vec3::new(1.5, 0.0, -0.8), &obs).unwrap();
         let attitude_norm = |m: &Measurement<6>| {
             (0..6)
                 .flat_map(|r| (0..3).map(move |c| (r, c)))
                 .map(|(r, c)| m.jacobian[(r, PHI_ID + c)].abs())
                 .fold(0.0, F::max)
         };
-        assert!(attitude_norm(&without) < 1.0e-12, "no lever, no attitude term");
-        assert!(attitude_norm(&with) > 1.0e-3, "a lever arm should couple attitude");
+        assert!(
+            attitude_norm(&without) < 1.0e-12,
+            "no lever, no attitude term"
+        );
+        assert!(
+            attitude_norm(&with) > 1.0e-3,
+            "a lever arm should couple attitude"
+        );
     }
 
     #[test]

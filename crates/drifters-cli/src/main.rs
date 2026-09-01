@@ -241,7 +241,9 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             drifters_cli::stats::gsdc_score(&errors),
         );
     }
-    println!("score = mean of the 50th and 95th percentile horizontal error, the competition metric");
+    println!(
+        "score = mean of the 50th and 95th percentile horizontal error, the competition metric"
+    );
     if report.gnss_velocity_count > 0 {
         let v = &report.gnss_velocity;
         println!(
@@ -266,7 +268,10 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         // aggregate cannot answer whether it works: a trace that is mostly
         // open sky averages away the case it was built for.
         println!("\nfilter horizontal error by satellites in view (metres):");
-        println!("{:<14} {:>7} {:>9} {:>9} {:>9}", "satellites", "n", "median", "p95", "max");
+        println!(
+            "{:<14} {:>7} {:>9} {:>9} {:>9}",
+            "satellites", "n", "median", "p95", "max"
+        );
         for (lo, hi) in [(0usize, 15usize), (15, 20), (20, 25), (25, 100)] {
             let mut errors: Vec<f64> = report
                 .filter_satellites
@@ -281,7 +286,14 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             errors.sort_by(f64::total_cmp);
             println!(
                 "{:<14} {:>7} {:>9.3} {:>9.3} {:>9.3}",
-                format!("{lo}-{}", if hi == 100 { "".to_string() } else { hi.to_string() }),
+                format!(
+                    "{lo}-{}",
+                    if hi == 100 {
+                        "".to_string()
+                    } else {
+                        hi.to_string()
+                    }
+                ),
                 errors.len(),
                 drifters_cli::stats::percentile(&errors, 0.50),
                 drifters_cli::stats::percentile(&errors, 0.95),
@@ -634,15 +646,14 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if !quiet {
         eprintln!("sweeping {} process-noise scales", scales.len());
     }
-    let rows =
-        drifters_cli::tune_gsdc(
-            &dir,
-            drifters_cli::vec3(sn, se, sv),
-            &scales,
-            alpha,
-            args.iter().any(|a| a == "--raw-ranges"),
-            quiet,
-        )?;
+    let rows = drifters_cli::tune_gsdc(
+        &dir,
+        drifters_cli::vec3(sn, se, sv),
+        &scales,
+        alpha,
+        args.iter().any(|a| a == "--raw-ranges"),
+        quiet,
+    )?;
 
     println!("\n--- posterior IMU process-noise tune ---");
     println!("assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF alpha {alpha:.2}");

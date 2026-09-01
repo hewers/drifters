@@ -21,7 +21,7 @@
 //! seconds, before initialisation has settled.
 
 use drifters_core::frames::{Lla, Ned};
-use drifters_core::math::{RAD_TO_DEG, Vec3};
+use drifters_core::math::{Vec3, RAD_TO_DEG};
 
 use crate::stats::Running;
 

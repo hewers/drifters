@@ -396,7 +396,10 @@ mod tests {
         let ca = build(&a, ROVER, |_| Some(sats.clone()), &Settings::default());
         let cb = build(&b, ROVER, |_| Some(sats.clone()), &Settings::default());
         for svid in 1..=4u16 {
-            let (x, y) = (ca.at(1, svid, 1, 1000.0).unwrap(), cb.at(1, svid, 1, 1000.0).unwrap());
+            let (x, y) = (
+                ca.at(1, svid, 1, 1000.0).unwrap(),
+                cb.at(1, svid, 1, 1000.0).unwrap(),
+            );
             assert!((x - y).abs() < 1e-6, "svid {svid}: {x} vs {y}");
         }
     }
@@ -411,14 +414,23 @@ mod tests {
 
         // Satellite 1 carries 3 m then 7.5 m after its own median removal;
         // halfway between should be the midpoint.
-        let (a, b) = (c.at(1, 1, 1, 1000.0).unwrap(), c.at(1, 1, 1, 1030.0).unwrap());
+        let (a, b) = (
+            c.at(1, 1, 1, 1000.0).unwrap(),
+            c.at(1, 1, 1, 1030.0).unwrap(),
+        );
         let mid = c.at(1, 1, 1, 1015.0).unwrap();
         assert!((mid - 0.5 * (a + b)).abs() < 1e-9, "{mid} vs {a},{b}");
 
         // Outside the span there is nothing, and a held value would look
         // measured.
-        assert!(c.at(1, 1, 1, 1060.0).is_none(), "extrapolating past the end");
-        assert!(c.at(1, 1, 1, 970.0).is_none(), "extrapolating before the start");
+        assert!(
+            c.at(1, 1, 1, 1060.0).is_none(),
+            "extrapolating past the end"
+        );
+        assert!(
+            c.at(1, 1, 1, 970.0).is_none(),
+            "extrapolating before the start"
+        );
         assert!(c.at(1, 99, 1, 1000.0).is_none(), "a satellite never seen");
     }
 
@@ -432,7 +444,10 @@ mod tests {
         let c = build(&base, ROVER, |_| Some(sats.clone()), &Settings::default());
         assert!(c.at(1, 1, 1, 1000.0).is_some());
         assert!(c.at(1, 1, 1, 1600.0).is_some());
-        assert!(c.at(1, 1, 1, 1300.0).is_none(), "600 s gap should not be bridged");
+        assert!(
+            c.at(1, 1, 1, 1300.0).is_none(),
+            "600 s gap should not be bridged"
+        );
     }
 
     #[test]
@@ -482,7 +497,13 @@ mod tests {
         // A kilometre is not an orbit error; it is a mismatched satellite.
         let (base, sats) = scene([2000.0, 0.0, 0.0, 0.0], 0.0, 1000.0);
         let c = build(&base, ROVER, |_| Some(sats.clone()), &Settings::default());
-        assert!(c.at(1, 1, 1, 1000.0).is_none(), "the outlier should be dropped");
-        assert!(c.at(1, 2, 1, 1000.0).is_some(), "its neighbours should survive");
+        assert!(
+            c.at(1, 1, 1, 1000.0).is_none(),
+            "the outlier should be dropped"
+        );
+        assert!(
+            c.at(1, 2, 1, 1000.0).is_some(),
+            "its neighbours should survive"
+        );
     }
 }

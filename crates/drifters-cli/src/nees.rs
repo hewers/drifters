@@ -325,8 +325,8 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
         blocks: core::array::from_fn(|_| Running::new()),
         pairs: core::array::from_fn(|_| core::array::from_fn(|_| Running::new())),
         final_errors: Vec::new(),
-            final_covariance: Vec::new(),
-            singular: 0,
+        final_covariance: Vec::new(),
+        singular: 0,
     };
 
     for run in 0..runs {
@@ -804,7 +804,6 @@ pub mod eskf {
         let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
         let mut filtered: Vec<(f64, f64)> = Vec::new();
 
-
         for k in 1..=steps {
             let t = k as f64 * dt;
             let truth_pos = truth_at(t);
@@ -840,7 +839,10 @@ pub mod eskf {
                 break;
             }
             if let Some(c) = engine.take_checkpoint() {
-                let e = engine.nav_state().position().ned_from(truth_at(c.state.time.tow()));
+                let e = engine
+                    .nav_state()
+                    .position()
+                    .ned_from(truth_at(c.state.time.tow()));
                 filtered.push((c.state.time.tow(), e.horizontal_norm()));
                 checkpoints.push(c);
             }
@@ -872,7 +874,9 @@ pub mod eskf {
         // bias truth is not recorded per epoch here, so this scores the nine
         // states whose truth is exactly known — position, velocity and
         // attitude — as their own marginal, which the leading block of P is.
-        let score = |state: &drifters_core::types::NavState, p: &drifters_filter::state::StateMatrix| -> Option<f64> {
+        let score = |state: &drifters_core::types::NavState,
+                     p: &drifters_filter::state::StateMatrix|
+         -> Option<f64> {
             let tow = state.time.tow();
             let d = state.position().ned_from(truth_at(tow));
             let dv = state.velocity().to_vec3() - velocity.to_vec3();
@@ -1158,8 +1162,7 @@ pub mod eskf {
                         }
                         if let Some(jc) = Cholesky::new(&joint) {
                             let sv = jc.solve(&v);
-                            report.pairs[a][b]
-                                .push((0..6).map(|i| v[(i, 0)] * sv[(i, 0)]).sum());
+                            report.pairs[a][b].push((0..6).map(|i| v[(i, 0)] * sv[(i, 0)]).sum());
                         }
                     }
                 }
@@ -1230,7 +1233,11 @@ pub mod eskf {
             }
             let correlation = |m: &[[f64; 15]; 15], i: usize, j: usize| {
                 let d = (m[i][i] * m[j][j]).sqrt();
-                if d > 0.0 { m[i][j] / d } else { 0.0 }
+                if d > 0.0 {
+                    m[i][j] / d
+                } else {
+                    0.0
+                }
             };
             println!(
                 "\nfilter covariance against the sample covariance over {n} runs,\n\
@@ -1238,7 +1245,10 @@ pub mod eskf {
                  filter has wrong; a correlation far from the sample one is a\n\
                  coupling it has wrong."
             );
-            println!("{:<26} {:>9} {:>9} {:>8}", "", "predicted", "sample", "ratio");
+            println!(
+                "{:<26} {:>9} {:>9} {:>8}",
+                "", "predicted", "sample", "ratio"
+            );
             for (name, k) in [
                 ("position north", 0usize),
                 ("velocity north", 3),
@@ -1269,7 +1279,13 @@ pub mod eskf {
             }
         }
 
-        let names = ["position", "velocity", "attitude", "gyro bias", "accel bias"];
+        let names = [
+            "position",
+            "velocity",
+            "attitude",
+            "gyro bias",
+            "accel bias",
+        ];
         let (plo, phi) = stats::nis_interval(6, r.pairs[0][1].count().max(1));
         println!("\nper pair, expected 6, 95 % interval [{plo:.2}, {phi:.2}]");
         for a in 0..5 {

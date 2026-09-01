@@ -140,8 +140,14 @@ fn main() {
 
     println!("propagate (1 IMU sample)      {:>9.1} ns", propagate * 1e9);
     println!("one second, 200 Hz + 1 fix    {:>9.1} µs", second * 1e6);
-    println!("  the fix alone               {:>9.1} ns", (second - 200.0 * propagate) * 1e9);
-    println!("one second, + 10 Hz height    {:>9.1} µs", second_aided * 1e6);
+    println!(
+        "  the fix alone               {:>9.1} ns",
+        (second - 200.0 * propagate) * 1e9
+    );
+    println!(
+        "one second, + 10 Hz height    {:>9.1} µs",
+        second_aided * 1e6
+    );
     println!(
         "  the ten height aids alone   {:>9.1} ns  ({:.1} ns each)",
         (second_aided - second) * 1e9,

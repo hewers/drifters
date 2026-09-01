@@ -17,9 +17,9 @@ use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
-use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, StateVector, V_ID};
 #[cfg(feature = "smoothing")]
 use crate::state::StateMatrix;
+use crate::state::{StateVector, BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SA_ID, SG_ID};
 

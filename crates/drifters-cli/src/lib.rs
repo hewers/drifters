@@ -605,8 +605,7 @@ pub fn run_gsdc(
             .iter()
             .map(|o| {
                 let s = o.satellite;
-                let d = ((s[0] - t.x).powi(2) + (s[1] - t.y).powi(2) + (s[2] - t.z).powi(2))
-                    .sqrt();
+                let d = ((s[0] - t.x).powi(2) + (s[1] - t.y).powi(2) + (s[2] - t.z).powi(2)).sqrt();
                 (o.constellation, o.pseudorange - d, o.elevation)
             })
             .collect();
@@ -654,7 +653,9 @@ pub fn run_gsdc(
             // spacing, so the truth velocity is the average over the same
             // interval the measurement describes.
             if let (Some(v), Some(t)) = (fix.velocity, reference.velocity_at(fix.time.tow(), 0.5)) {
-                report.gnss_velocity.push_ned(v.n - t.n, v.e - t.e, v.d - t.d);
+                report
+                    .gnss_velocity
+                    .push_ned(v.n - t.n, v.e - t.e, v.d - t.d);
                 report
                     .gnss_velocity_horizontal
                     .push((v.n - t.n).hypot(v.e - t.e));
@@ -754,9 +755,7 @@ pub fn run_gsdc(
                 report.filter_satellites.push(
                     ranges
                         .get(next - 1)
-                        .map(|(_, obs)| {
-                            obs.iter().filter(|o| o.elevation >= 10.0).count()
-                        })
+                        .map(|(_, obs)| obs.iter().filter(|o| o.elevation >= 10.0).count())
                         .unwrap_or(0),
                 );
             }
@@ -777,9 +776,7 @@ pub fn run_gsdc(
     // The equivariant filter over the same inputs and the same epochs. Run as a
     // second pass rather than interleaved only because the two engines keep
     // their own state; the data they see is byte-identical.
-    let second = eqf::replay_gsdc_eqf(
-        &imu, &fixes, &reference, attitude, imu_scale, alpha,
-    );
+    let second = eqf::replay_gsdc_eqf(&imu, &fixes, &reference, attitude, imu_scale, alpha);
     report.eqf = second.error;
     report.eqf_epochs = second.epochs;
     report.eqf_nis = second.nis;
