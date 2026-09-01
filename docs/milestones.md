@@ -535,6 +535,19 @@ Each step is gated on a measurement rather than on the previous one compiling.
       remembering is that a dot product with a single accumulator is a
       dependency chain the compiler cannot vectorise. See
       [adr/0009](adr/0009-local-first-architecture.md).
+- [x] **Single-precision covariance**, `--features f32-covariance`, which the
+      factored form is what made available: `cond(U√D) = √cond(P)`, so the 13.6
+      digits ADR 0009 measured on raw `P` at fifteen minutes become 6.8, inside
+      `f32`'s 7.2. Over the full run the same extrapolation gives 7.7, which is
+      *outside* it — and the measurement disagrees with the extrapolation. Both
+      are recorded in [adr/0009](adr/0009-local-first-architecture.md).
+      *Gate:* met with nothing to trade. KF-GINS 0.0330 m and NIS 1.459, GSDC
+      3.244, NEES 13.874 — the KF-GINS and GSDC reports byte-identical to `f64`
+      and NEES differing in the fourth significant figure. Covariance 1 848 to
+      924 bytes, engine 3 240 to 2 320. On `thumbv7em` the UD routines stop
+      calling `__aeabi_dmul` and start emitting `vmla.f32`; the cycle count
+      needs a board and stays in M9. It also cost ADR 0005 its reason — see
+      [adr/0005](adr/0005-scalar-type.md).
 - [x] **`u64` nanosecond time**, with `dt` from an integer difference.
       [`GpsTime`](../crates/drifters-core/src/time.rs) is now a private
       `u64` of nanoseconds since the GPS epoch; `week()` and `tow()` are
@@ -565,7 +578,7 @@ Each step is gated on a measurement rather than on the previous one compiling.
       So there is no `alloc` feature anywhere in the runtime stack. What used
       to be one on `drifters-filter` gated the smoothing recorder, and it was
       misnamed: nothing allocated, and the cost was **space** — three 21×21
-      matrices, taking the engine from 4 920 bytes to 23 168. It is now
+      matrices, taking the engine from 3 240 bytes to 21 488. It is now
       `smoothing`, and [`smoother`] itself is unconditional, because writing
       into a caller-provided slice needs no heap and a bounded window is a
       fixed-lag smoother that runs on the target.

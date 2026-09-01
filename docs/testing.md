@@ -10,6 +10,14 @@ Run everything with:
 cargo test --workspace
 ```
 
+That covers the default configuration. Two features change what the filter
+computes rather than adding to it, so each needs its own run:
+
+```bash
+cargo test -p drifters-filter --features reduced-state
+cargo test -p drifters-filter -p drifters-cli --features f32-covariance
+```
+
 ## Layer 1 — algebraic identities
 
 Properties that hold by construction and would break under almost any
@@ -252,6 +260,30 @@ rather than to the strict interval for exactly this reason.
   fully-qualified `Real::sin(x)` calls. See below.
 - **Fuzzing** protobuf decode (M5).
 - **Property tests** via `proptest` for the algebraic layer.
+- **The non-additive features run separately.** `reduced-state` and
+  `f32-covariance` each change what the filter computes rather than adding
+  capability, so neither is covered by a build that merely enables it alongside
+  everything else. CI runs each alone, and `f32-covariance` runs the whole CLI
+  campaign as well as the unit tests — the point of that feature is that the
+  results do not move, which is only checkable by measuring them.
+
+### Tolerances that depend on the precision
+
+`ud`'s tests compare the factored recursions against a dense `f64` reference.
+At `f64` the gap is rounding in the last few bits; under `f32-covariance` it is
+single-precision rounding accumulated across 21 states, five orders of magnitude
+wider. The tolerances are written for `f64` and scaled by a `SLACK` constant
+that the feature selects, so neither precision is graded on the other's curve
+and neither is silently given a pass.
+
+One of those comparisons was measuring the wrong thing, and only `f32` was
+coarse enough to reveal it. Scaling each covariance entry by its own magnitude
+divides by quantities a covariance is entitled to make small: a correlation of
+−5e-6 between variances of 13.7 and 250.7 reported a 4.1e-3 "relative error" for
+a discrepancy that was 2.1e-8 of the entry's natural scale. The comparison is
+now scaled by `√(Pᵢᵢ Pⱼⱼ)`, which makes it a comparison between correlation
+coefficients. This is the recurring lesson of this file: check the instrument
+before concluding anything about the filter.
 
 ### The one place host builds differ from the target
 

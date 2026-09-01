@@ -175,18 +175,39 @@ eigenvalue of `F` is of order `1/τ` or `v/R`, both far below 1 Hz, so any IMU a
 
 ## Measurement update
 
-Joseph form:
+Written densely, the update is:
 
 ```
 S = H·P·Hᵀ + R
 K = P·Hᵀ·S⁻¹                    (via Cholesky solve, not an explicit inverse)
 δx ← δx + K·(z − H·δx)
-P ← (I − K·H)·P·(I − K·H)ᵀ + K·R·Kᵀ
+P ← (I − K·H)·P·(I − K·H)ᵀ + K·R·Kᵀ     (Joseph form)
 ```
 
-Joseph costs one extra 21×21 product over `P ← (I−KH)P`, and buys symmetry and
-positive definiteness under round-off. Over a multi-hour run at 100 Hz that is
-worth far more than the flops.
+That is the model, and it is what the tests compare against. It is not how the
+filter computes it. `P` is stored factored as `U D Uᵀ` and updated one scalar
+row at a time by the **Bierman** recursion, which produces the same `K` and the
+same posterior without ever forming `P` — see
+[`ud`](../crates/drifters-filter/src/ud.rs) and
+[adr/0005](adr/0005-scalar-type.md).
+
+The distinction matters for the last line above. Joseph's extra 21×21 product
+buys symmetry and positive definiteness under round-off, which is why it is
+preferred over `P ← (I−KH)P` when `P` is dense. In the factored form neither is
+something to buy: symmetry is unrepresentable, and positive definiteness follows
+from `D`'s entries being built by accumulation and division rather than by
+subtracting two nearly-equal matrices.
+
+Bierman's update requires the measurement's rows to be independent, since it
+applies them one at a time. A measurement with a non-diagonal `R` is therefore
+premultiplied by the inverse Cholesky factor of `R` first, which whitens it;
+`z' = L⁻¹z`, `H' = L⁻¹H`, `R' = I`. Skipping that step does not merely lose
+accuracy, it applies the wrong update.
+
+Joseph form is retained for the **held-state** path, where a measurement must be
+prevented from touching some states. That constraint is expressed by zeroing
+rows and columns of a gain, which the scalar-sequential form has no place to
+put.
 
 ### GNSS position
 

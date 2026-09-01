@@ -258,7 +258,7 @@ refit that the better GNSS forced, and the four-trace holdout under it, are in
 [`range`](../crates/drifters-filter/src/range.rs) feeds the filter per-satellite
 pseudoranges instead of a position fix. It differences them within each
 constellation rather than estimating receiver-clock states, which keeps the
-21-state filter and its 4 944-byte footprint exactly as they were — see
+21-state filter and its footprint exactly as they were — see
 [adr/0009](adr/0009-local-first-architecture.md) for why that trade was made
 against the ADR's original proposal.
 

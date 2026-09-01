@@ -43,6 +43,29 @@ overconfidence is untested — at the 120 s of the NEES campaign there are still
 it is a standing hazard on long runs and an argument for the factored form
 independent of `f32`.
 
+**Done, and it settled the `f32` question too.** The covariance is now carried
+as `U D Uᵀ`, so the numbers above apply to the wrong object: with `P = S Sᵀ` for
+`S = U√D`, the singular values of `S` are the square roots of `P`'s eigenvalues,
+and `cond(S) = √cond(P)`. The 13.6 digits after fifteen minutes become 6.8, and
+the extrapolated 15.4 over the full run becomes 7.7. That is the classical
+result that a factored filter is numerically equivalent to a dense one carrying
+twice the precision, and it is why `f32-covariance` — 7.2 digits — does not fail
+"within eleven seconds" the way a naive single-precision covariance would.
+
+It is not comfortable, though, and the arithmetic should be stated rather than
+rounded in its own favour: 7.7 digits needed against 7.2 available is *negative*
+half a digit of margin over the full run, where dense `f64` had positive half a
+digit. By this extrapolation single precision should be marginal exactly on the
+57-minute KF-GINS dataset — which is the run the campaign uses, and it comes out
+at 0.0330 m and NIS 1.459, identical to `f64` in every printed figure. So either
+the `t³` extrapolation overstates the late growth, or the ill-conditioned
+directions are ones the reported position does not depend on. Both are likely
+and neither is established here. The honest summary is that the predicted margin
+is gone and the measured degradation is nil, and a longer dataset is what would
+separate those. See
+[adr/0005](0005-scalar-type.md#revisited-2026-08-the-covariance-was-disqualified-for-the-wrong-reason)
+for the results and for the reasoning that ADR 0005 originally got wrong.
+
 **One filter is measurably overconfident.** `drifters nees`, on synthetic data
 drawn from each filter's own model, gives 23.6 against 21 for the EqF — about
 14 %, not understood — and 13.9 against 15 for the ESKF, which is consistent
@@ -231,7 +254,7 @@ geometry and weighting, and it cost a 300-line module.
 
 **Clock states were the wrong design.** The number of them depends on which
 constellations are in view, and a fixed-size filter must then carry the worst
-case always — against a crate whose argument is a 4 944-byte engine.
+case always — against a crate whose argument is a 3 240-byte engine.
 [`range`](../../crates/drifters-filter/src/range.rs) differences the ranges
 within each constellation instead, against that constellation's highest
 satellite. That cancels the receiver clock and the inter-system bias exactly,
