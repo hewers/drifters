@@ -1,71 +1,28 @@
-//! Re-anchoring: moving the local frame the state is expressed in.
+//! Moving the local frame a state is expressed in.
 //!
-//! A local frame is only local. Two frames anchored a kilometre apart differ by
-//! a rotation of 157 µrad — small, and an order of magnitude larger than the
-//! attitude uncertainty a good IMU reaches — so moving the origin is a
-//! similarity transform of the whole state, not a subtraction.
+//! A local frame is only local. Two frames a kilometre apart differ by a
+//! rotation of 157 µrad, so moving the origin transforms the whole state:
 //!
 //! ```text
 //! p_B = R_BA (p_A − t_AB)      C_nb,B = R_BA C_nb,A
 //! v_B = R_BA v_A               P_B    = J P_A Jᵀ
 //! ```
 //!
-//! `J` is block-diagonal: `R_BA` on the position, velocity and attitude-error
-//! blocks, and the identity on the IMU errors, which are **body-frame**
-//! quantities and do not know the navigation frame exists. Getting that wrong
-//! in the other direction — rotating the biases too — is the mistake this
-//! module's tests are shaped to catch.
+//! `J` is block-diagonal: `R_BA` on position, velocity and attitude error, and
+//! the identity on the IMU errors, which are body-frame quantities.
 //!
-//! # Why bother
+//! Bounded range is what lets position live in `f32`, and re-anchoring bounds
+//! the range. [`drifters_core::local`] has the measurement behind the 1 km
+//! threshold; [`adr/0009`] has the design.
 //!
-//! Because bounded range is what lets position live in `f32`, and re-anchoring
-//! is what bounds the range. See [`drifters_core::local`] for the measurement
-//! that sets the threshold at 1 km, and
-//! [`adr/0009`](https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md)
-//! for the design.
+//! Re-anchoring changes coordinates and nothing statistical. `J` is orthogonal,
+//! so `eᵀ P⁻¹ e` is unchanged by it, and `nees_is_invariant_under_reanchoring`
+//! holds the implementation to that. Invariance alone does not fix the rotation
+//! — any orthogonal `J` preserves the quadratic form — so two further tests do:
+//! re-anchoring twice equals re-anchoring once to the far frame, and the frame
+//! conversions reproduce the geodesic ones in [`drifters_core::local`].
 //!
-//! # The property that has to hold
-//!
-//! **Re-anchoring changes coordinates and nothing statistical.** `J` is
-//! orthogonal, so `eᵀ P⁻¹ e` is invariant under it exactly, for every `e`. A
-//! NEES that steps when the origin moves is an implementation error, and that is
-//! a much sharper test than "the numbers look reasonable" — see
-//! `nees_is_invariant_under_reanchoring`.
-//!
-//! It is necessary and **not sufficient**, which is worth being explicit about
-//! given how much of this project's history is instruments that agreed with
-//! themselves. Invariance holds for *any* orthogonal `J`, so it cannot by itself
-//! distinguish the right rotation from its transpose, or from the identity. What
-//! it actually tests is that the covariance transform and the error-state
-//! transform agree — they derive the rotation independently, so a mutation to
-//! one is caught. Pinning the rotation itself down takes two other things: that
-//! re-anchoring twice equals re-anchoring once to the far frame
-//! (`reanchoring_composes`), and that the frame conversions reproduce the
-//! geodesic ones (`drifters_core::local`).
-//!
-//! **And the gate has three ways to be vacuous, all of which it was.** Written
-//! the obvious way it passed every mutation of `jacobian` — rotating nothing
-//! included — and each cause is worth naming, because none is visible from
-//! reading the test:
-//!
-//! - *An isotropic covariance.* `eᵀP⁻¹e` is invariant under any rotation when
-//!   `P` is a multiple of the identity, so the fixture has to be strongly
-//!   **anisotropic** *within* each rotating block. The first one was `A Aᵀ + I`
-//!   with `D` spanning a factor of two, which is nearly isotropic and detected
-//!   nothing.
-//! - *Too small a rotation.* At the 1 km re-anchoring distance the frames differ
-//!   by 157 µrad, and the resulting perturbation sits close to `f32`'s noise.
-//!   The algebra is exact at any separation, so the fixtures use 300 km, where
-//!   the margin is six decades. The 1 km figure is checked on its own, for the
-//!   property that depends on it.
-//! - *A tolerance set by guesswork.* Two guesses at the `f32` slack, 1e8 and
-//!   1e7, were loose enough to swallow every mutation. It is now set from the
-//!   measured floor: the correct transform disagrees with itself by 3.6e-13 at
-//!   `f64` and 1.1e-7 at `f32`.
-//!
-//! All four mutations — rotate nothing, transpose the rotation, rotate the
-//! body-frame bias blocks, forget the attitude block — are now caught at both
-//! precisions.
+//! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
 use crate::state::{StateMatrix, StateVector, BA_ID, BG_ID, PHI_ID, P_ID, V_ID};
 use crate::ud::Ud;
@@ -84,9 +41,8 @@ pub fn jacobian(rotation: &Mat3) -> StateMatrix {
             }
         }
     }
-    // BG_ID, BA_ID and the scale factors keep the identity `StateMatrix::
-    // identity` already put there: gyro and accelerometer errors are expressed
-    // in the body frame, which re-anchoring does not touch.
+    // The IMU-error blocks keep the identity already in place. Gyro and
+    // accelerometer errors are body-frame quantities.
     let _ = (BG_ID, BA_ID);
     j
 }
@@ -108,10 +64,9 @@ pub fn rebase_error(error: &StateVector, rotation: &Mat3) -> StateVector {
 /// Returns `false` if the result is not a covariance, which for an orthogonal
 /// `J` means the input was not one either.
 ///
-/// Goes through the dense form. `J P Jᵀ` on the factors would be a rank-`n`
-/// update rather than a rotation of them, and re-anchoring happens once per
-/// kilometre of travel — about once every few minutes — where an `O(n³)`
-/// refactorisation is free. The same argument the held-state update makes.
+/// Goes through the dense form: applying `J` to the factors is a rank-`n`
+/// update rather than a rotation of them. Re-anchoring happens once per
+/// kilometre of travel, where an `O(n³)` refactorisation costs nothing.
 pub fn rebase_covariance(covariance: &mut Ud, rotation: &Mat3) -> bool {
     let j = jacobian(rotation);
     let mut p = covariance.to_covariance();
@@ -144,18 +99,10 @@ mod tests {
 
     /// How much looser a comparison gets when the factors are `f32`.
     ///
-    /// These tests round-trip a covariance through `U D Uᵀ` and back, so they
-    /// are limited by the factors' precision rather than by `F`'s: about seven
-    /// digits under `f32-covariance`, and composing two re-anchorings pays it
-    /// twice. The fixture is well conditioned — `D` spans a factor of two — so
-    /// this is the storage type and nothing else.
-    ///
-    /// Set from the measured floor rather than guessed: the correct transform
-    /// disagrees with itself by 3.6e-13 at `f64` and 1.1e-7 at `f32`, so 1e-9
-    /// and 1e-6 sit about a decade above each. Two earlier guesses at this
-    /// number — 1e8 and 1e7 — were loose enough that mutating `jacobian` to
-    /// rotate *nothing* still passed, which is the failure a tolerance is
-    /// always one step away from.
+    /// These tests round-trip a covariance through `U D Uᵀ` and back, so the
+    /// factors' precision bounds them rather than `F`'s, and composing two
+    /// re-anchorings pays that twice. A decade above the measured floor, which
+    /// is 3.6e-13 at `f64` and 1.1e-7 at `f32`.
     #[cfg(not(feature = "f32-covariance"))]
     const SLACK: F = 1.0;
     /// See the `f64` variant.
@@ -217,6 +164,7 @@ mod tests {
         p
     }
 
+    /// A kilometre is a rotation, not a translation.
     #[test]
     fn the_reanchoring_distance_is_not_a_translation() {
         let a = LocalFrame::new(origin());
@@ -228,8 +176,8 @@ mod tests {
             (angle - 1.57e-4).abs() < 1e-5,
             "1 km should subtend about 157 µrad, got {angle}"
         );
-        // Against an attitude uncertainty a navigation-grade IMU reaches in
-        // tens of µrad, so treating the re-anchor as a shift would dominate it.
+        // A navigation-grade IMU reaches tens of µrad, so a re-anchor treated
+        // as a shift would dominate its attitude uncertainty.
         assert!(angle > 5.0e-5);
     }
 
@@ -263,7 +211,10 @@ mod tests {
         // And the rotation really is present elsewhere, so this test cannot
         // pass by the Jacobian being the identity throughout.
         let angle = Quat::from_dcm(&r).to_rotation_vector().norm();
-        assert!(angle > 1e-4, "the fixture must actually rotate");
+        assert!(
+            angle > 1e-4,
+            "the fixture must rotate, or this proves nothing"
+        );
     }
 
     /// The gate from adr/0009: re-anchoring changes coordinates and nothing

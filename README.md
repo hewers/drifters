@@ -1,28 +1,25 @@
 # drifters
 
-A `no_std`, allocation-free **aided inertial navigation** library in Rust. It
-estimates *extended pose* — position, velocity and attitude together — along
-with the sensor errors that corrupt it, and runs the same code on a Cortex-M
-microcontroller as on a workstation.
+An aided inertial navigation library producing extended pose estimates —
+position, velocity, attitude — along with the sensor errors that corrupt it.
+Rust `no_std` and allocation-free, from a microcontroller to a workstation.
 
-*Aided* rather than simply inertial, because the IMU drives
-the propagation with corrections from GNSS, barometric, magnetic and odometric.
-*Extended pose* rather than pose, because velocity is a
-state and not a by-product.
+*Aided* because the IMU drives the propagation with corrections from GNSS,
+barometric, magnetic and odometric. *Extended* pose because velocity is a state
+and not a by-product.
 
-Two estimators over the same interface:
+Two estimators share one interface:
 
-- an **error-state Kalman filter**, 21 states, following
-  [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) — loosely coupled, over a
-  local-level (NED) strapdown mechanization, with feedback after every
-  measurement.
-- an **equivariant filter**, 21 states, following Fornasier et al. (ICRA 2024).
-  It linearises at a fixed origin rather than at the moving estimate, and
-  spends six of its states on **self-calibration**: it recovers the GNSS antenna
-  lever arm from a zero start, which the ESKF must be told.
+- An **error-state Kalman filter**, 21 states, after
+  [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS). A local-level (NED) strapdown
+  mechanization with feedback after every measurement. GNSS enters as a fix or
+  as per-satellite pseudoranges.
+- An **equivariant filter**, 21 states, after Fornasier et al. (ICRA 2024). It
+  linearises at a fixed origin rather than at the moving estimate, and spends
+  six states on self-calibration, recovering the GNSS antenna lever arm from a
+  zero start. The ESKF must be told it.
 
-What differs from the reference implementations is that this is `no_std`,
-allocation-free, sans-IO, and measured on bare metal.
+Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 
 ## Test-enforced Performance
 
@@ -33,46 +30,43 @@ allocation-free, sans-IO, and measured on bare metal.
 | | per-axis bias below 1 mm |
 | **Footprint** | **10.2 KiB** peak stack (15-state), 18.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
-| **Dependencies** | **one** in the shipped stack: `libm` |
+| **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 367, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 434, plus fuzzing and a bare-metal QEMU harness |
 
-Accuracy is an open-loop check: the filter's predicted antenna position
-*before* each fix is applied, so between fixes it is running on inertial dead
-reckoning alone. Method and tolerances are in [docs/testing.md](docs/testing.md).
+Accuracy is an open-loop check: the filter's predicted antenna position before
+each fix is applied, so between fixes it runs on inertial dead reckoning alone.
+Method and tolerances are in [docs/testing.md](docs/testing.md).
 
 ## Two estimators, compared
 
 The library ships an error-state Kalman filter and an
-[equivariant filter](docs/eqf.md), over shared mechanization and shared Lie
-group machinery. Both were run on the same two datasets, from the same inputs,
-scored the same way.
+[equivariant filter](docs/eqf.md) over shared mechanization and shared Lie group
+machinery. Both ran on the same two datasets, from the same inputs, scored the
+same way.
 
 ![ESKF and EqF on the KF-GINS demo dataset: ground track and horizontal residual](docs/figures/kf-gins-comparison.svg)
 
-**Tactical grade, and the interesting result is a loss.** The EqF as the paper
-writes it assumes a flat, non-rotating Earth — and on an IMU this good that
-*diverges*, as `t³`, reaching 10⁶ m. Solving the growth rate back gives
-5.96 × 10⁻⁵ rad/s against an Earth rate of 7.29 × 10⁻⁵: it is the Earth turning,
-and no state in the model can represent it, because the gyro's bias prior is
-0.027 °/h and Earth rate is **557×** that.
+**Tactical grade.** The EqF as published assumes a flat, non-rotating Earth. On
+an IMU this good it diverges as `t³`, reaching 10⁶ m. Solving the growth rate
+back gives 5.96 × 10⁻⁵ rad/s against an Earth rate of 7.29 × 10⁻⁵: the Earth is
+turning and no state in the model can represent it. The gyro's bias prior is
+0.027 °/h, and Earth rate is 557× that.
 
 Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
 recovers five orders of magnitude and converges to **1.5 cm**, against the ESKF's
-3.3 cm. So the gap here measures an **Earth model, not an estimator**. This
-comparison is unfair by construction, and the honest venue is the one below.
+3.3 cm. The gap measures an Earth model rather than an estimator, so this
+comparison is unfair by construction. The one below is not.
 
-The EqF also **self-calibrated the GNSS antenna lever arm from a zero start**,
-against an ESKF that was handed the answer from config: `[+0.138, −0.303]` m
-horizontally against a true `[+0.136, −0.301]` — 2 mm on both axes. That is a
-capability the ESKF does not have at all.
+The EqF also self-calibrated the GNSS antenna lever arm from a zero start,
+against an ESKF handed the answer from config: `[+0.138, −0.303]` m against a
+true `[+0.136, −0.301]`, 2 mm on both axes. The ESKF cannot do this at all.
 
 ![ESKF and EqF against ground truth on a GSDC 2023 phone trace](docs/figures/gsdc-comparison.svg)
 
-**Consumer grade — where the flat-Earth assumption is the right one.** A phone
-gyro drifts at ~20 °/h, so Earth rate sits *below* its noise floor rather than
-557× above it. No Earth compensation is applied here; this is the paper's filter
-as written.
+**Consumer grade**, where the flat-Earth assumption holds. A phone gyro drifts
+at about 20 °/h, so Earth rate sits below its noise floor rather than 557× above
+it. No Earth compensation is applied; this is the paper's filter as written.
 
 Horizontal RMS against survey-grade truth, in metres. The process-noise scale
 was fitted on **trace A only** and applied unchanged to three held-out traces
@@ -87,49 +81,40 @@ beat doing nothing.
 | ESKF, hand-picked ×300 | **4.06** | 4.11 | **2.09** | **3.32** |
 | EqF, hand-picked ×300 | **4.85** | **3.22** | **2.21** | **3.49** |
 
-The holdout was worth running, because it contradicts the headline this table
-replaced.
+Trace A is the easy case, and fitting on it overstates everything. Its GNSS is
+the worst of the four by a wide margin, 6.21 m against 2.8 to 4.0, which leaves
+the most room for an IMU to help. The tuning fitted there does not transfer: at
+×95 and ×74, fusion is worse than raw GNSS on trace B for both filters, and
+worse for the ESKF on C.
 
-**Trace A is the easy case, and fitting on it overstates everything.** Its GNSS
-is the worst of the four by a wide margin — 6.21 m against 2.8 to 4.0 — which
-leaves the most room for an IMU to help. The tuning fitted there does not
-transfer: at ×95 and ×74, fusion is **worse than raw GNSS** on trace B for both
-filters, and worse for the ESKF on C. Fitting on the most improvable trace and
-generalising to harder ones is exactly what a holdout is for.
+The EqF leads the ESKF, and that part generalises. At the A-fitted tuning it is
+ahead on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 the picture is
+mixed, so both are shown.
 
-**The EqF still leads the ESKF, and that part does generalise.** At the A-fitted
-tuning it is ahead on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 the
-picture is mixed, so the ranking depends on the criterion and both are shown
-rather than whichever flatters the conclusion.
+The hand-picked ×300 generalises better than the consistent one, helping on
+seven of eight filter/trace combinations against five, despite a mean NIS of
+0.44. Either model error absorbs the extra process noise, or heavy-tailed
+multipath innovations drag the mean NIS around. `drifters tune` reports a median
+crossing as well, which separates the two and rejects the second: the
+innovations are heavy-tailed, at a mean-to-median ratio of 2.1–3.3 against the
+1.27 a chi-squared gives, but correcting for it moves the consistency point the
+wrong way — ×59 for the ESKF, about ×25 for the EqF. Unmodelled error is what
+remains, and the filters want five to twelve times more process noise than
+consistency supports.
 
-**The hand-picked ×300 generalises better than the consistent one**, helping on
-seven of eight filter/trace combinations against five of eight, despite a mean
-NIS of 0.44. Two explanations were possible: model error that extra process
-noise absorbs, or heavy-tailed multipath innovations dragging a *mean* NIS
-around. `drifters tune` now reports a **median** crossing too, which separates
-them — and rejects the second. The innovations are genuinely heavy-tailed
-(mean-to-median ratio 2.1–3.3 against the 1.27 a chi-squared gives), but
-correcting for it moves the consistency point the *wrong way*: ×59 for the ESKF
-and ≈×25 for the EqF, roughly doubling the distance to the accuracy optimum.
-Unmodelled error is what is left, and it is large — the filters want five to
-twelve times more process noise than consistency supports.
+On a phone, over one-second fix intervals, inertial fusion buys between nothing
+and about 30 % depending on the trace, and a tuning fitted on one trace can make
+it negative on another.
 
-**The honest summary is modest.** On a phone, over one-second fix intervals,
-inertial fusion buys between nothing and about 30 % depending on the trace, and
-a tuning fitted on one trace can make it negative on another. The earlier "EqF
-leads by 22 %" was a single-trace, fitted-on-test number and should not have
-been stated that way.
-
-Separately, the EqF's **generalised covariance union is actively harmful here**.
-Sweeping its convergence rate α — the knob that replaces χ² rejection — gives
-4.85 m at α = 0 and **27.4 m at α = 1**, monotonically worse. GCU inflates the
-innovation covariance *along the innovation*, which is right when a large
-innovation means a bad measurement and wrong when it means the filter has
-drifted and the measurement is the only thing that can correct it. Sweeps in
+The EqF's generalised covariance union is harmful on this data. Sweeping its
+convergence rate α, the knob that replaces χ² rejection, gives 4.85 m at α = 0
+and 27.4 m at α = 1, monotonically worse. GCU inflates the innovation covariance
+along the innovation. That is right when a large innovation means a bad
+measurement, and wrong when it means the filter has drifted and the measurement
+is the only thing that can correct it. Sweeps in
 [docs/eqf.md](docs/eqf.md) and [docs/gsdc.md](docs/gsdc.md).
 
-Regenerate either figure yourself — every value on them comes from the replay,
-none are hand-entered:
+Every value on both figures comes from the replay. To regenerate them:
 
 ```bash
 cargo run --release -p drifters-cli -- eqf --config datasets/kf-gins/kf-gins.yaml --earth-rate --compare docs/figures/kf-gins-comparison.svg

@@ -1,34 +1,32 @@
 //! Covariance carried as `P = U D Uᵀ` rather than as `P`.
 //!
-//! `U` is unit upper triangular and `D` is diagonal, so between them they hold
-//! `n(n+1)/2` scalars — **231** for the 21-state filter, against 441 for a
-//! dense `P`. Neither factor is ever multiplied out.
+//! `U` is unit upper triangular and `D` is diagonal, holding `n(n+1)/2` scalars
+//! between them — 231 for the 21-state filter, against 441 for a dense `P`.
+//! Neither factor is multiplied out.
 //!
-//! Three reasons, none of which is speed:
+//! Three properties follow, none of them speed:
 //!
-//! **Positive-definiteness is structural.** `D` is a list of variances and the
-//! updates keep them non-negative by construction, so the failure mode where a
-//! covariance stops being a covariance cannot arise. The dense path *detects*
-//! it — [`crate::eskf::Eskf::update`] returns an error and the NEES harness
-//! counts abandoned runs — and detection is not prevention.
+//! Positive-definiteness is structural. `D` is a list of variances and the
+//! updates keep them non-negative by construction, so a covariance cannot stop
+//! being one. A dense filter can only detect that after the fact.
 //!
-//! **The factors are conditioned as the square root of `P`.** Every operation
-//! runs on `U` and `D`, so the precision a run demands is halved. That is what
-//! makes single precision a question worth asking rather than obviously
-//! hopeless; see [`adr/0009`](https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md).
+//! The factors are conditioned as the square root of `P`, so a run demands half
+//! the precision. That is what puts single precision within reach; see
+//! [`Scalar`] and [`adr/0009`].
 //!
-//! **No square roots.** Unlike Potter or Carlson, which is the reason to
-//! prefer this factorisation on a target where `sqrt` is not cheap.
+//! No square roots are taken, unlike Potter or Carlson. On a target where
+//! `sqrt` is expensive, that is the reason to prefer this factorisation.
 //!
-//! # What it costs the caller
+//! # What it asks of the caller
 //!
-//! [`Ud::update`] is Bierman's algorithm, which is **scalar-sequential**: it
-//! takes one row of `H` at a time and assumes that row's noise is independent
-//! of the others'. A measurement with a dense `R` — the tightly-coupled
-//! pseudorange differences in [`crate::range`] share a reference satellite, so
-//! theirs is dense — has to be whitened first, and [`Whitened`] does that.
-//! Handing correlated rows to `update` one at a time is not an approximation,
-//! it is wrong, and it is silent.
+//! [`Ud::update`] is Bierman's algorithm. It is scalar-sequential: it takes one
+//! row of `H` at a time and assumes that row's noise is independent of the
+//! others'. A measurement with a dense `R` must be whitened first, which
+//! [`Whitened`] does. The tightly-coupled pseudorange differences in
+//! [`crate::range`] share a reference satellite, so theirs is dense. Passing
+//! correlated rows in one at a time gives a wrong answer, quietly.
+//!
+//! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
 use drifters_core::math::{Cholesky, Matrix};
 use drifters_core::F;
@@ -37,24 +35,20 @@ use crate::state::{NoiseMatrix, StateMatrix, StateVector, N_NOISE, N_STATE};
 
 /// What the covariance factors are stored and computed in.
 ///
-/// `f64` by default; `f32` under the `f32-covariance` feature. Everything
-/// crossing this module's boundary stays `f64` — the states, the Jacobians,
-/// the gains — so the choice is confined to the factors themselves and nothing
-/// else in the filter has to know.
+/// `f64` by default, `f32` under the `f32-covariance` feature. Everything
+/// crossing this module's boundary stays `f64` — states, Jacobians, gains — so
+/// nothing else in the filter needs to know.
 ///
-/// The factorisation is what makes the choice available. A dense covariance's
-/// diagonal spans 8.4 decimal digits on this filter against `f32`'s 7.2, which
-/// is why [`adr/0005`](https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md)
-/// ruled it out; `U` and `D` are conditioned as the square root of that.
-/// Measured, holding the factors to single precision through a full campaign
-/// changes nothing: NEES 13.874 against 13.874, KF-GINS 0.0330 m against
-/// 0.0330 m, GSDC 3.244 against 3.244.
+/// The factorisation is what makes the choice available: `U` and `D` are
+/// conditioned as the square root of `P`. Holding them to single precision
+/// changes no measured result — NEES 13.874, KF-GINS 0.0330 m, GSDC 3.244, each
+/// matching `f64`.
 ///
-/// **It does not make the filter single precision.** Position stays `f64`, and
-/// for the reason `adr/0005` measured: a latitude in radians rounded to `f32`
-/// moves by 0.76 m, against a filter whose error budget is 0.033 m. That is a
-/// property of geodetic coordinates rather than of the covariance, and it is
-/// the local-frame work in `adr/0009` that would change it.
+/// This does not make the filter single precision. Position stays `f64`,
+/// because a latitude in radians rounded to `f32` moves 0.76 m against an error
+/// budget of 0.033 m. See [`adr/0005`].
+///
+/// [`adr/0005`]: https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md
 #[cfg(feature = "f32-covariance")]
 pub type Scalar = f32;
 /// See the `f32-covariance` variant.
@@ -413,22 +407,16 @@ impl Ud {
 /// difference between the factored form being slower than a dense matrix
 /// product and being faster.
 ///
-/// Indexed rather than written as `a.chunks_exact(LANES).zip(...)`, which is the
-/// natural spelling and leaves a panic in the binary: `ChunksExact` carries its
-/// chunk size as a runtime field, so `size_hint`'s division needs a
-/// divide-by-zero check, and once `Zip::new` is outlined for that pair of
-/// iterator types the constant `8` stops reaching it. The check then survives
-/// into a binary that must link no panic machinery — see docs/testing.md
-/// Layer 10. Indexing a fixed-size array under `base + LANES <= W` is something
-/// the optimiser proves without help.
+/// Indexed rather than written with `chunks_exact(LANES).zip(..)`. That form
+/// leaves a divide-by-zero check in the binary: `ChunksExact` holds its chunk
+/// size as a runtime field, and once `Zip::new` is outlined the constant no
+/// longer reaches `size_hint`'s division. The data path links no panic
+/// machinery. Indexing a fixed-size array under `base + LANES <= W` needs no
+/// such check.
 ///
-/// `slice::as_chunks::<LANES>` says this properly — a const-generic size, so no
-/// division and no bound to prove — and was measured at 13 209 instructions per
-/// `add_imu` against this form's 13 238, which is nothing. It is stable since
-/// 1.88 and this crate's floor is 1.85, held so that firmware on a pinned
-/// toolchain can use it. A tidier spelling is not worth that, so the loop
-/// stays; if the floor ever rises for a real reason, this is the first thing to
-/// change.
+/// `slice::as_chunks::<LANES>` states this directly and measures the same, but
+/// is stable only from 1.88 against this crate's 1.85 floor. Worth revisiting
+/// if the floor rises.
 #[inline]
 fn lane_dot<const W: usize>(a: &[Scalar; W], b: &[Scalar; W]) -> Scalar {
     #[cfg(drifters_nightly_simd)]

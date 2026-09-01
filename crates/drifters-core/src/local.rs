@@ -1,50 +1,27 @@
 //! A local Cartesian frame: NED metres about an explicit geodetic origin.
 //!
-//! The navigation-frame axes turn as you move over the ellipsoid, so a local
-//! frame is only local: two frames anchored at different points differ by a
-//! **rotation**, not a translation, and the difference grows with separation.
-//! Treating a local frame as globally valid is the flat-Earth approximation,
-//! and it costs `L²/2R` — 0.08 m at 1 km, 78 m at 10 km.
+//! A local frame is only local. Two frames anchored at different points differ
+//! by a rotation, not a translation, and the difference grows with separation.
+//! Treating one as globally valid is the flat-Earth approximation and costs
+//! `L²/2R` — 0.08 m at 1 km, 78 m at 10 km.
 //!
-//! This module does not make that approximation. [`LocalFrame::to_local`] and
-//! [`LocalFrame::to_geodetic`] are exact geodesic conversions through ECEF, and
-//! [`LocalFrame::rotation_from`] gives the exact rotation between two frames so
-//! that a state expressed in one can be moved to the other without error. What
-//! bounds the error is *re-anchoring* — keeping the range small by moving the
-//! origin — rather than assuming the range is small.
+//! [`LocalFrame::to_local`] and [`LocalFrame::to_geodetic`] are exact geodesic
+//! conversions through ECEF, and [`LocalFrame::rotation_from`] gives the exact
+//! rotation between two frames, so a state expressed in one moves to the other
+//! without error. Range is bounded by re-anchoring rather than assumed small.
 //!
-//! # Why the range has to be bounded
+//! Bounded range is what allows position in `f32`. Its spacing is relative, so
+//! a local coordinate resolves to about `6e-8 × range`: 60 µm at 1 km. Geodetic
+//! coordinates have no such option, a latitude in radians costing 0.76 m per
+//! ULP wherever it is measured.
 //!
-//! Because bounded range is what lets position live in `f32`. `f32`'s spacing is
-//! relative, so a local coordinate's absolute resolution is proportional to its
-//! magnitude: about `6e-8 × range`, which is 60 µm at 1 km and 6 mm at 100 km.
-//! Geodetic coordinates have no such option — a latitude in radians costs 0.76 m
-//! per ULP wherever you are, which is what
-//! [`adr/0005`](https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md)
-//! measured and why it ruled `f32` position out. The frame was the obstacle, not
-//! the precision.
+//! Measured over the KF-GINS dataset, carrying position as `f32` metres about
+//! an anchor, NIS degrades before accuracy does and sets the threshold at
+//! **1 km**: 0.0331 m horizontal and NIS 1.562 there, against 0.0330 m and
+//! 1.459 in `f64`. Velocity is free at any range. The full sweep is in
+//! [`adr/0009`].
 //!
-//! Measured on the KF-GINS dataset, carrying position as `f32` metres about an
-//! anchor at increasing range:
-//!
-//! | anchor range | horizontal RMS | NIS (expect 3, `f64` gives 1.459) |
-//! |---|---|---|
-//! | 0 m | 0.0330 m | 1.486 |
-//! | 500 m | 0.0330 m | 1.523 |
-//! | 1 km | 0.0331 m | 1.562 |
-//! | 2 km | 0.0334 m | 1.668 |
-//! | 5 km | 0.0362 m | 2.941 |
-//! | 10 km | 0.0525 m | 12.809 |
-//!
-//! **NIS is the sharper instrument here, and it fails first.** At 5 km the
-//! accuracy still looks respectable — 0.0362 m, ten per cent off — while NIS has
-//! doubled, because quantisation is entering the innovations as noise the filter
-//! does not model. A filter that is quietly inconsistent is worse than one that
-//! is visibly inaccurate, so the threshold is set by NIS: **1 km**, where it
-//! costs 0.0001 m and seven per cent of NIS.
-//!
-//! Velocity is free at any range — `f32` resolves it to 1.9 µm/s — and was
-//! measured to change nothing.
+//! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
 use crate::frames::{Ecef, Lla};
 use crate::math::{Mat3, Vec3};
@@ -103,9 +80,9 @@ impl LocalFrame {
 
     /// Horizontal range of a local coordinate from this frame's origin, metres.
     ///
-    /// What a re-anchoring policy tests. Horizontal rather than full norm
-    /// because the down component is bounded by the vehicle's altitude range and
-    /// does not grow the way ground track does.
+    /// What a re-anchoring policy tests. Horizontal rather than the full norm:
+    /// the down component is bounded by the vehicle's altitude range and does
+    /// not grow the way ground track does.
     #[inline]
     pub fn horizontal_range(local: Vec3) -> F {
         #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
@@ -113,15 +90,13 @@ impl LocalFrame {
         (local.x * local.x + local.y * local.y).sqrt()
     }
 
-    /// The rotation `R_BA` taking a vector expressed in frame `from`'s axes to
-    /// this frame's axes.
+    /// The rotation `R_BA` taking a vector in frame `from`'s axes to this
+    /// frame's axes.
     ///
-    /// `C_en(B)ᵀ C_en(A)`. This is the whole reason re-anchoring is not a
-    /// subtraction: two NED frames on an ellipsoid are related by a rotation
-    /// whose angle is of order the geocentric separation, about 0.009° per km.
-    /// Ignoring it tilts the entire state — including the attitude — by that
-    /// angle, which at 1 km is 157 µrad against an attitude budget measured in
-    /// tens of µrad.
+    /// `C_en(B)ᵀ C_en(A)`. Two NED frames on an ellipsoid are related by a
+    /// rotation of about 0.009° per kilometre of separation. Ignoring it tilts
+    /// the whole state, attitude included, by 157 µrad at 1 km — against an
+    /// attitude budget in tens of µrad.
     #[inline]
     pub fn rotation_from(&self, from: &LocalFrame) -> Mat3 {
         self.ecef_from_ned.transpose().matmul(&from.ecef_from_ned)
@@ -129,8 +104,7 @@ impl LocalFrame {
 
     /// Re-express a local coordinate of frame `from` in this frame.
     ///
-    /// `p_B = R_BA (p_A) + (origin_A − origin_B) in B`, done exactly by going
-    /// through ECEF rather than by composing the two approximations.
+    /// Exact, through ECEF, rather than by composing two approximations.
     #[inline]
     pub fn rebase(&self, from: &LocalFrame, local: Vec3) -> Vec3 {
         self.to_local(from.to_geodetic(local))
@@ -169,8 +143,7 @@ mod tests {
         assert!(z.norm() < 1e-9, "origin at {z:?}");
     }
 
-    /// Agreement with the geodesic helper the rest of the workspace uses, so
-    /// this module cannot quietly diverge from `Lla::ned_from`.
+    /// Agreement with `Lla::ned_from`, which the rest of the workspace uses.
     #[test]
     fn agrees_with_ned_from() {
         let f = LocalFrame::new(origin());
@@ -182,8 +155,7 @@ mod tests {
         assert_relative_eq!(got.z, want.d, epsilon = 1e-9);
     }
 
-    /// Two frames a kilometre apart are related by a rotation, not a shift, and
-    /// the angle is the one the module docs quote.
+    /// Two frames a kilometre apart differ by the rotation quoted above.
     #[test]
     fn frames_a_kilometre_apart_differ_by_a_rotation() {
         let a = LocalFrame::new(origin());
@@ -207,8 +179,8 @@ mod tests {
         assert!(angle > 1.0e-4, "a kilometre must not be a pure translation");
     }
 
-    /// Rebasing is exact: a point's geodetic position does not depend on which
-    /// frame it is expressed in.
+    /// A point's geodetic position does not depend on the frame it is expressed
+    /// in.
     #[test]
     fn rebasing_preserves_the_point() {
         let a = LocalFrame::new(origin());
@@ -229,7 +201,7 @@ mod tests {
         );
     }
 
-    /// The resolution claim in the module docs, as arithmetic rather than prose.
+    /// The resolution figures above, as arithmetic.
     #[test]
     fn f32_resolution_scales_with_range() {
         for (range, want) in [(1.0e3, 6.0e-5), (1.0e5, 6.0e-3)] {
