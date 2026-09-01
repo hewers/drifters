@@ -595,14 +595,43 @@ Implementing it moved NEES from **23.910 to 23.870**. The transport is retained,
 being the more correct form and costing one `21 × 21` product per update, but it
 accounts for none of the discrepancy.
 
-**What is left.** The flatness in `dt` is the strongest remaining clue: it rules
-out anything that scales with the step, which includes the transition matrix
-truncation and the `Q dt` discretisation (the van Loan correction is
-`½(AQ + QAᵀ)dt²`, an order of magnitude smaller at `dt = 0.002` than at 0.02,
-and the measurement did not move). A scale-invariant error points at the noise
-injection `G Q Gᵀ` itself, or at the harness. Running the ESKF through the same
-campaign would separate those two: a fault in the harness should show up for
-both filters, a fault in `G` only for this one.
+**Not the cross-covariances.** `drifters nees` now scores each pair of blocks
+jointly, the diagnostic that found the ESKF's fault to be in its harness rather
+than its filter. Here it exonerates the correlations: every pair containing
+attitude or the magnetometer calibration is overconfident, and every pair among
+the other five blocks is consistent or conservative. The pairs track the two bad
+marginals rather than adding anything of their own.
+
+**It is attitude, and the rest is inherited.** Per-block NEES against run length:
+
+| block | 20 s | 120 s | 480 s |
+|---|---|---|---|
+| attitude | 4.193 | 3.547 | 3.112 |
+| gyro bias | 3.426 | 3.131 | 2.946 |
+| mag calib | 3.561 | 3.675 | 3.857 |
+
+Attitude and gyro bias decay toward consistency; the magnetometer calibration
+grows. Comparing the filter's predicted variance against the realised squared
+error over a run separates them. The attitude covariance is **2.1× too small at
+the start** — 1.36e-4 predicted against 2.90e-4 realised — and the two agree by
+about 200 s. So the filter reduces its attitude uncertainty faster than the
+attitude error actually falls, and the excess washes out as the run lengthens.
+
+The magnetometer block is unobservable here, and the physical error it is scored
+against is `δS = Êᵀ(ε₄ − ε₁,ω)` — a combination of the calibration state *and*
+the attitude. Its predicted variance at the first scored epoch is 1.296 times
+the drawn `σ²`, which is `Σ_ε₄ + Σ_ε₁,ω` to within a per cent. It inherits the
+attitude error, and it grows with time because the attitude covariance keeps
+shrinking while the physical error does not. The blocks the updates barely touch
+confirm the reading: gyro bias 0.958 and lever arm 0.998 against their drawn
+variances.
+
+**What is left.** One fault, in the attitude covariance, rather than the two the
+block figures suggest. The flatness in `dt` still rules out anything scaling
+with the step — the transition matrix truncation, the `Q dt` discretisation —
+so what remains is how fast the attitude uncertainty is reduced by a position
+update: the observability the linearisation credits attitude with through the
+lever arm and the dynamics.
 
 **What it means for the numbers already reported.** Anything derived from the
 EqF's covariance is optimistic by roughly this margin: the NIS-based tuning of

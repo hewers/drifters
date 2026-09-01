@@ -183,8 +183,9 @@ pub struct NeesReport {
     /// above six while both its blocks read three is a correlation between
     /// them that the filter has wrong — the marginals stay right because the
     /// error is in the off-diagonal, and only a joint quadratic form sees it.
-    /// Indexed by `(i, j)` with `i < j` over the first five blocks.
-    pub pairs: [[Running; 5]; 5],
+    /// Indexed by `(i, j)` with `i < j` over [`BLOCKS`]. The ESKF campaign
+    /// uses only the first five, having five blocks.
+    pub pairs: [[Running; 7]; 7],
     /// The error vector at each run's last scored epoch, and the covariance
     /// the filter held there.
     ///
@@ -224,6 +225,20 @@ impl NeesReport {
                 r.mean(),
                 verdict(r.mean(), blo, bhi)
             );
+        }
+        let (plo, phi) = stats::nis_interval(6, self.pairs[0][1].count().max(1));
+        println!("\nper pair, expected 6, 95 % interval [{plo:.2}, {phi:.2}]");
+        for (a, (first, _)) in BLOCKS.iter().enumerate() {
+            for (b, (second, _)) in BLOCKS.iter().enumerate().skip(a + 1) {
+                let m = self.pairs[a][b].mean();
+                if !m.is_finite() {
+                    continue;
+                }
+                println!(
+                    "  {first:<11} + {second:<11} {m:>8.3}   {}",
+                    verdict(m, plo, phi)
+                );
+            }
         }
         println!(
             "\nA block above the interval is overconfident: the filter's covariance\n\
@@ -468,6 +483,30 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
                         }
                         let s = bc.solve(&v);
                         slot.push((0..3).map(|i| e[base + i] * s[(i, 0)]).sum());
+                    }
+                }
+
+                // Each pair of blocks scored jointly. Per-block figures use
+                // marginal covariances, so they cannot see a wrong correlation
+                // *between* blocks; a pair far from six while both its blocks
+                // read three is exactly that.
+                for (a, (_, ba)) in BLOCKS.iter().enumerate() {
+                    for (b, (_, bb)) in BLOCKS.iter().enumerate().skip(a + 1) {
+                        let (ba, bb) = (*ba, *bb);
+                        let mut sub = Matrix::<6, 6>::zeros();
+                        let mut v = Matrix::<6, 1>::zeros();
+                        for i in 0..6 {
+                            let si = if i < 3 { ba + i } else { bb + i - 3 };
+                            v[(i, 0)] = e[si];
+                            for j in 0..6 {
+                                let sj = if j < 3 { ba + j } else { bb + j - 3 };
+                                sub[(i, j)] = p[(si, sj)];
+                            }
+                        }
+                        if let Some(sc) = Cholesky::new(&sub) {
+                            let sv = sc.solve(&v);
+                            report.pairs[a][b].push((0..6).map(|i| v[(i, 0)] * sv[(i, 0)]).sum());
+                        }
                     }
                 }
             }

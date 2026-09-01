@@ -925,6 +925,11 @@ across runs — `+0.794` against `−0.697` — showed a sign rather than a magn
 at fault. Both diagnostics are now permanent in `drifters nees --eskf`, because
 the cheapest way to not repeat this is to keep the instrument that caught it.
 
+The pairwise score runs for the equivariant filter too, where it *exonerates*
+the correlations: its pairs track two overconfident marginals and add nothing of
+their own, so its 23.6 against 21 is one covariance rather than a coupling. See
+[eqf.md](eqf.md).
+
 **What it cost.** The claim was in five documents and had been used to argue for
 UD factorisation. That argument now stands on conditioning and guaranteed
 positive-definiteness alone; see [adr/0009](adr/0009-local-first-architecture.md).
