@@ -262,9 +262,9 @@ pub fn replay(
 
         // One row per second keeps the output readable; the filter still runs
         // at the full IMU rate.
-        if report.processed % 200 == 0 {
+        if report.processed.is_multiple_of(200) {
             write_row(&mut nav, &mut err, &mut std_out, &engine)?;
-            if !quiet && report.processed % 200_000 == 0 {
+            if !quiet && report.processed.is_multiple_of(200_000) {
                 eprintln!("  {:.0} s processed", tow - config.start_time);
             }
         }

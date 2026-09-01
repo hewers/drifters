@@ -44,7 +44,7 @@ use cortex_m_semihosting::{debug, hprintln};
 use panic_semihosting as _;
 
 use drifters_core::frames::{Lla, Ned};
-use drifters_core::math::{Euler, Matrix, Vec3};
+use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
 use drifters_core::types::ImuSample;
 use drifters_filter::state::{StateMatrix, N_STATE};

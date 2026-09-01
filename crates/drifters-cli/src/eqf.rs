@@ -305,7 +305,7 @@ fn reverse_pass(
             let innovation = (st.pose.position + st.pose.rotation * st.lever - measured).norm();
             filter.update_position(measured, &r);
             applied += 1;
-            if std::env::var("DRIFTERS_REVERSE_TRACE").is_ok() && applied % 300 == 0 {
+            if std::env::var("DRIFTERS_REVERSE_TRACE").is_ok() && applied.is_multiple_of(300) {
                 eprintln!(
                     "  rev n={applied:5}  t={:7.1}  innov={:11.3e} m  tr(S)={:11.3e}  \
                      att_var={:10.3e}  bg_var={:10.3e}",
@@ -511,7 +511,7 @@ pub fn replay_eqf(
             // the two say completely different things, because the run is a
             // long convergence and the RMS keeps the transient forever.
             report.final_residual = residual.norm();
-            if !quiet && report.applied % 600 == 0 {
+            if !quiet && report.applied.is_multiple_of(600) {
                 let st = filter.nav_state();
                 eprintln!(
                     "  t={:5.0} s  residual {:9.3e} m  lever [{:+.3}, {:+.3}, {:+.3}]",
@@ -801,7 +801,7 @@ pub fn replay_gsdc_eqf(
                 residual: (residual.x, residual.y, residual.z),
                 nis,
             });
-            if std::env::var("DRIFTERS_EQF_TRACE").is_ok() && out.epochs.len() % 60 == 0 {
+            if std::env::var("DRIFTERS_EQF_TRACE").is_ok() && out.epochs.len().is_multiple_of(60) {
                 let geo = anchor.to_geodetic(solved.pose.position);
                 let e = reference
                     .at(t)
