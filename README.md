@@ -293,6 +293,13 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   all unchanged. Both, and how the second was got wrong the first time, in
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
 
+## Minimum supported Rust
+
+**1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf` — the crates
+that go on the target, which depend on nothing but `libm`. **1.88** for
+`drifters-proto` and the crates downstream of it, forced by `micropb` and
+`heapless`. CI builds the first three at 1.85 on every push.
+
 ## Documentation
 
 The docs carry the reasoning, including the parts that did not work.

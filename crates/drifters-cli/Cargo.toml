@@ -3,7 +3,8 @@ name = "drifters-cli"
 description = "Replay and evaluation harness for the drifters navigation filters, compatible with the KF-GINS dataset formats"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Above the workspace floor: depends on `drifters-proto`.
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

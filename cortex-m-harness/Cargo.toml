@@ -4,6 +4,9 @@ description = "Bare-metal measurement harness for drifters on Cortex-M, run unde
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Two binaries live here — the measurement harness and the panic audit — so
+# `cargo run` needs to be told which is the ordinary one.
+default-run = "cortex-m-harness"
 
 # Excluded from the main workspace: it targets bare metal, needs its own linker
 # configuration, and `cargo test --workspace` must not try to build it.

@@ -14,6 +14,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+# The floor for the embedded crates — `drifters-core`, `-filter` and `-eqf`,
+# which have no dependencies beyond `libm`. The crates that pull `micropb` and
+# `heapless` override this; see `drifters-proto`.
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hewers/drifters"

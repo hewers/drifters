@@ -149,6 +149,12 @@ jobs:
             -p drifters-proto \
             -p drifters-interop
 
+  # The MSRV that matters is the embedded one. `drifters-core`, `-filter` and
+  # `-eqf` depend on nothing but `libm`, so they can hold a floor far below what
+  # the rest of the workspace needs, and a firmware project on an older pinned
+  # toolchain can still use them. `drifters-proto` pulls `micropb` (1.88) and
+  # `heapless` (1.87), and everything downstream of it inherits that — which is
+  # why building the whole workspace here would only ever measure `micropb`.
   msrv:
     name: minimum supported Rust
     runs-on: ubuntu-latest
@@ -156,6 +162,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p drifters-core -p drifters-filter -p drifters-eqf
+      # Including under the features that change the filter, since a feature
+      # can reach for something newer without the default build noticing.
+      - run: >
+          cargo build -p drifters-filter
+          --features f32-covariance,reduced-state,smoothing,std
+      # The crates above the floor, at the floor they declare.
+      - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo build --workspace
 
   docs:

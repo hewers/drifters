@@ -44,6 +44,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace --release
 cargo test -p drifters-filter -p drifters-proto --features reduced-state
+cargo test -p drifters-filter -p drifters-cli --features f32-covariance
 cargo deny check
 cargo package --list -p <crate>          # confirm nothing unexpected ships
 cargo publish --dry-run -p drifters-core # only the root can dry-run pre-release
@@ -60,6 +61,21 @@ drifters-core found"* until its dependency is actually on the registry. That is
 expected, not a misconfiguration — the workspace dependency declarations carry
 both `version` and `path`, so cargo strips the path and uses the version at
 publish time.
+
+## Minimum supported Rust
+
+Two floors, deliberately.
+
+- **1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf`. These
+  depend on nothing but `libm`, and a firmware project on a pinned older
+  toolchain is exactly the user this library is for. CI builds them at 1.85 on
+  every push, including under the features that change the filter.
+- **1.88** for `drifters-proto` and everything downstream of it, forced by
+  `micropb` (1.88) and `heapless` (1.87).
+
+Raising the first is a breaking change for the users who care most about it and
+should be treated as one. Raising the second follows whatever those two
+dependencies do.
 
 ## What ships
 
