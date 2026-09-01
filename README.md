@@ -5,12 +5,10 @@ estimates *extended pose* — position, velocity and attitude together — along
 with the sensor errors that corrupt it, and runs the same code on a Cortex-M
 microcontroller as on a workstation.
 
-*Aided* rather than simply inertial, because only the IMU is: it alone drives
-the propagation, and GNSS, barometric, magnetic and odometric aiding all enter
-as corrections to it. *Extended pose* rather than pose, because velocity is a
-state and not a by-product — it is the `v` in `SE₂(3)`, and the geometry of the
-second estimator is built on it. In the usual shorthand, this is **GNSS/INS
-integration**.
+*Aided* rather than simply inertial, because the IMU drives
+the propagation while corrections are from GNSS, barometric, magnetic and odometric.
+*Extended pose* rather than pose, because velocity is a
+state and not a by-product.
 
 Two estimators over the same interface:
 
