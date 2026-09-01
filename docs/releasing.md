@@ -31,8 +31,7 @@ first publish.
 ## Names
 
 Checked against crates.io: `drifters-core`, `drifters-filter`, `drifters-proto`,
-`drifters-interop` and `drifters-eqf` are all free. `drifters-gnss` is **not yet
-checked** — see above.
+`drifters-interop`, `drifters-eqf` and `drifters-gnss` are all free.
 
 The bare name **`drifters` is taken** by an unrelated config-synchronisation
 tool, so there is no umbrella facade crate. Nothing depends on having one.

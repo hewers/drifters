@@ -1055,33 +1055,35 @@ pub mod eskf {
                     continue;
                 }
                 let nav = engine.nav_state();
-                let est = nav.position();
-                let d = est.ned_from(truth_pos);
-                let dv = nav.velocity().to_vec3() - velocity.to_vec3();
-                // `q_true = exp(φ) ⊗ q_est`, so φ rotates the *estimate to the
-                // truth* — see the convention block in `measurement.rs`. The
-                // other blocks are estimate minus truth, and taking this one
-                // the other way round flips every velocity/attitude cross
-                // term while leaving the marginals untouched: overall NEES
-                // read 38 against an expected 15 with every block consistent,
-                // which is what sent this looking for a defect in the filter.
-                let phi = Quat::from_dcm(&r_nb.matmul(&nav.pva.attitude.dcm.transpose()))
-                    .to_rotation_vector();
-                // Truth minus estimate, not estimate minus truth. `feedback`
-                // *adds* the IMU error states and *subtracts* the others — the
-                // error state is a correction to the compensation for these,
-                // and estimate-minus-truth for the rest. Getting it backwards
-                // here flips every cross term the bias blocks take part in.
-                let e_bg = bg - nav.imu_error.gyro_bias;
-                let e_ba = ba - nav.imu_error.accel_bias;
-
+                // Built by the library rather than by hand. The filter's error
+                // state does not use one convention — position and velocity are
+                // estimate minus truth, the IMU errors are truth minus estimate
+                // because feedback *adds* them, and attitude is multiplicative
+                // because it lives on SO(3). This harness previously wrote out
+                // all five blocks itself and took two of them backwards, which
+                // read as the filter being 2.5x overconfident for a long time:
+                // a *mixed* sign error leaves every marginal untouched and
+                // flips only the cross terms. `error_between` is the inverse of
+                // `apply_correction` and `error_state_round_trips` pins the
+                // pair as an identity, so there is now one place to get it
+                // wrong instead of two.
+                let truth_state = drifters_core::types::NavState {
+                    time: nav.time,
+                    pva: drifters_core::types::Pva {
+                        position: truth_pos,
+                        velocity,
+                        attitude: drifters_core::types::Attitude::from_quat(Quat::from_dcm(&r_nb)),
+                    },
+                    imu_error: drifters_core::types::ImuError {
+                        gyro_bias: bg,
+                        accel_bias: ba,
+                        ..nav.imu_error
+                    },
+                };
+                let dx = drifters_filter::engine::error_between(&truth_state, &nav);
                 let mut e = [0.0; N_STATE];
-                for i in 0..3 {
-                    e[i] = [d.n, d.e, d.d][i];
-                    e[3 + i] = dv[i];
-                    e[6 + i] = phi[i];
-                    e[9 + i] = e_bg[i];
-                    e[12 + i] = e_ba[i];
+                for (i, slot) in e.iter_mut().enumerate() {
+                    *slot = dx[(i, 0)];
                 }
                 // Score the 15 states this world exercises, as a proper
                 // marginal: the leading sub-block of P *is* the marginal

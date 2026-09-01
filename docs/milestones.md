@@ -235,7 +235,7 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 - [x] Monte Carlo NEES over synthetic trajectories, where ground truth exists
       and the *state* error is checked rather than only the innovations. It
       found — and then, after its own sign error was corrected, unfound — the
-      overconfidence recorded in [M15](#m15--the-cross-covariances--closed).
+      overconfidence recorded in [M15](#m15--the-cross-covariances--closed-and-it-was-the-instrument).
       No amount of NIS could have done either: NIS conflates a wrong covariance
       with a wrong model.
 
@@ -266,7 +266,7 @@ of ~11 000 B. Block-diagonal `Q`, in-place products and borrowing accumulation
 account for the 2.1× reduction, with bit-identical regression results.
 
 Re-measured after the factored covariance, which moved them — see
-[M14](#m14--local-first-architecture--proposed).
+[M14](#m14--local-first-architecture--in-progress).
 
 ### Panic freedom
 
@@ -514,7 +514,7 @@ across nine decades is what caught it.
 
 ---
 
-## M14 — Local-first architecture 📋 proposed
+## M14 — Local-first architecture 🔨 in progress
 
 A coupled redesign, recorded in
 [adr/0009](adr/0009-local-first-architecture.md). Four findings from the current
@@ -809,6 +809,25 @@ docs claimed it repaired a badly overconfident filter — it was not repairing
 anything. The EqF's 23.6 against 21 stands: its harness uses one convention
 throughout, and a global flip changes no quadratic form.
 
+**And the hole is now closed rather than commented.** The convention lived in
+[`apply_correction`](../crates/drifters-filter/src/engine.rs), which had no
+inverse, so anything needing to *construct* an error state from a truth and an
+estimate wrote out all five blocks by hand — which is what the harness did, and
+how it got two of them backwards. `error_between` is that inverse, the harness
+calls it, and `error_state_round_trips` pins
+`apply_correction(estimate, error_between(truth, estimate)) == truth` as an
+identity. Flipping either the bias sign or the attitude direction fails it,
+checked by mutation rather than assumed.
+
+Deliberately *not* unified to one convention. Attitude is multiplicative
+because it lives on `SO(3)`, so the operation cannot be made uniform however
+the signs are chosen — and attitude was the dominant half of this bug, the
+block that took velocity-plus-attitude to 20.11 against 6. A sign-only
+unification would have cost every measurement Jacobian, the smoother and the
+tests that pin them, on correct code, and would not have prevented what
+actually happened. One implementation with an inverse and a round-trip test is
+the smaller and stricter answer.
+
 **What found it.** Not a sharper test but a different one. Per-block NEES said
 every marginal was fine. Scoring each *pair* of blocks jointly put
 velocity-plus-attitude at 20 against 6 and everything else in range, and then
@@ -840,8 +859,12 @@ churn.
       in a `publish = false` binary crate
 - [x] Unblock `drifters-eqf`, held back on a condition that expired when M10
       landed
-- [ ] Confirm `drifters-gnss` is free on crates.io. The other names were
-      checked; the API refuses requests from here, so this one is by hand
+- [x] Confirm `drifters-gnss` is free on crates.io. The other names were
+      checked; the API refuses requests from here, so this one was by hand.
+      Free. The bare name `drifters` is taken, by an unrelated
+      config-synchronisation tool, so there is no umbrella facade crate —
+      nothing depends on having one, and the seven crates each say what they
+      are
 - [x] [`CHANGELOG.md`](../CHANGELOG.md) — one file for the workspace, since
       the crates share a version and release together
 - [x] `cargo-semver-checks` in CI, against the most recent release tag rather
@@ -850,7 +873,7 @@ churn.
       a green check that checked nothing would be worse than no check. The
       bare-metal job also grew a `drifters-filter --features smoothing` step,
       and a check that no crate in the runtime stack names `extern crate
-      alloc` — see the crate restructure in [M14](#m14--local-first-architecture--proposed)
+      alloc` — see the crate restructure in [M14](#m14--local-first-architecture--in-progress)
 - [ ] Publish, in the order [releasing.md](releasing.md) gives
 
 Deliberately **not** blocking on M14. Its steps are measurement-gated and

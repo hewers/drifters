@@ -589,6 +589,90 @@ pub fn apply_correction(state: &mut NavState, dx: &StateVector) {
     }
 }
 
+/// The error state that would carry `estimate` onto `truth`.
+///
+/// The exact inverse of [`apply_correction`]: applying this to `estimate`
+/// reproduces `truth`, and `error_state_round_trips` pins that as an identity
+/// rather than as a comment.
+///
+/// It exists because the alternative is that every consumer re-derives the
+/// convention, and one of them will get it wrong. One did. The filter's error
+/// state does not use a single convention and cannot be made to: position,
+/// velocity and attitude are *estimate relative to truth*, while the IMU errors
+/// are corrections to the compensation and are fed back by addition, and
+/// attitude is multiplicative because it lives on `SO(3)` rather than in a
+/// vector space. A Monte-Carlo harness built the error state by hand, took two
+/// of the five blocks the wrong way round, and reported the filter 2.5× more
+/// confident than it is — for a long time, and across five documents, because
+/// a *mixed* sign error leaves every marginal untouched and flips only the
+/// cross terms. See [M15](../../../docs/milestones.md).
+///
+/// So: anything comparing a filter state against a reference should call this
+/// rather than write the five blocks out.
+pub fn error_between(truth: &NavState, estimate: &NavState) -> StateVector {
+    let mut dx = StateVector::zeros();
+    let mut set = |i: usize, v: Vec3| {
+        dx[(i, 0)] = v.x;
+        dx[(i + 1, 0)] = v.y;
+        dx[(i + 2, 0)] = v.z;
+    };
+
+    // Position: estimate minus truth, which `apply_correction` subtracts.
+    //
+    // Through `Wgs84::dr` at the estimate, not through `Lla::ned_from`. The two
+    // differ at second order, and the one that matters is whichever inverts
+    // `apply_correction` exactly — it maps the error state to geodetic through
+    // `dr_inv` at the estimate, so this maps back through `dr` at the same
+    // point and the round trip closes to machine precision. `ned_from` gives
+    // the exact geodesic displacement, which is a different and equally
+    // defensible quantity; it just is not this function's job.
+    let e = estimate.position();
+    let t = truth.position();
+    let dr =
+        Wgs84::dr(e.lat, e.height) * Vec3::new(e.lat - t.lat, e.lon - t.lon, e.height - t.height);
+    set(P_ID, dr);
+    set(
+        V_ID,
+        estimate.pva.velocity.to_vec3() - truth.pva.velocity.to_vec3(),
+    );
+
+    // Attitude: `q_true = exp(φ) ⊗ q_est`, so φ takes the estimate to the
+    // truth and is read off the navigation-frame rotation between them. This
+    // is the block that was taken backwards, and the one no sign convention
+    // can turn into an addition.
+    let phi = Quat::from_dcm(
+        &truth
+            .pva
+            .attitude
+            .dcm
+            .matmul(&estimate.pva.attitude.dcm.transpose()),
+    )
+    .to_rotation_vector();
+    set(PHI_ID, phi);
+
+    // IMU errors: truth minus estimate, because `apply_correction` adds them.
+    set(
+        BG_ID,
+        truth.imu_error.gyro_bias - estimate.imu_error.gyro_bias,
+    );
+    set(
+        BA_ID,
+        truth.imu_error.accel_bias - estimate.imu_error.accel_bias,
+    );
+    #[cfg(not(feature = "reduced-state"))]
+    {
+        set(
+            SG_ID,
+            truth.imu_error.gyro_scale - estimate.imu_error.gyro_scale,
+        );
+        set(
+            SA_ID,
+            truth.imu_error.accel_scale - estimate.imu_error.accel_scale,
+        );
+    }
+    dx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +896,90 @@ mod tests {
         // Yawed 90°: the forward lever arm now points east.
         assert_relative_eq!(lever_n.x, 0.0, epsilon = 1e-9);
         assert_relative_eq!(lever_n.y, 2.0, epsilon = 1e-9);
+    }
+
+    /// The convention, as an identity rather than as a comment.
+    ///
+    /// `apply_correction(estimate, error_between(truth, estimate)) == truth`,
+    /// every block. A sign taken the wrong way round in either function fails
+    /// here, which is the check that was missing when a harness took two of
+    /// them backwards and cost this project a long detour — see M15.
+    #[test]
+    fn error_state_round_trips() {
+        let truth = NavState {
+            time: GpsTime::from_tow(456_789.0),
+            pva: Pva {
+                position: Lla::from_degrees(30.528_5, 114.357_1, 31.0),
+                velocity: Ned::new(3.5, -1.25, 0.75),
+                attitude: Attitude::from_euler(0.05, -0.03, 1.1),
+            },
+            imu_error: drifters_core::types::ImuError {
+                gyro_bias: Vec3::new(1.0e-4, -2.0e-4, 3.0e-4),
+                accel_bias: Vec3::new(2.0e-3, 1.0e-3, -4.0e-3),
+                gyro_scale: Vec3::new(1.0e-4, 2.0e-4, -1.0e-4),
+                accel_scale: Vec3::new(-3.0e-4, 1.0e-4, 2.0e-4),
+            },
+        };
+        // Deliberately wrong in every block, and by enough that a flipped sign
+        // cannot be mistaken for round-off.
+        let estimate = NavState {
+            time: truth.time,
+            pva: Pva {
+                position: Lla::from_degrees(30.528_4, 114.357_3, 28.5),
+                velocity: Ned::new(3.1, -1.05, 0.55),
+                attitude: Attitude::from_euler(0.04, -0.05, 1.09),
+            },
+            imu_error: drifters_core::types::ImuError {
+                gyro_bias: Vec3::new(-1.0e-4, 1.0e-4, 1.0e-4),
+                accel_bias: Vec3::new(1.0e-3, -1.0e-3, 2.0e-3),
+                gyro_scale: Vec3::new(2.0e-4, -1.0e-4, 3.0e-4),
+                accel_scale: Vec3::new(1.0e-4, 2.0e-4, -2.0e-4),
+            },
+        };
+
+        let mut recovered = estimate;
+        apply_correction(&mut recovered, &error_between(&truth, &estimate));
+
+        let p = recovered.position();
+        let want = truth.position();
+        assert_relative_eq!(p.lat, want.lat, epsilon = 1e-15);
+        assert_relative_eq!(p.lon, want.lon, epsilon = 1e-15);
+        assert_relative_eq!(p.height, want.height, epsilon = 1e-12);
+
+        let v = recovered.velocity().to_vec3();
+        let wv = truth.pva.velocity.to_vec3();
+        for i in 0..3 {
+            assert_relative_eq!(v[i], wv[i], epsilon = 1e-12);
+        }
+
+        // Attitude compared as a rotation, not componentwise: what must be
+        // zero is the residual rotation between the two.
+        let residual = Quat::from_dcm(
+            &truth
+                .pva
+                .attitude
+                .dcm
+                .matmul(&recovered.pva.attitude.dcm.transpose()),
+        )
+        .to_rotation_vector();
+        assert!(
+            residual.norm() < 1e-12,
+            "attitude off by {} rad",
+            residual.norm()
+        );
+
+        for (got, want) in [
+            (recovered.imu_error.gyro_bias, truth.imu_error.gyro_bias),
+            (recovered.imu_error.accel_bias, truth.imu_error.accel_bias),
+            #[cfg(not(feature = "reduced-state"))]
+            (recovered.imu_error.gyro_scale, truth.imu_error.gyro_scale),
+            #[cfg(not(feature = "reduced-state"))]
+            (recovered.imu_error.accel_scale, truth.imu_error.accel_scale),
+        ] {
+            for i in 0..3 {
+                assert_relative_eq!(got[i], want[i], epsilon = 1e-15);
+            }
+        }
     }
 
     #[test]
