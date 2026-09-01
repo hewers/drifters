@@ -49,6 +49,12 @@ cargo package --list -p <crate>          # confirm nothing unexpected ships
 cargo publish --dry-run -p drifters-core # only the root can dry-run pre-release
 ```
 
+Update [`CHANGELOG.md`](../CHANGELOG.md) and tag the release. The tag is what
+`cargo semver-checks` compares against — CI runs it on every push and pull
+request against the most recent tag, and says so and passes when there is none,
+which is the state until the first release. So the first tag is what turns that
+job on; there is nothing to run before it.
+
 A dry-run of a dependent crate fails with *"no matching package named
 drifters-core found"* until its dependency is actually on the registry. That is
 expected, not a misconfiguration — the workspace dependency declarations carry

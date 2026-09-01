@@ -766,8 +766,15 @@ churn.
       landed
 - [ ] Confirm `drifters-gnss` is free on crates.io. The other names were
       checked; the API refuses requests from here, so this one is by hand
-- [ ] `CHANGELOG.md`
-- [ ] `cargo-semver-checks` in CI
+- [x] [`CHANGELOG.md`](../CHANGELOG.md) — one file for the workspace, since
+      the crates share a version and release together
+- [x] `cargo-semver-checks` in CI, against the most recent release tag rather
+      than against crates.io, so it works on a branch and survives a yank.
+      Before the first tag it has no baseline, which it reports and passes —
+      a green check that checked nothing would be worse than no check. The
+      bare-metal job also grew a `drifters-gnss` step, which needs its
+      `--no-default-features --features alloc` configuration named because the
+      crate defaults to `std` for the RINEX reader
 - [ ] Publish, in the order [releasing.md](releasing.md) gives
 
 Deliberately **not** blocking on M14. Its steps are measurement-gated and

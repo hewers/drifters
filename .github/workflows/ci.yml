@@ -74,6 +74,51 @@ jobs:
       - run: cargo build -p drifters-filter --target ${{ matrix.target }}
       - run: cargo build -p drifters-proto --target ${{ matrix.target }}
       - run: cargo build -p drifters-eqf --target ${{ matrix.target }}
+      # `drifters-gnss` defaults to `std` for its RINEX reader, so the bare-metal
+      # configuration has to be named. Everything else in it needs only `alloc`.
+      - run: cargo build -p drifters-gnss --target ${{ matrix.target }} --no-default-features --features alloc
+
+  # Catches an accidental breaking change to a published API. It compares
+  # against the last release tag rather than against crates.io, so it works on
+  # a branch before anything is published and keeps working if a release is
+  # ever yanked.
+  #
+  # Before the first tag there is no baseline and nothing to compare, which the
+  # job says out loud rather than passing silently — a green check that checked
+  # nothing is worse than no check.
+  semver:
+    name: semantic versioning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags, and enough history to build the baseline from one.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: compare the public API against the last release tag
+        run: |
+          set -euo pipefail
+          baseline=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -z "$baseline" ]; then
+            echo "::notice::No release tag exists yet, so there is no baseline."
+            echo "This job begins checking at the first tag. See docs/releasing.md."
+            exit 0
+          fi
+          echo "Comparing against $baseline"
+          # Named rather than `--workspace`: `drifters-cli` and `xtask` are
+          # `publish = false` and have no public API to keep, and naming the
+          # list means a new crate is a deliberate addition here.
+          cargo semver-checks --baseline-rev "$baseline" \
+            -p drifters-core \
+            -p drifters-filter \
+            -p drifters-gnss \
+            -p drifters-eqf \
+            -p drifters-proto \
+            -p drifters-interop
 
   msrv:
     name: minimum supported Rust
