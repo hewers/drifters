@@ -24,7 +24,7 @@ Two estimators over the same interface:
 What differs from the reference implementations is that this is `no_std`,
 allocation-free, sans-IO, and measured on bare metal.
 
-## Measurements produced by tests in repo
+## Test-enforced Performance
 
 | | measured |
 |---|---|
