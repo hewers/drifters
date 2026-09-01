@@ -287,13 +287,17 @@ jobs:
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |
-          cargo build --release --bin panic_audit
-          bin=target/thumbv7em-none-eabihf/release/panic_audit
-          if nm "$bin" | grep -i 'core9panicking'; then
-            echo "the filter's data path can reach a panic; see docs/testing.md Layer 9"
-            exit 1
-          fi
-          echo "no panic machinery linked"
+          # Every configuration: `f32-covariance` and `reduced-state` change
+          # what the filter computes, so neither inherits the default's audit.
+          for features in "" "--features f32-covariance" "--features reduced-state"; do
+            cargo build --release --bin panic_audit $features
+            bin=target/thumbv7em-none-eabihf/release/panic_audit
+            if nm "$bin" | grep -i 'core9panicking'; then
+              echo "the data path can reach a panic in [$features]; see docs/testing.md Layer 10"
+              exit 1
+            fi
+            echo "no panic machinery linked [${features:-default}]"
+          done
 
   # Licence and advisory auditing.
   #

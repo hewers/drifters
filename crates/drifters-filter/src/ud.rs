@@ -105,6 +105,47 @@ pub struct Ud {
 }
 
 impl Ud {
+    /// One strictly-upper column of `U`, as a slice of `j` entries.
+    ///
+    /// `at` and `column` are correct for every `i < j < N_STATE`, but their
+    /// arithmetic — `j(j−1)/2 + i` — is past what the optimiser will prove
+    /// about an index into a fixed array, so writing this as `self.upper[..]`
+    /// leaves a bounds check and a `panic_bounds_check` path in the binary.
+    /// The data path must link no panic machinery; see docs/testing.md Layer
+    /// 10. `get` states the fallback explicitly instead, and the empty slice is
+    /// unreachable for any `j` this type ever passes.
+    #[inline]
+    fn column_of(&self, j: usize) -> &[Scalar] {
+        let start = column(j);
+        self.upper.get(start..start + j).unwrap_or(&[])
+    }
+
+    /// One strictly-upper column of `U`, mutably. See [`Self::column_of`].
+    ///
+    /// Worth having separately from [`Self::set_upper_at`]: the bounds check
+    /// `get_mut` costs is paid once per column here and once per *element*
+    /// there, and Bierman's innermost loop walks a whole column. Routing that
+    /// loop through `set_upper_at` measured 268 ns against this form's 193.
+    #[inline]
+    fn column_of_mut(&mut self, j: usize) -> &mut [Scalar] {
+        let start = column(j);
+        self.upper.get_mut(start..start + j).unwrap_or(&mut [])
+    }
+
+    /// One entry of `U` above the diagonal. See [`Self::column_of`].
+    #[inline]
+    fn upper_at(&self, i: usize, j: usize) -> Scalar {
+        self.upper.get(at(i, j)).copied().unwrap_or(0.0)
+    }
+
+    /// Write one entry of `U` above the diagonal. See [`Self::column_of`].
+    #[inline]
+    fn set_upper_at(&mut self, i: usize, j: usize, value: Scalar) {
+        if let Some(slot) = self.upper.get_mut(at(i, j)) {
+            *slot = value;
+        }
+    }
+
     /// A factored covariance from independent per-state variances.
     pub fn from_variances(variances: &[F; N_STATE]) -> Self {
         Self {
@@ -145,7 +186,7 @@ impl Ud {
             ud.diagonal[j] = d as Scalar;
             for i in 0..j {
                 let u = work[(i, j)] / d;
-                ud.upper[at(i, j)] = u as Scalar;
+                ud.set_upper_at(i, j, u as Scalar);
                 for k in 0..=i {
                     let v = work[(k, j)];
                     work[(k, i)] -= u * v;
@@ -178,7 +219,7 @@ impl Ud {
     pub fn element(&self, i: usize, j: usize) -> F {
         match i.cmp(&j) {
             core::cmp::Ordering::Equal => 1.0,
-            core::cmp::Ordering::Less => self.upper[at(i, j)] as F,
+            core::cmp::Ordering::Less => self.upper_at(i, j) as F,
             core::cmp::Ordering::Greater => 0.0,
         }
     }
@@ -268,8 +309,12 @@ impl Ud {
         let mut f = [0.0; N_STATE];
         for (j, fj) in f.iter_mut().enumerate() {
             let mut acc = row[j];
-            for (i, entry) in self.upper[column(j)..column(j) + j].iter().enumerate() {
-                acc += entry * row[i];
+            // Zipped rather than indexed by the enumeration: `column_of`
+            // returns a slice whose length the optimiser cannot see, so `row[i]`
+            // would carry a bounds check. `zip` stops at the shorter, and the
+            // column is the shorter by construction.
+            for (entry, x) in self.column_of(j).iter().zip(row.iter()) {
+                acc += entry * x;
             }
             *fj = acc;
         }
@@ -294,10 +339,11 @@ impl Ud {
             }
             let lambda = -f[j] / previous;
             self.diagonal[j] *= previous / alpha;
-            for (i, g) in gain.iter_mut().enumerate().take(j) {
-                let u = self.upper[at(i, j)];
-                self.upper[at(i, j)] = u + lambda * *g;
-                *g += u * v[j];
+            let vj = v[j];
+            for (entry, g) in self.column_of_mut(j).iter_mut().zip(gain.iter_mut()) {
+                let u = *entry;
+                *entry = u + lambda * *g;
+                *g += u * vj;
             }
             gain[j] = v[j];
         }
@@ -335,7 +381,7 @@ impl Ud {
             let phi_row: [Scalar; N_STATE] =
                 core::array::from_fn(|k| transition.data[i][k] as Scalar);
             for j in 0..N_STATE {
-                let stored = &self.upper[column(j)..column(j) + j];
+                let stored = self.column_of(j);
                 let mut acc = phi_row[j];
                 for (a, b) in phi_row.iter().zip(stored.iter()) {
                     acc += a * b;
@@ -356,6 +402,36 @@ impl Ud {
         }
         self.orthogonalise(&mut w, &weight)
     }
+}
+
+/// Dot product of two equal-length arrays, accumulated in [`LANES`]
+/// independent partial sums.
+///
+/// A single accumulator makes the additions one serial dependency chain, which
+/// the compiler may not reassociate and so may not vectorise — the whole dot
+/// product then runs at the latency of one add per element. Splitting it is the
+/// difference between the factored form being slower than a dense matrix
+/// product and being faster.
+///
+/// Written with indices rather than as `a.chunks_exact(LANES).zip(...)`, which
+/// is the natural spelling. `Zip::new` is outlined for that pair of iterator
+/// types, and once it is the constant chunk size no longer reaches
+/// `ChunksExact::size_hint`'s division — leaving a `panic_const_div_by_zero`
+/// path in a binary that must link no panic machinery. See docs/testing.md
+/// Layer 10. Indexing a fixed-size array under `base + LANES <= W` is something
+/// the optimiser proves without help, and it costs nothing to do so: measured
+/// against the `chunks_exact` form it is the same 3.87 µs propagation.
+#[inline]
+fn lane_dot<const W: usize>(a: &[Scalar; W], b: &[Scalar; W]) -> Scalar {
+    let mut partial = [0.0 as Scalar; LANES];
+    let mut base = 0;
+    while base + LANES <= W {
+        for (lane, p) in partial.iter_mut().enumerate() {
+            *p += a[base + lane] * b[base + lane];
+        }
+        base += LANES;
+    }
+    partial.iter().sum()
 }
 
 impl Ud {
@@ -388,7 +464,7 @@ impl Ud {
             for j in 0..N_STATE {
                 // U's diagonal is an implied one, so column `j` contributes
                 // `Φᵢⱼ` plus a dot product over its stored entries.
-                let stored = &self.upper[column(j)..column(j) + j];
+                let stored = self.column_of(j);
                 let mut acc = phi_row[j];
                 for (a, b) in phi_row.iter().zip(stored.iter()) {
                     acc += a * b;
@@ -434,37 +510,19 @@ impl Ud {
         let mut weighted = [0.0 as Scalar; W];
         for i in (0..N_STATE).rev() {
             pivot.copy_from_slice(&w[i]);
-            let mut partial = [0.0 as Scalar; LANES];
             for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
                 *x = q * p;
             }
-            for (chunk, pchunk) in weighted.chunks_exact(LANES).zip(pivot.chunks_exact(LANES)) {
-                for l in 0..LANES {
-                    partial[l] += chunk[l] * pchunk[l];
-                }
-            }
-            let sigma: Scalar = partial.iter().sum();
+            let sigma: Scalar = lane_dot(&weighted, &pivot);
             if !sigma.is_finite() || sigma <= 0.0 {
                 return None;
             }
             self.diagonal[i] = sigma;
             let inverse = 1.0 / sigma;
             for (j, row) in w.iter_mut().enumerate().take(i) {
-                // Independent partial sums. A single accumulator makes this a
-                // serial chain of floating-point additions, which the compiler
-                // may not reassociate and so may not vectorise — the whole
-                // dot product then runs at the latency of one add per element.
-                // Splitting it is the difference between this being slower
-                // than a dense matrix product and being faster.
-                let mut partial = [0.0 as Scalar; LANES];
-                for (a, b) in row.chunks_exact(LANES).zip(weighted.chunks_exact(LANES)) {
-                    for l in 0..LANES {
-                        partial[l] += a[l] * b[l];
-                    }
-                }
-                let cross: Scalar = partial.iter().sum();
+                let cross: Scalar = lane_dot(row, &weighted);
                 let u = cross * inverse;
-                self.upper[at(j, i)] = u;
+                self.set_upper_at(j, i, u);
                 for (a, b) in row.iter_mut().zip(pivot.iter()) {
                     *a -= u * b;
                 }

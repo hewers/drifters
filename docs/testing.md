@@ -416,9 +416,33 @@ Those are compile-time constants, but iterating an array hides that from the
 optimiser, which then could not fold `set_block`'s assert away. Unrolling the
 four calls made the indices visibly constant and the assert vanished.
 
+And again, when the covariance became factored — while this job was among the
+ones not running, so the audit was silent for three weeks.
+
+**`panic_bounds_check`, from `Ud::to_covariance`, `from_covariance_in_place`
+and `update`.** The factored covariance packs 231 scalars by column and reaches
+them through `at(i, j) = j(j−1)/2 + i`. That is correct for every `i < j <
+N_STATE` and past what the optimiser will prove about an index into a fixed
+array. The accesses now go through `column_of` / `upper_at` / `set_upper_at`,
+which use `get` and state the unreachable fallback explicitly.
+
+Where the bound is hoistable it must be hoisted: routing Bierman's innermost
+loop through the per-element `set_upper_at` measured 268 ns against the
+per-column `column_of_mut`'s 193, because that loop walks a whole column and
+was paying a check per element rather than one per column.
+
+**`panic_const_div_by_zero`, from `Zip<ChunksExact, ChunksExact>::new`.** The
+lane-split dot products were written `a.chunks_exact(LANES).zip(b.chunks_exact
+(LANES))`. `Zip::new` is outlined for that pair of types, and once it is, the
+constant `LANES` no longer reaches `ChunksExact::size_hint`'s division — so a
+divide-by-zero panic survived for a divisor that is the literal `8`. Written
+with indices under `base + LANES <= W` instead, which the optimiser proves
+without help and which measures the same 3.87 µs propagation.
+
 The general lesson matches Layer 8's: what the optimiser can prove is not
-visible in the source. Both of these read as obviously-fine code, and both
-linked a panic.
+visible in the source. All of these read as obviously-fine code, and every one
+of them linked a panic. It is also why the audit has to actually run — three of
+the five were introduced while it could not.
 
 ### Scope
 
