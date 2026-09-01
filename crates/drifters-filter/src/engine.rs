@@ -131,8 +131,8 @@ impl GinsEngine {
 
     /// The current error-state covariance.
     #[inline]
-    pub fn covariance(&self) -> &crate::state::StateMatrix {
-        &self.filter.covariance
+    pub fn covariance(&self) -> crate::state::StateMatrix {
+        self.filter.covariance()
     }
 
     /// Per-state one-sigma uncertainties, in the order given in
@@ -270,7 +270,7 @@ impl GinsEngine {
     fn seal_checkpoint(&mut self) {
         #[cfg(feature = "smoothing")]
         {
-            let covariance = self.filter.covariance;
+            let covariance = self.filter.covariance();
             let state = self.state;
             let Some(r) = self.recorder.as_mut() else {
                 return;
@@ -545,7 +545,7 @@ impl GinsEngine {
         #[cfg(feature = "smoothing")]
         if let Some(r) = self.recorder.as_mut() {
             if r.prior_pending {
-                r.prior = self.filter.covariance;
+                r.prior = self.filter.covariance();
                 r.prior_pending = false;
             }
         }
@@ -1235,7 +1235,7 @@ mod tests {
         assert!(e.filter.is_healthy());
         assert_relative_eq!(e.covariance().asymmetry(), 0.0, epsilon = 1e-10);
         assert!(
-            drifters_core::math::Cholesky::new(e.covariance()).is_some(),
+            drifters_core::math::Cholesky::new(&e.covariance()).is_some(),
             "covariance lost positive definiteness under a suboptimal gain"
         );
     }
@@ -1327,7 +1327,7 @@ mod tests {
         assert!(e.filter.is_healthy());
         assert_relative_eq!(e.covariance().asymmetry(), 0.0, epsilon = 1e-10);
         assert!(
-            drifters_core::math::Cholesky::new(e.covariance()).is_some(),
+            drifters_core::math::Cholesky::new(&e.covariance()).is_some(),
             "covariance lost positive definiteness over 200 s of ZUPTs"
         );
     }

@@ -105,7 +105,10 @@ mid-run changes the coordinates and nothing statistical, so a correct
 implementation shows no step in `drifters nees`. That is a sharp test and the
 instrument for it already exists.
 
-### 2. UD factorisation (Bierman–Thornton) replaces stored `P`
+### 2. UD factorisation (Bierman–Thornton) replaces stored `P` — **done**
+
+Built and swapped in. Two things the section below got wrong are corrected at
+the end of it.
 
 Carry `P = U D Uᵀ` with `U` unit upper triangular and `D` diagonal, never `P`
 itself.
@@ -348,3 +351,65 @@ own coordinates referred to something far away.
 Cheaper, and the GCU sweep suggests rejection matters on this data. Rejected as
 insufficient: below four satellites there is no position solution to reject
 outliers *from*.
+
+### Amended after building it
+
+**The storage claim held; the constraint about `R` did not.** 231 scalars
+against 441, and the engine went from 4 920 bytes to 3 240 — a third off, the
+largest single saving it has had. But this section said "present measurements
+are already diagonal", and tight coupling has since introduced a dense `R`:
+single-differenced pseudoranges all carry the reference satellite's error.
+`ud::Whitened` premultiplies by the inverse Cholesky factor, and feeding
+correlated rows to a scalar-sequential update without it is not an
+approximation but an error — a silent one, which a test pins by showing the
+naive version return a visibly smaller covariance without complaint.
+
+**It is faster, and the reason is not the flop count.** Thornton does about 22 k
+multiply-adds per propagation against the dense form's 37 k, so it should have
+been quicker from the start. The first version was **2.7× slower**. Three fixes,
+each measured:
+
+| | ns per covariance propagation |
+|---|---|
+| dense, for comparison | 5 230 |
+| first working version | 15 129 |
+| packing `U` by column rather than by row | 10 877 |
+| padding the augmented width to a vector multiple | 5 589 |
+| eight independent accumulators in the dot products | **4 017** |
+
+The last is the one worth remembering. A dot product written with a single
+running sum is a chain of floating-point additions, and the compiler may not
+reassociate it — so it cannot vectorise, and the loop runs at the latency of
+one add per element. That alone was worth 28 %, and it is the difference
+between a factored filter being slower than a dense one and being faster.
+
+Column packing matters because both hot loops walk a *column*: `Φ U`
+accumulates down one and Gram-Schmidt writes one. Row-major made both strided
+and needed a multiply and a divide per element for the offset.
+
+**The trapezoidal discretisation was dropped, having been shown to be worth
+nothing.** `Ud::predict_trapezoidal` reproduces the dense form's
+`½dt(ΦQΦᵀ + Q)` exactly — a test pins it to the last digit, which is what made
+the swap checkable at all. It is not what runs: it needs `[ΦG, G]` rather than
+`G`, eighteen more columns through the Gram-Schmidt, and across the change
+KF-GINS reports the same 0.0330 m and the same 1.459 NIS to four figures while
+the NEES campaign moves from 14.569 to 14.565, inside its own Monte Carlo
+noise. Second order in `dt` is nothing to keep at 200 Hz.
+
+**Measured end to end**, against the dense implementation on the same machine:
+
+| | dense | factored |
+|---|---|---|
+| one IMU propagation | 5 640 ns | **4 323 ns** |
+| one second at 200 Hz with a fix | 1 131 µs | **900 µs** |
+| `Eskf` | 3 704 B | **2 024 B** |
+| `GinsEngine` | 4 920 B | **3 240 B** |
+| KF-GINS horizontal | 0.0330 m | 0.0330 m |
+| ESKF NEES, expected 15 | 13.877 | 13.874 |
+
+**On the target this should be a larger win, and that is not measured here.**
+x86 vectorises; a Cortex-M4F does not, and carries `f64` in software, so the
+flop count is the whole story there — 22 k against 37 k. The bare-metal harness
+deliberately reports stack and size rather than cycles, because QEMU models no
+pipeline. Instruction counts under `-icount` would be a fair A/B and are not
+yet wired up.

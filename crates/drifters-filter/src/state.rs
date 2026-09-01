@@ -144,8 +144,8 @@ mod size_tests {
         assert_eq!(size_of::<NoiseMatrix>(), 3_024, "21x18 f64 noise mapping");
         assert_eq!(
             size_of::<crate::eskf::Eskf>(),
-            3_704,
-            "covariance + error state, plus the recorded NIS"
+            2_024,
+            "factored covariance + error state, plus the recorded NIS"
         );
         // The factored covariance is n(n+1)/2 scalars against a dense n², which
         // is the storage half of the case for it. 231 against 441 for the
@@ -165,12 +165,12 @@ mod size_tests {
         // have the field at all. A regression that puts it in unconditionally
         // shows up here as 23 168.
         //
-        // Was 4 944 until `GpsTime` became a single `u64`: a week plus an
-        // `f64` time of week padded to sixteen bytes, and the engine carries
-        // two navigation states.
+        // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
+        // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
+        // largest single saving the engine has had.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            if cfg!(feature = "smoothing") { 23_168 } else { 4_920 },
+            if cfg!(feature = "smoothing") { 21_488 } else { 3_240 },
             "whole engine"
         );
     }

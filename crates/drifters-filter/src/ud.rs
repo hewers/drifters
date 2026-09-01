@@ -35,16 +35,37 @@ use drifters_core::F;
 
 use crate::state::{NoiseMatrix, StateMatrix, StateVector, N_NOISE, N_STATE};
 
+/// Independent accumulators in the inner dot products.
+///
+/// Floating-point addition is not associative, so a single running sum is a
+/// dependency chain the compiler cannot break and therefore cannot vectorise.
+/// Eight partial sums let it. The augmented width is padded to a multiple of
+/// this so the chunking is exact and there is no remainder loop.
+const LANES: usize = 8;
+
 /// Strictly-upper entries of an `N × N` unit triangular matrix.
 const fn upper_len(n: usize) -> usize {
     n * (n - 1) / 2
 }
 
+/// Where column `j` of the packed upper triangle starts.
+///
+/// Packed by **column**, not by row, and that is a performance decision rather
+/// than a taste one. Both hot loops walk a column: `Φ U` accumulates down
+/// column `j`, and Gram-Schmidt writes column `i` as it sweeps. Row-major
+/// packing makes both of those strided, and the offset arithmetic then needs a
+/// multiply and a divide per element instead of an add. Column-major makes
+/// them contiguous slices, which vectorise.
+#[inline]
+const fn column(j: usize) -> usize {
+    // `saturating_sub` because column zero is empty and `0 - 1` is not.
+    j * j.saturating_sub(1) / 2
+}
+
 /// Where `(i, j)` with `i < j` lives in the packed upper triangle.
 #[inline]
 const fn at(i: usize, j: usize) -> usize {
-    // Row `i` starts after the rows above it, each one shorter than the last.
-    i * (2 * N_STATE - i - 1) / 2 + (j - i - 1)
+    column(j) + i
 }
 
 /// A covariance as `U D Uᵀ`.
@@ -142,6 +163,30 @@ impl Ud {
             .sum()
     }
 
+    /// `h P hᵀ`, without forming `P`.
+    ///
+    /// `P = U D Uᵀ`, so this is `Σₖ Dₖ (Uᵀh)ₖ²` — one triangular product and a
+    /// weighted sum, against the `n²` of a dense row-times-matrix.
+    pub fn quadratic(&self, h: &StateVector) -> F {
+        let mut acc = 0.0;
+        for j in 0..N_STATE {
+            let mut f = 0.0;
+            for i in 0..=j {
+                f += self.element(i, j) * h[(i, 0)];
+            }
+            acc += self.diagonal[j] * f * f;
+        }
+        acc
+    }
+
+    /// Scale the whole covariance by `factor`, which scales `D` alone: `U`
+    /// carries the correlations and a uniform scaling leaves them alone.
+    pub fn inflate(&mut self, factor: F) {
+        for d in self.diagonal.iter_mut() {
+            *d *= factor;
+        }
+    }
+
     /// True when every element is finite and `D` is non-negative.
     pub fn is_healthy(&self) -> bool {
         self.diagonal.iter().all(|d| d.is_finite() && *d >= 0.0)
@@ -226,24 +271,29 @@ impl Ud {
         // Not generic over the channel count: `N_STATE + M` is const arithmetic
         // over a generic, which stable Rust will not size an array with, and
         // the filter has exactly one noise mapping shape anyway.
-        const WIDTH: usize = N_STATE + N_NOISE;
+        const WIDTH: usize = (N_STATE + N_NOISE).next_multiple_of(LANES);
         // W = [Φ U , G], weighted by diag(D, density).
         let mut w = [[0.0f64; WIDTH]; N_STATE];
         for (i, row) in w.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate().take(N_STATE) {
-                let mut acc = 0.0;
-                for k in 0..=j {
-                    acc += transition[(i, k)] * self.element(k, j);
+            let phi_row = &transition.data[i];
+            for j in 0..N_STATE {
+                let stored = &self.upper[column(j)..column(j) + j];
+                let mut acc = phi_row[j];
+                for (a, b) in phi_row.iter().zip(stored.iter()) {
+                    acc += a * b;
                 }
-                *cell = acc;
+                row[j] = acc;
             }
             for j in 0..N_NOISE {
                 row[N_STATE + j] = mapping[(i, j)];
             }
         }
+        // Padding columns keep their zero weight and zero data, so they
+        // contribute nothing and only exist to make the inner loops a whole
+        // number of vectors.
         let mut weight = [0.0f64; WIDTH];
         weight[..N_STATE].copy_from_slice(&self.diagonal);
-        weight[N_STATE..].copy_from_slice(density);
+        weight[N_STATE..N_STATE + N_NOISE].copy_from_slice(density);
         self.orthogonalise(&mut w, &weight)
     }
 }
@@ -269,22 +319,26 @@ impl Ud {
         density: &[F; N_NOISE],
         dt: F,
     ) -> Option<()> {
-        const WIDTH: usize = N_STATE + 2 * N_NOISE;
+        const WIDTH: usize = (N_STATE + 2 * N_NOISE).next_multiple_of(LANES);
         let half = 0.5 * dt;
         let mut w = [[0.0f64; WIDTH]; N_STATE];
         for (i, row) in w.iter_mut().enumerate() {
-            for (j, cell) in row.iter_mut().enumerate().take(N_STATE) {
-                let mut acc = 0.0;
-                for k in 0..=j {
-                    acc += transition[(i, k)] * self.element(k, j);
+            let phi_row = &transition.data[i];
+            for j in 0..N_STATE {
+                // U's diagonal is an implied one, so column `j` contributes
+                // `Φᵢⱼ` plus a dot product over its stored entries.
+                let stored = &self.upper[column(j)..column(j) + j];
+                let mut acc = phi_row[j];
+                for (a, b) in phi_row.iter().zip(stored.iter()) {
+                    acc += a * b;
                 }
-                *cell = acc;
+                row[j] = acc;
             }
             for j in 0..N_NOISE {
                 // Φ G, the noise as it arrives at the end of the interval.
                 let mut acc = 0.0;
-                for k in 0..N_STATE {
-                    acc += transition[(i, k)] * mapping[(k, j)];
+                for (k, a) in phi_row.iter().enumerate() {
+                    acc += a * mapping[(k, j)];
                 }
                 row[N_STATE + j] = acc;
                 // G, as it arrives at the start.
@@ -303,32 +357,58 @@ impl Ud {
     /// Modified weighted Gram-Schmidt over an augmented matrix, from the
     /// bottom row up. Each row's weighted norm becomes a diagonal entry and
     /// the projections become the column above it.
+    ///
+    /// The pivot row and its weighted copy are lifted out of the inner loop.
+    /// The weight multiply then happens once per pivot instead of once per
+    /// pair, and both inner loops become a dot product and an AXPY over
+    /// contiguous slices, which vectorise. Reading the pivot through the same
+    /// `&mut` that writes the other row does not, and that was how this was
+    /// first written.
     fn orthogonalise<const W: usize>(
         &mut self,
         w: &mut [[F; W]; N_STATE],
         weight: &[F; W],
     ) -> Option<()> {
+        let mut pivot = [0.0; W];
+        let mut weighted = [0.0; W];
         for i in (0..N_STATE).rev() {
-            let mut sigma = 0.0;
-            for k in 0..W {
-                sigma += weight[k] * w[i][k] * w[i][k];
+            pivot.copy_from_slice(&w[i]);
+            let mut partial = [0.0; LANES];
+            for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
+                *x = q * p;
             }
+            for (chunk, pchunk) in weighted
+                .chunks_exact(LANES)
+                .zip(pivot.chunks_exact(LANES))
+            {
+                for l in 0..LANES {
+                    partial[l] += chunk[l] * pchunk[l];
+                }
+            }
+            let sigma: F = partial.iter().sum();
             if !sigma.is_finite() || sigma <= 0.0 {
                 return None;
             }
             self.diagonal[i] = sigma;
-            for j in 0..i {
-                let mut cross = 0.0;
-                for k in 0..W {
-                    cross += weight[k] * w[j][k] * w[i][k];
+            let inverse = 1.0 / sigma;
+            for (j, row) in w.iter_mut().enumerate().take(i) {
+                // Independent partial sums. A single accumulator makes this a
+                // serial chain of floating-point additions, which the compiler
+                // may not reassociate and so may not vectorise — the whole
+                // dot product then runs at the latency of one add per element.
+                // Splitting it is the difference between this being slower
+                // than a dense matrix product and being faster.
+                let mut partial = [0.0; LANES];
+                for (a, b) in row.chunks_exact(LANES).zip(weighted.chunks_exact(LANES)) {
+                    for l in 0..LANES {
+                        partial[l] += a[l] * b[l];
+                    }
                 }
-                let u = cross / sigma;
+                let cross: F = partial.iter().sum();
+                let u = cross * inverse;
                 self.upper[at(j, i)] = u;
-                // Split so the borrow checker sees two disjoint rows; `j < i`
-                // always, which is what makes that true.
-                let (above, below) = w.split_at_mut(i);
-                for (target, source) in above[j].iter_mut().zip(below[0].iter()) {
-                    *target -= u * *source;
+                for (a, b) in row.iter_mut().zip(pivot.iter()) {
+                    *a -= u * b;
                 }
             }
         }
@@ -697,7 +777,7 @@ mod tests {
         let mut rng = Rng(90210);
         let p = covariance(13, 1.0e8);
         let mut dense = Eskf::new(&[1.0; N_STATE]);
-        dense.covariance = p;
+        assert!(dense.set_covariance(&p));
         let mut ud = Ud::from_covariance(&p).unwrap();
 
         let mut dense_failed_at = None;
@@ -715,7 +795,7 @@ mod tests {
 
             if dense_failed_at.is_none()
                 && (dense.update(&z, &h, &r).is_err()
-                    || Cholesky::new(&dense.covariance).is_none())
+                    || Cholesky::new(&dense.covariance()).is_none())
             {
                 dense_failed_at = Some(step);
             }
@@ -784,7 +864,7 @@ mod tests {
 
         // Dense joint update, as `Eskf::update` performs it.
         let mut filter = Eskf::new(&[1.0; N_STATE]);
-        filter.covariance = p;
+        assert!(filter.set_covariance(&p));
         filter.update(&innovation, &h, &r).expect("well posed");
 
         // Whitened, one row at a time.
@@ -806,7 +886,7 @@ mod tests {
             }
         }
 
-        let worst = worst_relative(&filter.covariance, &ud.to_covariance());
+        let worst = worst_relative(&filter.covariance(), &ud.to_covariance());
         assert!(worst < 1.0e-7, "covariance differs by {worst:.2e}");
     }
 
@@ -840,7 +920,7 @@ mod tests {
         let innovation = Matrix::<M, 1>::zeros();
 
         let mut correct = Eskf::new(&[1.0; N_STATE]);
-        correct.covariance = p;
+        assert!(correct.set_covariance(&p));
         correct.update(&innovation, &h, &r).unwrap();
 
         let mut naive = Ud::from_covariance(&p).unwrap();
@@ -851,7 +931,7 @@ mod tests {
             }
             naive.update(&hr, r[(row, row)]).unwrap();
         }
-        let worst = worst_relative(&correct.covariance, &naive.to_covariance());
+        let worst = worst_relative(&correct.covariance(), &naive.to_covariance());
         assert!(
             worst > 0.05,
             "ignoring the correlation should visibly shrink the covariance, \

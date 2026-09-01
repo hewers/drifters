@@ -512,10 +512,17 @@ Each step is gated on a measurement rather than on the previous one compiling.
       rotation between the two NED frames.
       *Gate:* NEES invariant across a re-anchor; KF-GINS and GSDC accuracy
       unchanged.
-- [ ] **UD factorisation, Bierman–Thornton.** `P = U D Uᵀ`, never stored `P`.
-      Positive-definiteness by construction, half the precision requirement,
-      231 scalars against 441, no square roots.
-      *Gate:* NEES unchanged or better on both estimators, zero abandoned runs.
+- [x] **UD factorisation, Bierman–Thornton.** `P = U D Uᵀ`, never stored `P`.
+      In [`ud`](../crates/drifters-filter/src/ud.rs), and the filter carries it:
+      231 scalars against 441, positive-definiteness by construction, no square
+      roots.
+      *Gate:* met, and it is faster as well. ESKF NEES 13.874 against 13.877,
+      zero abandoned runs, KF-GINS unchanged at 0.0330 m — and a propagation
+      went from 5 640 ns to 4 323, the engine from 4 920 bytes to 3 240.
+      Getting there took three optimisations, of which the one worth
+      remembering is that a dot product with a single accumulator is a
+      dependency chain the compiler cannot vectorise. See
+      [adr/0009](adr/0009-local-first-architecture.md).
 - [x] **`u64` nanosecond time**, with `dt` from an integer difference.
       [`GpsTime`](../crates/drifters-core/src/time.rs) is now a private
       `u64` of nanoseconds since the GPS epoch; `week()` and `tow()` are

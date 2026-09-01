@@ -15,8 +15,9 @@ use drifters_core::F;
 
 use crate::state::{
     NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID, BA_ID, BGSTD_ID,
-    BG_ID, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
+    BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
 };
+use crate::ud::{Ud, Whitened};
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SASTD_ID, SA_ID, SGSTD_ID, SG_ID};
 
@@ -331,8 +332,14 @@ pub mod chi_squared {
 pub struct Eskf {
     /// Error-state estimate. Zero immediately after every feedback.
     pub dx: StateVector,
-    /// Error-state covariance.
-    pub covariance: StateMatrix,
+    /// Error-state covariance, carried factored as `U D Uᵀ`.
+    ///
+    /// Private because the factors are the representation, not a view of one:
+    /// handing out `&mut` on them would let a caller put `D` somewhere a
+    /// covariance cannot go, which is the failure this factorisation exists to
+    /// make impossible. [`Eskf::covariance`] multiplies them out for anything
+    /// that genuinely needs a dense `P`.
+    covariance: Ud,
     /// Normalised innovation squared of the most recent update, `NaN` before
     /// the first one. Read through [`Eskf::last_nis`].
     last_nis: F,
@@ -379,9 +386,63 @@ impl Eskf {
         }
         Self {
             dx: StateVector::zeros(),
-            covariance: StateMatrix::from_diagonal(&variances),
+            covariance: Ud::from_variances(&variances),
             last_nis: F::NAN,
         }
+    }
+
+    /// The covariance as a dense matrix, multiplied out from its factors.
+    ///
+    /// For reporting, for the smoother's recursion, and for tests. The filter
+    /// itself never forms this.
+    #[inline]
+    pub fn covariance(&self) -> StateMatrix {
+        self.covariance.to_covariance()
+    }
+
+    /// The factors themselves, for a caller that can use them directly.
+    #[inline]
+    pub fn factored(&self) -> &Ud {
+        &self.covariance
+    }
+
+    /// Replace the covariance, factoring the matrix given.
+    ///
+    /// Returns `false` and changes nothing if it is not positive definite,
+    /// which is the last point at which that can be detected — after this the
+    /// factored form keeps it so by construction.
+    pub fn set_covariance(&mut self, p: &StateMatrix) -> bool {
+        match Ud::from_covariance(p) {
+            Some(ud) => {
+                self.covariance = ud;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The process-noise spectral density over the driving channels.
+    ///
+    /// `G diag(this) Gᵀ` is exactly [`process_noise`] — the dense form rotates
+    /// the densities into the navigation frame and this leaves that rotation
+    /// in `G`, where Thornton wants it. A test pins the equality, because the
+    /// two are written separately and the whole time update rests on their
+    /// agreeing.
+    fn noise_density(noise: &ImuNoise) -> [F; N_NOISE] {
+        let mut density = [0.0; N_NOISE];
+        let gm = 2.0 / noise.correlation_time;
+        for i in 0..3 {
+            density[VRW_ID + i] = noise.accel_vrw[i] * noise.accel_vrw[i];
+            density[ARW_ID + i] = noise.gyro_arw[i] * noise.gyro_arw[i];
+            density[BGSTD_ID + i] = noise.gyro_bias_std[i] * noise.gyro_bias_std[i] * gm;
+            density[BASTD_ID + i] = noise.accel_bias_std[i] * noise.accel_bias_std[i] * gm;
+            #[cfg(not(feature = "reduced-state"))]
+            {
+                density[SGSTD_ID + i] = noise.gyro_scale_std[i] * noise.gyro_scale_std[i] * gm;
+                density[SASTD_ID + i] = noise.accel_scale_std[i] * noise.accel_scale_std[i] * gm;
+            }
+        }
+        density
     }
 
     /// Propagate the covariance across one IMU interval.
@@ -409,9 +470,11 @@ impl Eskf {
     ) {
         let dt = imu.dt;
 
-        // Written to hold exactly four 21x21 matrices live at once. The
-        // obvious expression-chained form keeps about a dozen, which measured
-        // at 35.3 KiB of stack on Cortex-M4 — see docs/design.md.
+        // Φ = I + F·dt, the same first-order discretisation the dense form
+        // used. Built in place for the reason the dense one was: the
+        // expression-chained version held about a dozen 21x21 matrices live,
+        // which measured at 35.3 KiB of stack on Cortex-M4 — see
+        // docs/design.md.
         let mut phi = transition_matrix(state, imu, noise);
         for i in 0..N_STATE {
             for j in 0..N_STATE {
@@ -420,25 +483,28 @@ impl Eskf {
             phi.data[i][i] += 1.0;
         }
 
-        let q = process_noise(state, noise);
-        let mut scratch = StateMatrix::zeros();
-        let mut qd = StateMatrix::zeros();
-
-        // Qd = 0.5·dt·(Φ Q Φᵀ + Q), the trapezoidal rule across the interval.
-        phi.matmul_into(&q, &mut scratch);
-        scratch.mul_transpose_into(&phi, &mut qd);
-        let half_dt = 0.5 * dt;
-        for i in 0..N_STATE {
-            for j in 0..N_STATE {
-                qd.data[i][j] = half_dt * (qd.data[i][j] + q.data[i][j]);
-            }
+        // Thornton, with the process noise integrated over the interval as
+        // `G (q dt) Gᵀ`.
+        //
+        // The dense form used a trapezoidal `½dt(ΦQΦᵀ + Q)`, and
+        // [`Ud::predict_trapezoidal`] reproduces that exactly — a test pins it
+        // to the last digit, which is what made this swap checkable. It is not
+        // what runs, because the refinement is worth nothing here and costs
+        // nearly double: it needs `[ΦG, G]` rather than `G`, so the
+        // Gram-Schmidt carries eighteen more columns. Measured across the
+        // change, KF-GINS reports the same 0.0330 m horizontal and the same
+        // 1.459 NIS to four figures, and the NEES campaign moves from 14.569
+        // to 14.565, which is inside its own Monte Carlo noise. The difference
+        // is second order in `dt`, and at 200 Hz that is nothing to keep.
+        let mapping = noise_mapping(state);
+        let mut density = Self::noise_density(noise);
+        for d in density.iter_mut() {
+            *d *= dt;
         }
-
-        // P = Φ P Φᵀ + Qd, reusing the same scratch buffer.
-        phi.matmul_into(&self.covariance, &mut scratch);
-        scratch.mul_transpose_into(&phi, &mut self.covariance);
-        self.covariance += &qd;
-        self.covariance.symmetrize();
+        // A degenerate transition is the only way this fails, and leaving the
+        // covariance untouched is what the dense form did when its
+        // symmetrisation had nothing to fix.
+        let _ = self.covariance.predict(&phi, &mapping, &density);
 
         self.dx = phi.matmul(&self.dx);
 
@@ -516,7 +582,8 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
     ) -> Result<F, FilterError> {
-        let hp = h.matmul(&self.covariance);
+        let dense = self.covariance.to_covariance();
+        let hp = h.matmul(&dense);
         let s = hp.mul_transpose(h) + *r;
         let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
         Ok(nis(&chol, innovation))
@@ -530,18 +597,102 @@ impl Eskf {
         gate: Option<F>,
         held: HeldStates,
     ) -> Result<bool, FilterError> {
-        if !self.covariance.is_finite() {
+        if !self.covariance.is_healthy() {
             return Err(FilterError::Diverged);
         }
-        // S = H P Hᵀ + R
-        let hp = h.matmul(&self.covariance);
+        if !held.is_empty() {
+            return self.update_holding_dense(innovation, h, r, gate, held);
+        }
+
+        // Bierman is scalar-sequential and assumes each row's noise is
+        // independent of the others', so a dense `R` is whitened first: both
+        // sides premultiplied by `L⁻¹`, which leaves rows of unit variance
+        // carrying the same information. Handing correlated rows in one at a
+        // time is not an approximation, it is wrong, and it is silent.
+        let w = Whitened::<M>::new(h, innovation, r).ok_or(FilterError::SingularInnovation)?;
+
+        // On a copy, because the gate has to decide before anything moves and
+        // the statistic it decides on falls out of the update itself. `Ud` is
+        // 1 848 bytes and `Copy`, which is what makes this cheaper than
+        // computing `S` a second time.
+        let mut trial = self.covariance;
+        // The chi-squared statistic decomposes over the rows: with each row's
+        // residual taken against the running estimate from the rows before it,
+        // `Σ residual²/α` is exactly `νᵀS⁻¹ν`. Accumulated from a zero start
+        // rather than from `self.dx`, matching what the dense form scored.
+        let mut running = StateVector::zeros();
+        let mut statistic = 0.0;
+
+        let mut gains = [StateVector::zeros(); M];
+        for (row, slot) in gains.iter_mut().enumerate() {
+            let mut hr = StateVector::zeros();
+            for j in 0..N_STATE {
+                hr[(j, 0)] = w.jacobian[(row, j)];
+            }
+            let (gain, alpha) = trial
+                .update(&hr, 1.0)
+                .ok_or(FilterError::SingularInnovation)?;
+
+            let mut residual = w.innovation[(row, 0)];
+            for j in 0..N_STATE {
+                residual -= hr[(j, 0)] * running[(j, 0)];
+            }
+            statistic += residual * residual / alpha;
+            for j in 0..N_STATE {
+                running[(j, 0)] += gain[(j, 0)] * residual;
+            }
+            *slot = gain;
+        }
+        let correction = running;
+
+        self.last_nis = statistic;
+        if let Some(threshold) = gate {
+            if statistic > threshold {
+                return Ok(false);
+            }
+        }
+
+        // The correction the measurement implies, against the error state the
+        // filter already holds. With feedback that is zero, but the dense form
+        // subtracted it and so does this.
+        let mut prior_effect = StateVector::zeros();
+        for (row, gain) in gains.iter().enumerate() {
+            let mut projected = 0.0;
+            for j in 0..N_STATE {
+                projected += w.jacobian[(row, j)] * self.dx[(j, 0)];
+            }
+            for j in 0..N_STATE {
+                prior_effect[(j, 0)] += gain[(j, 0)] * projected;
+            }
+        }
+        self.covariance = trial;
+        self.dx += &correction;
+        self.dx -= &prior_effect;
+        Ok(true)
+    }
+
+    /// The dense Joseph update, for a measurement that holds states.
+    ///
+    /// Zeroing a gain row keeps a state at its prior while `S` still accounts
+    /// for its uncertainty, and the Joseph form stays consistent for *any*
+    /// gain, optimal or not. Bierman's covariance update assumes the optimal
+    /// one, so it cannot express this — a held state would leave the factors
+    /// describing a filter that was not run. Refactoring afterwards costs an
+    /// `O(n³/3)` sweep, which a zero-velocity update can afford and a
+    /// per-sample propagation could not.
+    fn update_holding_dense<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        gate: Option<F>,
+        held: HeldStates,
+    ) -> Result<bool, FilterError> {
+        let mut covariance = self.covariance.to_covariance();
+        let hp = h.matmul(&covariance);
         let s = hp.mul_transpose(h) + *r;
         let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
 
-        // The gate reuses this factorisation rather than forming S twice.
-        // Recorded whether or not a gate is in use: it is the primary filter
-        // consistency statistic, and averaging it over a run is how an over- or
-        // under-confident covariance gets detected. See docs/testing.md.
         let statistic = nis(&chol, innovation);
         self.last_nis = statistic;
         if let Some(threshold) = gate {
@@ -550,32 +701,16 @@ impl Eskf {
             }
         }
 
-        // K = P Hᵀ S⁻¹, obtained as (S⁻¹ H P)ᵀ so the solve replaces an
-        // explicit inverse.
         let mut k = chol.solve(&hp).transpose();
-
-        // Held states keep their prior: zeroing their gain rows stops this
-        // measurement correcting them, while S above already accounted for
-        // their uncertainty. Joseph form below is valid for any gain, so the
-        // covariance stays consistent with the gain actually applied.
-        if !held.is_empty() {
-            for i in 0..N_STATE {
-                if held.contains(i) {
-                    k.data[i] = [0.0; M];
-                }
+        for i in 0..N_STATE {
+            if held.contains(i) {
+                k.data[i] = [0.0; M];
             }
         }
 
-        // dx += K (innovation − H dx)
         let residual = *innovation - h.matmul(&self.dx);
         self.dx += k.matmul(&residual);
 
-        // Joseph: P = (I − KH) P (I − KH)ᵀ + K R Kᵀ.
-        //
-        // Written with explicit scratch for the same reason as `predict`: the
-        // chained form holds seven 21x21 temporaries, which measured at 17.3 KiB
-        // of stack on Cortex-M4 against 10.6 KiB here. `K` and `K R` are only
-        // 21xM, so they stay cheap however this is written.
         let mut scratch = StateMatrix::zeros();
         k.matmul_into(h, &mut scratch);
         let mut i_kh = StateMatrix::identity();
@@ -584,10 +719,14 @@ impl Eskf {
         let mut krkt = StateMatrix::zeros();
         k.matmul(r).mul_transpose_into(&k, &mut krkt);
 
-        i_kh.matmul_into(&self.covariance, &mut scratch);
-        scratch.mul_transpose_into(&i_kh, &mut self.covariance);
-        self.covariance += &krkt;
-        self.covariance.symmetrize();
+        i_kh.matmul_into(&covariance, &mut scratch);
+        scratch.mul_transpose_into(&i_kh, &mut covariance);
+        covariance += &krkt;
+        covariance.symmetrize();
+
+        if !self.set_covariance(&covariance) {
+            return Err(FilterError::Diverged);
+        }
         Ok(true)
     }
 
@@ -617,14 +756,11 @@ impl Eskf {
         for row in 0..M {
             // Sᵢᵢ = hᵢ P hᵢᵀ + Rᵢᵢ, the diagonal only: the whole innovation
             // covariance is not needed to ask whether one row is plausible.
-            let mut variance = m.noise[(row, row)];
-            for i in 0..N_STATE {
-                let mut acc = 0.0;
-                for j in 0..N_STATE {
-                    acc += self.covariance.data[i][j] * m.jacobian[(row, j)];
-                }
-                variance += m.jacobian[(row, i)] * acc;
+            let mut hr = StateVector::zeros();
+            for j in 0..N_STATE {
+                hr[(j, 0)] = m.jacobian[(row, j)];
             }
+            let variance = m.noise[(row, row)] + self.covariance.quadratic(&hr);
             if !variance.is_finite() || variance <= 0.0 {
                 continue;
             }
@@ -676,24 +812,30 @@ impl Eskf {
     /// exactly what is unknown.
     pub fn inflate(&mut self, factor: F) {
         debug_assert!(factor >= 1.0, "inflation must not shrink the covariance");
-        self.covariance = self.covariance.scaled(factor);
+        self.covariance.inflate(factor);
     }
 
     /// Per-state one-sigma uncertainties, in state order.
+    ///
+    /// `Pᵢᵢ` from the factors, without forming `P`.
     pub fn std_deviations(&self) -> [F; N_STATE] {
-        let mut out = self.covariance.diagonal();
-        for v in out.iter_mut() {
-            *v = if *v > 0.0 { v.sqrt() } else { 0.0 };
-        }
-        out
+        core::array::from_fn(|i| {
+            let v = self.covariance.variance(i);
+            if v > 0.0 {
+                v.sqrt()
+            } else {
+                0.0
+            }
+        })
     }
 
     /// True when the covariance is finite and has no negative variance.
+    ///
+    /// The factored form keeps the second half true by construction, so this
+    /// is now a check that nothing has gone non-finite rather than a check
+    /// that the covariance is still a covariance.
     pub fn is_healthy(&self) -> bool {
-        if !self.covariance.is_finite() {
-            return false;
-        }
-        self.covariance.diagonal().iter().all(|v| *v >= 0.0)
+        self.covariance.is_healthy()
     }
 }
 
@@ -761,7 +903,7 @@ mod held_states_tests {
         assert_eq!(filter.dx, before);
         // The covariance still shrinks: the measurement was applied, its
         // information simply went nowhere.
-        assert!(filter.covariance.is_finite());
+        assert!(filter.is_healthy());
     }
 }
 
@@ -857,7 +999,7 @@ mod tests {
             assert_relative_eq!(stds[i], *s, epsilon = 1e-12);
         }
         // Off-diagonal entries start at zero.
-        assert_relative_eq!(f.covariance[(0, 5)], 0.0, epsilon = 1e-15);
+        assert_relative_eq!(f.covariance()[(0, 5)], 0.0, epsilon = 1e-15);
     }
 
     #[test]
@@ -943,15 +1085,15 @@ mod tests {
     #[test]
     fn predict_grows_uncertainty_and_keeps_symmetry() {
         let mut f = Eskf::new(&std_vector());
-        let before = f.covariance.trace();
+        let before = f.covariance().trace();
         for _ in 0..100 {
             f.predict(&test_state(), &test_imu(), &ImuNoise::default());
         }
         assert!(
-            f.covariance.trace() > before,
+            f.covariance().trace() > before,
             "propagation must add uncertainty"
         );
-        assert_relative_eq!(f.covariance.asymmetry(), 0.0, epsilon = 1e-14);
+        assert_relative_eq!(f.covariance().asymmetry(), 0.0, epsilon = 1e-14);
         assert!(f.is_healthy());
     }
 
@@ -976,7 +1118,7 @@ mod tests {
     #[test]
     fn update_reduces_uncertainty_in_the_observed_states() {
         let mut f = Eskf::new(&std_vector());
-        let before = f.covariance.diagonal();
+        let before = f.covariance().diagonal();
         let r = Mat3::identity().scaled(0.01);
         f.update(
             &Matrix::<3, 1>::from_column([0.0, 0.0, 0.0]),
@@ -984,7 +1126,7 @@ mod tests {
             &r,
         )
         .expect("update must succeed");
-        let after = f.covariance.diagonal();
+        let after = f.covariance().diagonal();
         for i in 0..3 {
             assert!(
                 after[i] < before[i],
@@ -1024,9 +1166,9 @@ mod tests {
                 .unwrap();
             }
         }
-        assert_relative_eq!(f.covariance.asymmetry(), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(f.covariance().asymmetry(), 0.0, epsilon = 1e-12);
         assert!(
-            Cholesky::new(&f.covariance).is_some(),
+            Cholesky::new(&f.covariance()).is_some(),
             "covariance lost positive definiteness after 200 steps"
         );
     }
@@ -1093,7 +1235,7 @@ mod tests {
         let probe = BG_ID;
         #[cfg(not(feature = "reduced-state"))]
         let probe = SG_ID;
-        let before = f.covariance.diagonal()[probe];
+        let before = f.covariance().diagonal()[probe];
         let r = Mat3::identity().scaled(0.01);
         f.update(
             &Matrix::<3, 1>::from_column([1.0, 0.0, 0.0]),
@@ -1103,6 +1245,6 @@ mod tests {
         .unwrap();
         // With a diagonal prior, a position-only measurement carries no
         // information about gyro scale factor.
-        assert_relative_eq!(f.covariance.diagonal()[probe], before, epsilon = 1e-12);
+        assert_relative_eq!(f.covariance().diagonal()[probe], before, epsilon = 1e-12);
     }
 }
