@@ -147,6 +147,19 @@ mod size_tests {
             3_704,
             "covariance + error state, plus the recorded NIS"
         );
+        // The factored covariance is n(n+1)/2 scalars against a dense n², which
+        // is the storage half of the case for it. 231 against 441 for the
+        // 21-state filter.
+        assert_eq!(
+            size_of::<crate::ud::Ud>(),
+            1_848,
+            "231 scalars: 210 strictly-upper, 21 diagonal"
+        );
+        assert!(
+            size_of::<crate::ud::Ud>() < size_of::<StateMatrix>(),
+            "the factored form must not be larger than what it replaces"
+        );
+
         // The smoothing recorder is three 21x21 matrices, four times the rest
         // of the engine, so it is behind `alloc` and a default build does not
         // have the field at all. A regression that puts it in unconditionally

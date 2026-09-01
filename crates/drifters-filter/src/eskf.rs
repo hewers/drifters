@@ -179,7 +179,7 @@ pub fn process_noise_density(noise: &ImuNoise) -> NoiseCovariance {
 }
 
 #[cfg(test)]
-mod tests_support {
+pub(crate) mod tests_support {
     use drifters_core::frames::{Lla, Ned};
     use drifters_core::types::{Attitude, Pva};
 

@@ -65,6 +65,7 @@ pub mod eskf;
 pub mod measurement;
 pub mod mechanization;
 pub mod state;
+pub mod ud;
 
 pub use config::{ConfigError, GinsOptions};
 pub use engine::GinsEngine;
