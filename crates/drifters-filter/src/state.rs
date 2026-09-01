@@ -28,7 +28,8 @@ use drifters_core::math::Matrix;
 ///
 /// 21 by default, or 15 with the `reduced-state` feature, which drops the six
 /// scale-factor states. Every matrix in the filter is sized from this, so the
-/// reduced configuration takes the covariance from 3 528 to 1 800 bytes.
+/// reduced configuration takes the factored covariance from 1 848 to 960 bytes
+/// and `StateMatrix` from 3 528 to 1 800.
 #[cfg(not(feature = "reduced-state"))]
 pub const N_STATE: usize = 21;
 /// See the 21-state definition.
@@ -144,7 +145,11 @@ mod size_tests {
         assert_eq!(size_of::<NoiseMatrix>(), 3_024, "21x18 f64 noise mapping");
         assert_eq!(
             size_of::<crate::eskf::Eskf>(),
-            2_024,
+            if cfg!(feature = "f32-covariance") {
+                1_104
+            } else {
+                2_024
+            },
             "factored covariance + error state, plus the recorded NIS"
         );
         // The factored covariance is n(n+1)/2 scalars against a dense n², which
@@ -152,7 +157,11 @@ mod size_tests {
         // 21-state filter.
         assert_eq!(
             size_of::<crate::ud::Ud>(),
-            1_848,
+            if cfg!(feature = "f32-covariance") {
+                924
+            } else {
+                1_848
+            },
             "231 scalars: 210 strictly-upper, 21 diagonal"
         );
         assert!(
@@ -160,20 +169,24 @@ mod size_tests {
             "the factored form must not be larger than what it replaces"
         );
 
-        // The smoothing recorder is three 21x21 matrices, four times the rest
-        // of the engine, so it is behind `alloc` and a default build does not
-        // have the field at all. A regression that puts it in unconditionally
-        // shows up here as 23 168.
+        // The smoothing recorder is three 21x21 matrices, several times the
+        // rest of the engine, so it is behind `smoothing` and a default build
+        // does not have the field at all. A regression that puts it in
+        // unconditionally shows up here as the larger number.
         //
         // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
         // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
         // largest single saving the engine has had.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            if cfg!(feature = "smoothing") {
-                21_488
-            } else {
-                3_240
+            match (
+                cfg!(feature = "smoothing"),
+                cfg!(feature = "f32-covariance")
+            ) {
+                (true, false) => 21_488,
+                (true, true) => 20_568,
+                (false, false) => 3_240,
+                (false, true) => 2_320,
             },
             "whole engine"
         );
@@ -188,6 +201,28 @@ mod size_tests {
         assert_eq!(size_of::<NoiseMatrix>(), 1_440, "15x12 f64 noise mapping");
         // Roughly half the 21-state covariance, which is what the feature buys.
         assert!(size_of::<StateMatrix>() * 2 < 3_528 + 300);
+
+        // The factored form shrinks with it: 120 scalars against 231.
+        let f32_covariance = cfg!(feature = "f32-covariance");
+        assert_eq!(
+            size_of::<crate::ud::Ud>(),
+            if f32_covariance { 480 } else { 960 },
+            "120 scalars: 105 strictly-upper, 15 diagonal"
+        );
+        assert_eq!(
+            size_of::<crate::eskf::Eskf>(),
+            if f32_covariance { 608 } else { 1_088 }
+        );
+        assert_eq!(
+            size_of::<crate::engine::GinsEngine>(),
+            match (cfg!(feature = "smoothing"), f32_covariance) {
+                (true, false) => 11_816,
+                (true, true) => 11_336,
+                (false, false) => 2_304,
+                (false, true) => 1_824,
+            },
+            "whole engine"
+        );
     }
 
     /// Nothing on the data path may carry a destructor: every type must be

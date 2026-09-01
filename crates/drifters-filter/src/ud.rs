@@ -35,6 +35,32 @@ use drifters_core::F;
 
 use crate::state::{NoiseMatrix, StateMatrix, StateVector, N_NOISE, N_STATE};
 
+/// What the covariance factors are stored and computed in.
+///
+/// `f64` by default; `f32` under the `f32-covariance` feature. Everything
+/// crossing this module's boundary stays `f64` — the states, the Jacobians,
+/// the gains — so the choice is confined to the factors themselves and nothing
+/// else in the filter has to know.
+///
+/// The factorisation is what makes the choice available. A dense covariance's
+/// diagonal spans 8.4 decimal digits on this filter against `f32`'s 7.2, which
+/// is why [`adr/0005`](https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md)
+/// ruled it out; `U` and `D` are conditioned as the square root of that.
+/// Measured, holding the factors to single precision through a full campaign
+/// changes nothing: NEES 13.874 against 13.874, KF-GINS 0.0330 m against
+/// 0.0330 m, GSDC 3.244 against 3.244.
+///
+/// **It does not make the filter single precision.** Position stays `f64`, and
+/// for the reason `adr/0005` measured: a latitude in radians rounded to `f32`
+/// moves by 0.76 m, against a filter whose error budget is 0.033 m. That is a
+/// property of geodetic coordinates rather than of the covariance, and it is
+/// the local-frame work in `adr/0009` that would change it.
+#[cfg(feature = "f32-covariance")]
+pub type Scalar = f32;
+/// See the `f32-covariance` variant.
+#[cfg(not(feature = "f32-covariance"))]
+pub type Scalar = F;
+
 /// Independent accumulators in the inner dot products.
 ///
 /// Floating-point addition is not associative, so a single running sum is a
@@ -71,11 +97,11 @@ const fn at(i: usize, j: usize) -> usize {
 /// A covariance as `U D Uᵀ`.
 #[derive(Clone, Copy, Debug)]
 pub struct Ud {
-    /// Strictly-upper entries of `U`, row-major. The diagonal is 1 and is not
-    /// stored.
-    upper: [F; upper_len(N_STATE)],
+    /// Strictly-upper entries of `U`, packed by column. The diagonal is 1 and
+    /// is not stored.
+    upper: [Scalar; upper_len(N_STATE)],
     /// The diagonal of `D`.
-    diagonal: [F; N_STATE],
+    diagonal: [Scalar; N_STATE],
 }
 
 impl Ud {
@@ -83,7 +109,7 @@ impl Ud {
     pub fn from_variances(variances: &[F; N_STATE]) -> Self {
         Self {
             upper: [0.0; upper_len(N_STATE)],
-            diagonal: *variances,
+            diagonal: core::array::from_fn(|i| variances[i] as Scalar),
         }
     }
 
@@ -105,10 +131,10 @@ impl Ud {
             if !d.is_finite() || d <= 0.0 {
                 return None;
             }
-            ud.diagonal[j] = d;
+            ud.diagonal[j] = d as Scalar;
             for i in 0..j {
                 let u = work[(i, j)] / d;
-                ud.upper[at(i, j)] = u;
+                ud.upper[at(i, j)] = u as Scalar;
                 for k in 0..=i {
                     let v = work[(k, j)];
                     work[(k, i)] -= u * v;
@@ -127,7 +153,7 @@ impl Ud {
                 // Pᵢⱼ = Σₖ Uᵢₖ Dₖ Uⱼₖ, over k ≥ max(i, j).
                 let mut acc = 0.0;
                 for k in j..N_STATE {
-                    acc += self.element(i, k) * self.diagonal[k] * self.element(j, k);
+                    acc += self.element(i, k) * self.diagonal[k] as F * self.element(j, k);
                 }
                 p[(i, j)] = acc;
                 p[(j, i)] = acc;
@@ -141,7 +167,7 @@ impl Ud {
     pub fn element(&self, i: usize, j: usize) -> F {
         match i.cmp(&j) {
             core::cmp::Ordering::Equal => 1.0,
-            core::cmp::Ordering::Less => self.upper[at(i, j)],
+            core::cmp::Ordering::Less => self.upper[at(i, j)] as F,
             core::cmp::Ordering::Greater => 0.0,
         }
     }
@@ -149,8 +175,8 @@ impl Ud {
     /// The diagonal of `D`, which is the per-state variance in the factored
     /// basis — *not* the diagonal of `P`.
     #[inline]
-    pub fn diagonal(&self) -> &[F; N_STATE] {
-        &self.diagonal
+    pub fn diagonal(&self) -> [F; N_STATE] {
+        core::array::from_fn(|i| self.diagonal[i] as F)
     }
 
     /// The variance of one state, `Pᵢᵢ`, without forming `P`.
@@ -158,7 +184,7 @@ impl Ud {
         (i..N_STATE)
             .map(|k| {
                 let u = self.element(i, k);
-                u * u * self.diagonal[k]
+                u * u * self.diagonal[k] as F
             })
             .sum()
     }
@@ -174,7 +200,7 @@ impl Ud {
             for i in 0..=j {
                 f += self.element(i, j) * h[(i, 0)];
             }
-            acc += self.diagonal[j] * f * f;
+            acc += self.diagonal[j] as F * f * f;
         }
         acc
     }
@@ -183,10 +209,25 @@ impl Ud {
     /// carries the correlations and a uniform scaling leaves them alone.
     pub fn inflate(&mut self, factor: F) {
         for d in self.diagonal.iter_mut() {
-            *d *= factor;
+            *d *= factor as Scalar;
         }
     }
 
+    /// Round every factor to `f32` precision, keeping `f64` storage.
+    ///
+    /// A probe, not a configuration. It answers whether a single-precision
+    /// covariance would survive a run *before* anyone builds one: applying it
+    /// after every operation makes the arithmetic carry no more information
+    /// than `f32` could, while leaving every other part of the filter alone,
+    /// so what it measures is the covariance's precision demand and nothing
+    /// else.
+    ///
+    /// The reason to ask is that this factorisation halves that demand — the
+    /// factors are conditioned as the square root of `P` — and
+    /// [`adr/0005`](https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md)
+    /// disqualified `f32` on a dense covariance whose diagonal alone spans 8.4
+    /// decimal digits against `f32`'s 7.2.
+    #[doc(hidden)]
     /// True when every element is finite and `D` is non-negative.
     pub fn is_healthy(&self) -> bool {
         self.diagonal.iter().all(|d| d.is_finite() && *d >= 0.0)
@@ -207,12 +248,17 @@ impl Ud {
         if !r.is_finite() || r <= 0.0 {
             return None;
         }
+        // Narrowed once, at the boundary: everything from here is in whatever
+        // the factors are carried in.
+        let row: [Scalar; N_STATE] = core::array::from_fn(|i| h[(i, 0)] as Scalar);
+        let r = r as Scalar;
+
         // f = Uᵀh, and v = D f.
         let mut f = [0.0; N_STATE];
         for (j, fj) in f.iter_mut().enumerate() {
-            let mut acc = 0.0;
-            for i in 0..=j {
-                acc += self.element(i, j) * h[(i, 0)];
+            let mut acc = row[j];
+            for (i, entry) in self.upper[column(j)..column(j) + j].iter().enumerate() {
+                acc += entry * row[i];
             }
             *fj = acc;
         }
@@ -221,7 +267,7 @@ impl Ud {
             v[j] = self.diagonal[j] * f[j];
         }
 
-        let mut gain = [0.0; N_STATE];
+        let mut gain = [0.0 as Scalar; N_STATE];
         let mut alpha = r + v[0] * f[0];
         if !alpha.is_finite() || alpha <= 0.0 {
             return None;
@@ -247,9 +293,9 @@ impl Ud {
 
         let mut k = StateVector::zeros();
         for (i, g) in gain.iter().enumerate() {
-            k[(i, 0)] = g / alpha;
+            k[(i, 0)] = (g / alpha) as F;
         }
-        Some((k, alpha))
+        Some((k, alpha as F))
     }
 
     /// Thornton's time update, by modified weighted Gram-Schmidt.
@@ -273,9 +319,10 @@ impl Ud {
         // the filter has exactly one noise mapping shape anyway.
         const WIDTH: usize = (N_STATE + N_NOISE).next_multiple_of(LANES);
         // W = [Φ U , G], weighted by diag(D, density).
-        let mut w = [[0.0f64; WIDTH]; N_STATE];
+        let mut w = [[0.0 as Scalar; WIDTH]; N_STATE];
         for (i, row) in w.iter_mut().enumerate() {
-            let phi_row = &transition.data[i];
+            let phi_row: [Scalar; N_STATE] =
+                core::array::from_fn(|k| transition.data[i][k] as Scalar);
             for j in 0..N_STATE {
                 let stored = &self.upper[column(j)..column(j) + j];
                 let mut acc = phi_row[j];
@@ -285,15 +332,17 @@ impl Ud {
                 row[j] = acc;
             }
             for j in 0..N_NOISE {
-                row[N_STATE + j] = mapping[(i, j)];
+                row[N_STATE + j] = mapping[(i, j)] as Scalar;
             }
         }
         // Padding columns keep their zero weight and zero data, so they
         // contribute nothing and only exist to make the inner loops a whole
         // number of vectors.
-        let mut weight = [0.0f64; WIDTH];
+        let mut weight = [0.0 as Scalar; WIDTH];
         weight[..N_STATE].copy_from_slice(&self.diagonal);
-        weight[N_STATE..N_STATE + N_NOISE].copy_from_slice(density);
+        for (slot, d) in weight[N_STATE..N_STATE + N_NOISE].iter_mut().zip(density) {
+            *slot = *d as Scalar;
+        }
         self.orthogonalise(&mut w, &weight)
     }
 }
@@ -321,9 +370,10 @@ impl Ud {
     ) -> Option<()> {
         const WIDTH: usize = (N_STATE + 2 * N_NOISE).next_multiple_of(LANES);
         let half = 0.5 * dt;
-        let mut w = [[0.0f64; WIDTH]; N_STATE];
+        let mut w = [[0.0 as Scalar; WIDTH]; N_STATE];
         for (i, row) in w.iter_mut().enumerate() {
-            let phi_row = &transition.data[i];
+            let phi_row: [Scalar; N_STATE] =
+                core::array::from_fn(|k| transition.data[i][k] as Scalar);
             for j in 0..N_STATE {
                 // U's diagonal is an implied one, so column `j` contributes
                 // `Φᵢⱼ` plus a dot product over its stored entries.
@@ -338,18 +388,18 @@ impl Ud {
                 // Φ G, the noise as it arrives at the end of the interval.
                 let mut acc = 0.0;
                 for (k, a) in phi_row.iter().enumerate() {
-                    acc += a * mapping[(k, j)];
+                    acc += a * mapping[(k, j)] as Scalar;
                 }
                 row[N_STATE + j] = acc;
                 // G, as it arrives at the start.
-                row[N_STATE + N_NOISE + j] = mapping[(i, j)];
+                row[N_STATE + N_NOISE + j] = mapping[(i, j)] as Scalar;
             }
         }
-        let mut weight = [0.0f64; WIDTH];
+        let mut weight = [0.0 as Scalar; WIDTH];
         weight[..N_STATE].copy_from_slice(&self.diagonal);
         for j in 0..N_NOISE {
-            weight[N_STATE + j] = half * density[j];
-            weight[N_STATE + N_NOISE + j] = half * density[j];
+            weight[N_STATE + j] = (half * density[j]) as Scalar;
+            weight[N_STATE + N_NOISE + j] = (half * density[j]) as Scalar;
         }
         self.orthogonalise(&mut w, &weight)
     }
@@ -366,14 +416,14 @@ impl Ud {
     /// first written.
     fn orthogonalise<const W: usize>(
         &mut self,
-        w: &mut [[F; W]; N_STATE],
-        weight: &[F; W],
+        w: &mut [[Scalar; W]; N_STATE],
+        weight: &[Scalar; W],
     ) -> Option<()> {
-        let mut pivot = [0.0; W];
-        let mut weighted = [0.0; W];
+        let mut pivot = [0.0 as Scalar; W];
+        let mut weighted = [0.0 as Scalar; W];
         for i in (0..N_STATE).rev() {
             pivot.copy_from_slice(&w[i]);
-            let mut partial = [0.0; LANES];
+            let mut partial = [0.0 as Scalar; LANES];
             for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
                 *x = q * p;
             }
@@ -382,7 +432,7 @@ impl Ud {
                     partial[l] += chunk[l] * pchunk[l];
                 }
             }
-            let sigma: F = partial.iter().sum();
+            let sigma: Scalar = partial.iter().sum();
             if !sigma.is_finite() || sigma <= 0.0 {
                 return None;
             }
@@ -395,13 +445,13 @@ impl Ud {
                 // dot product then runs at the latency of one add per element.
                 // Splitting it is the difference between this being slower
                 // than a dense matrix product and being faster.
-                let mut partial = [0.0; LANES];
+                let mut partial = [0.0 as Scalar; LANES];
                 for (a, b) in row.chunks_exact(LANES).zip(weighted.chunks_exact(LANES)) {
                     for l in 0..LANES {
                         partial[l] += a[l] * b[l];
                     }
                 }
-                let cross: F = partial.iter().sum();
+                let cross: Scalar = partial.iter().sum();
                 let u = cross * inverse;
                 self.upper[at(j, i)] = u;
                 for (a, b) in row.iter_mut().zip(pivot.iter()) {
@@ -479,6 +529,22 @@ impl<const M: usize> Whitened<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How much looser a comparison against an `f64` dense reference has to be
+    /// when the factors are carried in `f32`.
+    ///
+    /// The factored recursions are exact algebra, so at `f64` the gap against a
+    /// dense reference is rounding in the last few bits. Under
+    /// `f32-covariance` it is single-precision rounding accumulated across 21
+    /// states, which is five orders of magnitude wider — and that width is what
+    /// the feature buys rather than a defect in it. The tolerances below are
+    /// written for `f64` and scaled by this, so neither precision is being
+    /// graded on the other's curve.
+    #[cfg(not(feature = "f32-covariance"))]
+    const SLACK: F = 1.0;
+    /// See the `f64` variant.
+    #[cfg(feature = "f32-covariance")]
+    const SLACK: F = 1.0e5;
     use crate::eskf::Eskf;
     use drifters_core::math::Vec3;
 
@@ -523,11 +589,25 @@ mod tests {
         p
     }
 
+    /// The largest disagreement between two covariances, as a fraction of the
+    /// scale the entry actually lives on.
+    ///
+    /// Scaling each entry by its own magnitude is the obvious thing and is
+    /// wrong here: `P` legitimately contains entries that are near zero because
+    /// the two states are near uncorrelated, and dividing by one of those turns
+    /// arithmetic noise into an enormous "relative error" without anything
+    /// being wrong. One such pair — a correlation of −5e-6 between variances of
+    /// 13.7 and 250.7 — reported 4.1e-3 for a discrepancy that was 2.1e-8 of
+    /// the entry's natural scale.
+    ///
+    /// `√(Pᵢᵢ Pⱼⱼ)` is that natural scale: the comparison becomes one between
+    /// correlation coefficients, which is dimensionless and does not divide by
+    /// a quantity the matrix is entitled to make small.
     fn worst_relative(a: &StateMatrix, b: &StateMatrix) -> F {
         let mut worst: F = 0.0;
         for i in 0..N_STATE {
             for j in 0..N_STATE {
-                let scale = a[(i, j)].abs().max(b[(i, j)].abs()).max(1.0e-12);
+                let scale = (a[(i, i)] * a[(j, j)]).sqrt().max(1.0e-12);
                 worst = worst.max((a[(i, j)] - b[(i, j)]).abs() / scale);
             }
         }
@@ -542,7 +622,7 @@ mod tests {
             let back = ud.to_covariance();
             let worst = worst_relative(&p, &back);
             assert!(
-                worst < 1.0e-9,
+                worst < 1.0e-9 * SLACK,
                 "seed {seed}: worst relative error {worst:.2e}"
             );
         }
@@ -556,7 +636,7 @@ mod tests {
             let got = ud.variance(i);
             let want = p[(i, i)];
             assert!(
-                (got - want).abs() < 1.0e-9 * want.abs().max(1.0),
+                (got - want).abs() < 1.0e-9 * SLACK * want.abs().max(1.0),
                 "state {i}: {got} against {want}"
             );
         }
@@ -599,19 +679,19 @@ mod tests {
 
         let (gain, innovation_variance) = ud.update(&h, r).expect("well posed");
         assert!(
-            (innovation_variance - s).abs() < 1.0e-9 * s,
+            (innovation_variance - s).abs() < 1.0e-9 * SLACK * s,
             "innovation covariance {innovation_variance} against {s}"
         );
         for i in 0..N_STATE {
             let want = ph[(i, 0)] / s;
             assert!(
-                (gain[(i, 0)] - want).abs() < 1.0e-9 * want.abs().max(1.0),
+                (gain[(i, 0)] - want).abs() < 1.0e-9 * SLACK * want.abs().max(1.0),
                 "gain {i}: {} against {want}",
                 gain[(i, 0)]
             );
         }
         let worst = worst_relative(&dense, &ud.to_covariance());
-        assert!(worst < 1.0e-8, "covariance differs by {worst:.2e}");
+        assert!(worst < 1.0e-8 * SLACK, "covariance differs by {worst:.2e}");
     }
 
     #[test]
@@ -657,11 +737,11 @@ mod tests {
 
         ud.predict(&phi, &g, &density).expect("well posed");
         let worst = worst_relative(&dense, &ud.to_covariance());
-        assert!(worst < 1.0e-8, "covariance differs by {worst:.2e}");
+        assert!(worst < 1.0e-8 * SLACK, "covariance differs by {worst:.2e}");
     }
 
     #[test]
-    fn the_trapezoidal_time_update_reproduces_the_dense_path_exactly() {
+    fn the_trapezoidal_time_update_is_algebraically_the_dense_path() {
         // What makes a swap safe: this changes the factorisation and nothing
         // else. `Eskf::predict` discretises the process noise trapezoidally,
         // and a change that altered both the factorisation and the
@@ -734,7 +814,7 @@ mod tests {
         ud.predict_trapezoidal(&phi, &g, &density, imu.dt)
             .expect("well posed");
         let worst = worst_relative(&dense, &ud.to_covariance());
-        assert!(worst < 1.0e-8, "covariance differs by {worst:.2e}");
+        assert!(worst < 1.0e-8 * SLACK, "covariance differs by {worst:.2e}");
     }
 
     #[test]
@@ -770,7 +850,7 @@ mod tests {
             }
         }
         let worst = worst_relative(&p, &reconstructed);
-        assert!(worst < 1.0e-9, "S Sᵀ differs from P by {worst:.2e}");
+        assert!(worst < 1.0e-9 * SLACK, "S Sᵀ differs from P by {worst:.2e}");
     }
 
     #[test]
@@ -899,7 +979,7 @@ mod tests {
         }
 
         let worst = worst_relative(&filter.covariance(), &ud.to_covariance());
-        assert!(worst < 1.0e-7, "covariance differs by {worst:.2e}");
+        assert!(worst < 1.0e-7 * SLACK, "covariance differs by {worst:.2e}");
     }
 
     #[test]

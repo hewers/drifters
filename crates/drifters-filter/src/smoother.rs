@@ -89,7 +89,7 @@ use drifters_core::types::NavState;
 
 /// One recorded epoch of the forward pass.
 ///
-/// Take these with [`crate::GinsEngine::checkpoint`] rather than assembling
+/// Take these with [`crate::engine::GinsEngine::take_checkpoint`] rather than assembling
 /// them by hand; the covariances have to be the ones either side of the same
 /// update, and the transition the one spanning the same interval.
 #[derive(Clone, Copy, Debug)]

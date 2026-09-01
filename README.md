@@ -275,15 +275,22 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 - **Quaternions** for attitude (Hamilton, scalar-first). Euler angles are output
   only, never round-tripped through.
 - **Two-sample coning and sculling** compensation with midpoint earth terms.
-- **Joseph-form** covariance update, Cholesky solve rather than an explicit
-  inverse, explicit re-symmetrisation.
+- **Factored covariance** — `P` is stored as `U D Uᵀ` and updated by the Bierman
+  and Thornton recursions, so it is never formed and never assembled by
+  subtracting two nearly-equal matrices. Positive-definiteness is a property of
+  the representation rather than something to test for and repair. Joseph form
+  remains for the held-state path, where a row must not touch every state.
 - **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
   file. That is what lets the same code run inside an interrupt handler.
 - **NED navigation frame, FRD body frame** — the navigation-literature
   convention, not ROS's ENU/FLU. Conversion belongs at the boundary; reasoning
   in [docs/adr/0006](docs/adr/0006-frame-convention.md).
-- **`f64` throughout**, deliberately — `f32` latitude costs 0.76 m per ULP
-  against a 3.3 cm error budget. Reasoning in
+- **`f64` for position**, deliberately — `f32` latitude costs 0.76 m per ULP
+  against a 3.3 cm error budget. The *covariance* is a separate question, and
+  because it is stored factored the answer differs: `--features f32-covariance`
+  halves it to 924 bytes and puts its arithmetic on the Cortex-M4F's
+  single-precision FPU instead of in soft-float, with KF-GINS, GSDC and NEES
+  all unchanged. Both, and how the second was got wrong the first time, in
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
 
 ## Documentation

@@ -103,7 +103,7 @@ in [frames.md](frames.md).
                                predict, update, predict the remainder
        │
        ▼
- measurement update (Joseph form)
+ measurement update (Bierman, one row at a time)
        │
        ▼
  feed the error state back into the navigation state, zero it
@@ -130,14 +130,20 @@ the same sample sequence always produces the same output.
 
 ## Resource budget
 
-Sizes for the 21-state configuration with `f64`:
+Sizes for the 21-state configuration:
 
-| item | bytes |
-|---|---|
-| `Matrix<21, 21>` (covariance, transition) | 3 528 |
-| `Matrix<21, 18>` (noise mapping) | 3 024 |
-| `Eskf` (covariance + error state + NIS) | 3 704 |
-| `GinsEngine` total | 4 944 |
+| item | `f64` | `f32-covariance` |
+|---|---|---|
+| `Ud` (the covariance, factored) | 1 848 | **924** |
+| `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
+| `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
+| `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
+| `GinsEngine` total | 3 240 | **2 320** |
+
+Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
+in and nothing else, so the transition matrix and the noise mapping are `f64` in
+both columns. The engine was 4 944 bytes before `GpsTime` became a single `u64`
+and before the covariance was factored.
 
 Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
 table and the code cannot drift apart silently.
@@ -178,7 +184,9 @@ Three changes brought it to 16 480:
    `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
 2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
    into a caller-supplied buffer, so `predict` and the Joseph update hold four
-   and three live 21×21 matrices respectively instead of a dozen.
+   and three live 21×21 matrices respectively instead of a dozen. Both paths
+   were later replaced for the ordinary case — see the factored covariance
+   below — but Joseph remains for held states and still needs this.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
    copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
    on the hot path alone was worth 2.2 KiB.
@@ -193,10 +201,20 @@ filter to 15 states. Every matrix halves, and so does the stack:
 
 | | 21-state | 15-state |
 |---|---|---|
-| covariance | 3 528 B | **1 800 B** |
-| `Eskf` | 3 704 B | 1 928 B |
-| `GinsEngine` | 4 944 B | 3 168 B |
+| covariance (`Ud`) | 1 848 B | **960 B** |
+| `Eskf` | 2 024 B | 1 088 B |
+| `GinsEngine` | 3 240 B | 2 304 B |
 | peak stack | 16 480 B | **9 504 B** |
+
+Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
+
+The two peak-stack figures are M8's, measured under QEMU before the covariance
+was factored, and have not been re-measured here — this machine has no QEMU, and
+CI is where that number comes from. They should be read as an upper bound rather
+than as current: the peak is set by `predict`'s four live `N_STATE`-square
+temporaries, 14 112 bytes at 21 states, which dominate a covariance of 1 848
+either way. CI re-measures the peak on every run against a 20 KiB ceiling, at
+both precisions.
 
 That is the difference between needing a 32 KiB task stack and fitting in
 16 KiB, which is what makes it the most useful lever available on a small part —
@@ -221,11 +239,12 @@ unification.
 
 ### Remaining headroom
 
-The floor for this formulation is four live `N_STATE`-square matrices in
-`predict`: 14 112 bytes at 21 states, 7 200 at 15. Going below that needs a
-different algorithm rather than tidier code — sequential scalar measurement
-updates, which remove the Joseph temporaries entirely, or a UD-factorised
-filter, which halves covariance storage again and is better conditioned.
+The floor for this formulation was four live `N_STATE`-square matrices in
+`predict`: 14 112 bytes at 21 states, 7 200 at 15. Going below that needed a
+different algorithm rather than tidier code, and that is what
+[`ud`](../crates/drifters-filter/src/ud.rs) is — sequential scalar measurement
+updates and a factored covariance, which were the two candidates named here and
+turned out to be the same piece of work.
 
 ## Auxiliary sensors ("+ other")
 
@@ -303,11 +322,22 @@ at the ingest boundary rather than allowed to poison the state.
 
 ## Numerical hygiene
 
-- **Joseph-form covariance update.** Costs one extra 21×21 product over
-  `P ← (I−KH)P`, and keeps `P` symmetric and positive definite under round-off
-  across the millions of updates a long run makes.
-- **Explicit re-symmetrisation** after predict and update.
-- **Cholesky solve instead of an explicit inverse** for the Kalman gain.
+- **Factored covariance.** `P` is held as `U D Uᵀ` — 231 scalars against 441 —
+  and updated by the Bierman and Thornton recursions. Symmetry is not
+  maintained, it is unrepresentable; positive-definiteness needs no repair
+  because no step subtracts two nearly-equal matrices to produce a small one.
+  Neither recursion takes a square root. This replaced a Joseph-form update
+  and was both smaller and faster than it, which is unusual for a numerical
+  improvement and is why the timings are recorded in `ud`'s tests.
+- **Joseph form is retained** for the held-state path, where a measurement must
+  not be allowed to touch every state, and Bierman's scalar-sequential form
+  does not express that constraint.
+- **Whitening before Bierman.** The scalar-sequential update requires
+  independent rows, so a measurement with a dense `R` is premultiplied by its
+  inverse Cholesky factor first. Applying correlated rows without it is wrong,
+  not merely inexact, and there is a test that shows it.
+- **Cholesky solve instead of an explicit inverse** wherever a gain still needs
+  a matrix solve.
 - **Zero-skipping matrix multiply.** The transition matrix is extremely sparse;
   skipping zero elements is the single largest win in `predict`.
 - **`libm` for all transcendentals**, so a shipped build uses one implementation

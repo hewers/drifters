@@ -33,9 +33,17 @@ the list below is what the release *is* rather than what changed.
   velocity; zero-velocity, non-holonomic, wheel-speed, height and magnetic
   heading aiding; chi-squared gating with covariance inflation on repeated
   rejection. Features: `reduced-state` drops the scale factors for a 15-state
-  filter; `smoothing` adds the forward-pass recording a backward pass needs;
-  `std` adds error trait impls.
+  filter; `f32-covariance` carries the covariance factors in single precision;
+  `smoothing` adds the forward-pass recording a backward pass needs; `std` adds
+  error trait impls.
 
+  - `ud` — the covariance is stored factored as `U D Uᵀ` and updated by the
+    Bierman and Thornton recursions, which never form `P` and never subtract
+    two nearly-equal matrices to get it. Positive-definiteness is structural
+    rather than something to check for, it is smaller (1 848 against 3 528
+    bytes) and faster than the dense form it replaced, and it is what makes
+    `f32-covariance` safe — see
+    [`docs/adr/0005`](docs/adr/0005-scalar-type.md).
   - `range` — tightly-coupled GNSS from per-satellite pseudoranges,
     single-differenced within each constellation so no receiver-clock states
     are needed and the filter's footprint is unchanged. Keeps working below the
@@ -78,9 +86,9 @@ the list below is what the release *is* rather than what changed.
   the documentation come from tests in this repository, and the results that did
   not work are recorded alongside the ones that did. See
   [`docs/testing.md`](docs/testing.md).
-- **The API will change.** This is `0.x`: the local-frame and factored-covariance
-  work in [`docs/adr/0009`](docs/adr/0009-local-first-architecture.md) touches
-  the core types, and pre-1.0 that lands as a minor bump rather than waiting.
+- **The API will change.** This is `0.x`: the local-frame work in
+  [`docs/adr/0009`](docs/adr/0009-local-first-architecture.md) touches the core
+  types, and pre-1.0 that lands as a minor bump rather than waiting.
 
 [Unreleased]: https://github.com/hewers/drifters/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/hewers/drifters/releases/tag/v0.1.0

@@ -995,10 +995,16 @@ mod tests {
     fn initial_covariance_is_diagonal_with_the_requested_variances() {
         let f = Eskf::new(&std_vector());
         let stds = f.std_deviations();
+        // A variance narrowed to `f32` and widened back is not the same number.
+        let tolerance = if cfg!(feature = "f32-covariance") {
+            1e-6
+        } else {
+            1e-12
+        };
         for (i, s) in std_vector().iter().enumerate() {
-            assert_relative_eq!(stds[i], *s, epsilon = 1e-12);
+            assert_relative_eq!(stds[i], *s, max_relative = tolerance);
         }
-        // Off-diagonal entries start at zero.
+        // Off-diagonal entries start at zero — exactly, at either precision.
         assert_relative_eq!(f.covariance()[(0, 5)], 0.0, epsilon = 1e-15);
     }
 

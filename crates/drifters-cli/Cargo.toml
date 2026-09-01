@@ -30,3 +30,5 @@ approx = { workspace = true }
 default = []
 ## Pass through to `drifters-filter`: 15 states, no scale factors.
 reduced-state = ["drifters-filter/reduced-state"]
+## Pass through to `drifters-filter`: single-precision covariance factors.
+f32-covariance = ["drifters-filter/f32-covariance"]

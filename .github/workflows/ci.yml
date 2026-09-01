@@ -33,9 +33,14 @@ jobs:
       # deliberately and on its own. See docs/adr/0003.
       - run: cargo test --workspace --exclude drifters-interop --all-features
       - run: cargo test --workspace --no-default-features
-      # `reduced-state` removes states rather than adding capability, so it is
-      # a genuinely different filter and needs its own run.
+      # `reduced-state` and `f32-covariance` are both non-additive: one removes
+      # states, the other changes the numerics of every filter in the build.
+      # `--all-features` above enables them together, which is a real
+      # configuration but not the one most users get, so each also runs alone.
       - run: cargo test -p drifters-filter -p drifters-proto --features reduced-state
+      - run: cargo test -p drifters-filter --features f32-covariance
+      # The whole campaign at single precision, against the same expectations.
+      - run: cargo test -p drifters-cli --features f32-covariance
 
   lint:
     name: fmt + clippy
@@ -77,6 +82,11 @@ jobs:
       # The smoothing recorder is a feature because of its size, not because it
       # allocates. It has to build for a target too.
       - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features smoothing
+      # The reason `f32-covariance` exists: on `thumbv7em` the FPU is
+      # single-precision, so this is the difference between `vmla.f32` and a
+      # call into `__aeabi_dmul`. It has to build everywhere, including on the
+      # targets with no FPU at all, where it is merely smaller.
+      - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features f32-covariance
       # No `drifters-gnss` here on purpose: it is the desktop half and uses
       # `std` deliberately. See its crate docs.
 
@@ -235,6 +245,16 @@ jobs:
           # The whole point of this configuration is fitting where 21 states do
           # not. Measured at 9 504 B.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
+      - name: the single-precision covariance must also fit
+        working-directory: cortex-m-harness
+        run: |
+          set -o pipefail
+          cargo run --release --features f32-covariance | tee f32.txt
+          peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
+          echo "f32-covariance peak stack: $peak bytes"
+          # Halving the covariance cannot make the stack grow. Same ceiling as
+          # the default build, which this must come in under.
+          test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |

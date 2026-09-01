@@ -30,6 +30,20 @@ default = []
 ## NOT additive: this *removes* states, so it changes `N_STATE` and the
 ## filter's behaviour. Do not enable it via feature unification by accident.
 reduced-state = []
+## Carry the covariance factors in `f32` instead of `f64`.
+##
+## Only the factors: the states, the Jacobians and the gains stay `f64`, and so
+## does position — see [`ud::Scalar`] for why that last one is not negotiable.
+## Halves the covariance (1 848 to 924 bytes) and puts its arithmetic in single
+## precision, which on a Cortex-M4F is hardware where `f64` is emulated.
+##
+## Safe to enable because the covariance is stored factored. `P`'s diagonal
+## spans more decimal digits than `f32` carries; `U` and `D` span the square
+## root of that. Measured over the full campaign the results are unchanged.
+##
+## NOT additive: this changes the numerics of every filter in the build. Do not
+## enable it via feature unification by accident.
+f32-covariance = []
 ## Enables `std`-only conveniences inherited from `drifters-core`.
 std = ["drifters-core/std"]
 ## Record what a backward pass needs from the forward one, in

@@ -21,6 +21,10 @@ panic-semihosting = "0.6"
 default = []
 ## Build the filter in its 15-state configuration.
 reduced-state = ["drifters-filter/reduced-state"]
+## Carry the covariance factors in `f32`. The Cortex-M4F FPU is
+## single-precision only, so this is the difference between hardware
+## arithmetic and calls into the soft-float `__aeabi_d*` routines.
+f32-covariance = ["drifters-filter/f32-covariance"]
 
 [profile.release]
 opt-level = "s"

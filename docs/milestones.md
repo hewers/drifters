@@ -279,10 +279,18 @@ invisible in the source:
 ### f32
 
 Measured and rejected as a global switch: `f32` latitude costs **0.76 m per
-ULP** against a measured 0.033 m residual budget, and the covariance diagonal
-spans 8.4 decimal digits against `f32`'s 7.2. Full reasoning and the numbers are
-in [adr/0005](adr/0005-scalar-type.md). Mixed precision remains open and belongs
-in M9, after a hardware baseline exists to show what it would buy.
+ULP** against a measured 0.033 m residual budget. That part stands.
+
+The covariance was rejected in the same breath, and that part did not stand.
+The reason given — its diagonal spans 8.4 decimal digits against `f32`'s 7.2 —
+compared a span *across* elements with precision *within* one, which is a
+category error for a floating-point format. Once the covariance was stored
+factored, `--features f32-covariance` turned out to change nothing measurable:
+KF-GINS 0.0330 m, NIS 1.459, GSDC 3.244, NEES 13.874, all identical to `f64`.
+The full account, including what the real obstacle had been, is in
+[adr/0005](adr/0005-scalar-type.md#revisited-2026-08-the-covariance-was-disqualified-for-the-wrong-reason).
+
+Mixed precision for the *states* remains open and belongs in M9.
 
 ### The 15-state configuration
 
@@ -314,7 +322,11 @@ board on a desk.
 - [ ] Sustained-rate check: does a 200 Hz IMU keep up with a 1 Hz GNSS update?
 - [ ] Power per filter step
 - [ ] Mixed-precision experiment (`f32` for the IMU-error states), once there is
-      a baseline to compare against — see [adr/0005](adr/0005-scalar-type.md)
+      a baseline to compare against — see [adr/0005](adr/0005-scalar-type.md).
+      The covariance half of this is done and needs only the cycle count: on
+      `thumbv7em` the UD routines compile to `vmla.f32`/`vmul.f32`/`vdiv.f32`
+      under `f32-covariance` and to `bl __aeabi_dmul`/`__aeabi_dadd` without
+      it, which is the soft-float cost this milestone exists to measure.
 - [ ] True cross-implementation comparison against KF-GINS's C++ output
 
 **Why this is separate.** QEMU models no pipeline, cache, flash wait states or

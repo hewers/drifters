@@ -208,7 +208,7 @@ fn main() -> ! {
     // A sanity check that the numbers above describe real work: the filter must
     // still be healthy after all of it.
     let healthy = engine.covariance().is_finite()
-        && Matrix::asymmetry(engine.covariance()) < 1.0e-9
+        && engine.covariance().asymmetry() < 1.0e-9
         && engine.nav_state().position().is_valid();
     hprintln!("");
     hprintln!("filter healthy after run: {}", healthy);
