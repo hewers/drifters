@@ -183,8 +183,9 @@ the unobservable direction rather than to retune:
 - [x] NIS consistency checking, wired into every replay (Layer 7)
 - [ ] Pair the stationarity detector with a height aid so the vertical channel
       does not float alongside it
-- [ ] Monte Carlo **NEES** over synthetic trajectories — NIS needs no truth and
-      is already in; NEES needs a known state and so needs simulation
+- [x] Monte Carlo **NEES** over synthetic trajectories — NIS needs no truth and
+      was already in; NEES needs a known state and so needs simulation. In
+      [`nees`](../crates/drifters-cli/src/nees.rs), `drifters nees`.
 
 Neither the gate nor covariance inflation substitutes for this: inflation
 restores the filter's *ability to accept* measurements after a lockout, but
@@ -231,8 +232,10 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 
 - [ ] A true cross-implementation comparison against KF-GINS's own output,
       which needs their C++ build in the loop
-- [ ] Monte Carlo NEES over synthetic trajectories, where ground truth exists
-      and the *state* error can be checked rather than only the innovations
+- [x] Monte Carlo NEES over synthetic trajectories, where ground truth exists
+      and the *state* error is checked rather than only the innovations. It
+      found the overconfidence recorded below, which no amount of NIS could
+      have: NIS conflates a wrong covariance with a wrong model.
 
 ---
 
@@ -321,7 +324,7 @@ it until this milestone runs.
 
 ---
 
-## M10 — Equivariant filter (EqF) 🔨 in progress
+## M10 — Equivariant filter (EqF) ✅ done
 
 A second estimator, kept in its own crate (`drifters-eqf`) so the ESKF's
 measured firmware budget is untouched. Specification and scoping in
@@ -693,3 +696,56 @@ separate check that clock drift does not leak into the velocity estimate.
 statistically consistent one. NIS assumes zero-mean white measurement error, and
 these fixes carry a +2.87 m north / +13.30 m up *bias*, so the consistent tuning
 over-trusts it. See [gsdc.md](gsdc.md).
+
+---
+
+## M15 — The cross-covariances 📋 proposed
+
+The largest open correctness defect, and now localised. Monte Carlo NEES over
+the synthetic world, where truth is exact, 30 runs of 120 s:
+
+```
+overall    38.154   expected 15                    OVERCONFIDENT
+
+per block, expected 3
+  position       2.911   consistent
+  velocity       2.951   consistent
+  attitude       2.606   conservative
+  gyro bias      2.962   consistent
+  accel bias     2.591   conservative
+```
+
+**Every marginal is right and the joint is two and a half times too small.**
+That is not a mis-scaled covariance — a covariance uniformly too small would
+show in the blocks first. It means the *correlations between* blocks are wrong:
+the filter believes certain linear combinations of states are far better known
+than they are, `P` is correspondingly small in those directions, and an error
+lying along one reads enormous.
+
+Two things are already ruled out. It is **not discretisation** — a tenfold
+change in the IMU interval does not move it, which the test
+`the_overconfidence_is_not_a_discretisation_artefact` pins. And it is **not the
+measurement model**: the RTS smoother, which reuses the same forward
+covariances, reads 9.6–14.7 against an expected 9 where the filter reads 21–37
+on the same runs.
+
+Why it matters more than its size suggests: a filter that is wrong about its
+own uncertainty is worse than one that is merely imprecise. Everything
+downstream — gating, fusion with another sensor, a smoother, an operator
+deciding whether to trust a fix — reads that covariance and is misled by it.
+
+Where to look, in order of suspicion:
+
+- **`process_noise` has no cross terms.** The true errors are correlated across
+  blocks — a gyro bias error becomes an attitude error becomes a velocity
+  error — and the filter is left to generate all of that through `Φ` alone.
+- **The attitude/gyro-bias pair**, which is nearly unobservable as a
+  difference. Both blocks read conservative individually, which is the
+  signature of correlation being carried in the wrong place.
+- **Second-order terms the linearisation drops**, which is the ordinary reason
+  an EKF is optimistic, and would put a floor under how far this can be
+  improved.
+
+*Gate:* overall NEES inside a factor of two of 15 on the synthetic campaign,
+with the per-block figures no worse than they are now, and both estimators
+re-measured on KF-GINS and GSDC to confirm accuracy did not pay for it.
