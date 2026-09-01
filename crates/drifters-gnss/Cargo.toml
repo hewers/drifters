@@ -8,20 +8,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
-categories = ["no-std", "science", "algorithms"]
+categories = ["science", "algorithms"]
 keywords = ["gnss", "gps", "rinex", "carrier-phase", "navigation"]
 
 [dependencies]
-drifters-core = { workspace = true }
-
-[features]
-default = ["std"]
-## Filesystem access, for the RINEX reader. Everything else needs only `alloc`.
-std = ["alloc", "drifters-core/std"]
-## Heap allocation. The observable solvers work on a variable number of
-## satellites, so they allocate; the fixed-size measurement models that run
-## on-target are in `drifters-filter` instead.
-alloc = []
+drifters-core = { workspace = true, features = ["std"] }
 
 [lints.rust]
 missing_docs = "warn"

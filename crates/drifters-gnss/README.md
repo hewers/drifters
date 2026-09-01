@@ -15,10 +15,15 @@ afterwards.
 - [`differential`] — corrections from a station of known position.
 - [`robust`] — the iteratively-reweighted step the solvers share.
 
-`no_std` with `alloc`; the RINEX reader needs `std` for file access. The
-fixed-size measurement models that run on a microcontroller live in
-`drifters-filter` instead — this crate is the desktop half, where the number of
-satellites is not known at compile time.
+**This crate is the desktop half, and uses `std` deliberately.** The number of
+satellites in view is not known at compile time, a RINEX file has to be read
+from somewhere, and a batch fit spans a whole trace — none of which belongs on
+a microcontroller.
+
+The runtime half is `drifters-filter`, which is `no_std` and touches no heap at
+all: `drifters_filter::range` takes the same pseudoranges into a filter update
+with fixed-size arrays. Keeping the two apart is what lets the embedded side
+stay honest.
 
 Every figure in these modules' documentation was measured on the Google
 Smartphone Decimeter Challenge traces against survey-grade truth. See

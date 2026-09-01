@@ -74,9 +74,28 @@ jobs:
       - run: cargo build -p drifters-filter --target ${{ matrix.target }}
       - run: cargo build -p drifters-proto --target ${{ matrix.target }}
       - run: cargo build -p drifters-eqf --target ${{ matrix.target }}
-      # `drifters-gnss` defaults to `std` for its RINEX reader, so the bare-metal
-      # configuration has to be named. Everything else in it needs only `alloc`.
-      - run: cargo build -p drifters-gnss --target ${{ matrix.target }} --no-default-features --features alloc
+      # The smoothing recorder is a feature because of its size, not because it
+      # allocates. It has to build for a target too.
+      - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features smoothing
+      # No `drifters-gnss` here on purpose: it is the desktop half and uses
+      # `std` deliberately. See its crate docs.
+
+      # The runtime crates touch no heap. `alloc` is a sysroot crate, so using
+      # `Vec` or `Box` from a `no_std` crate requires naming it — which makes
+      # its absence a checkable invariant rather than an aspiration. The
+      # fixed-capacity `heapless` types `drifters-proto` uses live on the
+      # stack and need no allocator.
+      - name: no crate in the runtime stack requires an allocator
+        run: |
+          set -euo pipefail
+          found=0
+          for c in core filter eqf proto; do
+            if grep -rn "extern crate alloc" "crates/drifters-$c/src"; then
+              echo "::error::drifters-$c requires an allocator"
+              found=1
+            fi
+          done
+          test "$found" -eq 0
 
   # Catches an accidental breaking change to a published API. It compares
   # against the last release tag rather than against crates.io, so it works on

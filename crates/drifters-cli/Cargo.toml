@@ -19,9 +19,9 @@ path = "src/main.rs"
 
 [dependencies]
 drifters-core = { workspace = true, features = ["std"] }
-drifters-filter = { workspace = true, features = ["std"] }
+drifters-filter = { workspace = true, features = ["std", "smoothing"] }
 drifters-eqf = { workspace = true, features = ["std"] }
-drifters-gnss = { workspace = true, features = ["std"] }
+drifters-gnss = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }

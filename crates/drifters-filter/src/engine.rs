@@ -18,7 +18,7 @@ use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
 use crate::state::{BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, StateVector, V_ID};
-#[cfg(feature = "alloc")]
+#[cfg(feature = "smoothing")]
 use crate::state::StateMatrix;
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SA_ID, SG_ID};
@@ -60,12 +60,12 @@ pub struct GinsEngine {
     /// smoothing pays for it. Not boxed, because [`GinsEngine`] is `Copy` and
     /// a feature that silently removed a trait impl would be worse than the
     /// bytes.
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "smoothing")]
     recorder: Option<Recorder>,
 }
 
 /// What a backward pass needs, accumulated during the forward one.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "smoothing")]
 #[derive(Clone, Copy, Debug)]
 struct Recorder {
     /// Transition accumulated since the last checkpoint.
@@ -82,7 +82,7 @@ struct Recorder {
     pending: Option<crate::smoother::Checkpoint>,
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "smoothing")]
 impl Recorder {
     fn new() -> Self {
         Self {
@@ -117,7 +117,7 @@ impl GinsEngine {
             epoch_tolerance: 1.0e-4,
             consecutive_rejections: 0,
             inflations: 0,
-            #[cfg(feature = "alloc")]
+            #[cfg(feature = "smoothing")]
             recorder: None,
             options,
         })
@@ -239,9 +239,9 @@ impl GinsEngine {
     fn propagate(&mut self, imu: &ImuSample) {
         let previous = self.state.pva;
         self.state.pva = mechanize(&previous, &self.previous_imu, imu);
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "smoothing")]
         let accumulate = self.recorder.as_mut().map(|r| &mut r.transition);
-        #[cfg(not(feature = "alloc"))]
+        #[cfg(not(feature = "smoothing"))]
         let accumulate = None;
         self.filter
             .predict_recording(&previous, imu, &self.options.imu_noise, accumulate);
@@ -253,7 +253,7 @@ impl GinsEngine {
     /// Off by default, and it costs both ways: a 21×21 matrix product per IMU
     /// sample, and about 18 KiB of state while it is on. An on-target filter
     /// that will never smooth should pay neither.
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "smoothing")]
     pub fn record(&mut self, on: bool) {
         self.recorder = on.then(Recorder::new);
     }
@@ -268,7 +268,7 @@ impl GinsEngine {
     /// recursion believes has not happened yet. Resetting the accumulator here
     /// puts that propagation into the next span, where it belongs.
     fn seal_checkpoint(&mut self) {
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "smoothing")]
         {
             let covariance = self.filter.covariance;
             let state = self.state;
@@ -298,7 +298,7 @@ impl GinsEngine {
     /// since the last call, or when every update since was rejected by its
     /// gate — a rejected measurement is not an epoch, and recording one would
     /// tell the smoother something happened that did not.
-    #[cfg(feature = "alloc")]
+    #[cfg(feature = "smoothing")]
     pub fn take_checkpoint(&mut self) -> Option<crate::smoother::Checkpoint> {
         self.recorder.as_mut()?.pending.take()
     }
@@ -525,7 +525,7 @@ impl GinsEngine {
         // smoother needs the total the epoch applied. Summing the error-state
         // vectors is first-order correct, which is the accuracy the error
         // state is defined to anyway.
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "smoothing")]
         if let Some(r) = self.recorder.as_mut() {
             r.epoch_correction += &dx;
             r.updated = true;
@@ -542,7 +542,7 @@ impl GinsEngine {
     /// first update, and the recursion would diverge — measured, before this
     /// existed, as 22 m where the filter alone gave 2.8.
     fn note_prior(&mut self) {
-        #[cfg(feature = "alloc")]
+        #[cfg(feature = "smoothing")]
         if let Some(r) = self.recorder.as_mut() {
             if r.prior_pending {
                 r.prior = self.filter.covariance;

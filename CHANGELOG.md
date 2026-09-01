@@ -33,23 +33,24 @@ the list below is what the release *is* rather than what changed.
   velocity; zero-velocity, non-holonomic, wheel-speed, height and magnetic
   heading aiding; chi-squared gating with covariance inflation on repeated
   rejection. Features: `reduced-state` drops the scale factors for a 15-state
-  filter, `alloc` adds fixed-interval RTS smoothing, `std` adds error trait
-  impls.
+  filter; `smoothing` adds the forward-pass recording a backward pass needs;
+  `std` adds error trait impls.
 
   - `range` — tightly-coupled GNSS from per-satellite pseudoranges,
     single-differenced within each constellation so no receiver-clock states
     are needed and the filter's footprint is unchanged. Keeps working below the
     four satellites a position solution needs.
-  - `smoother` — Rauch–Tung–Striebel smoothing. The backward pass writes into a
-    caller-provided slice and allocates nothing, so a bounded window is a
-    fixed-lag smoother; only recording the forward pass needs `alloc`.
+  - `smoother` — Rauch–Tung–Striebel smoothing, always available. The backward
+    pass writes into a caller-provided slice, so a bounded window is a
+    fixed-lag smoother that runs on the target. The `smoothing` feature gates
+    only the engine's recorder, and what it costs is space rather than a heap.
 
 - **`drifters-gnss`** — what to do with raw observables before a filter sees
   them, and with a whole trace afterwards: robust weighted least-squares
   positioning from pseudoranges, time-differenced carrier phase with its own
   cycle-slip detection, RINEX 2.11 ingest, reference-station differential
   corrections, and a banded least-squares fit of absolute positions against
-  relative ones. `no_std` with `alloc`; `std` gates only file access.
+  relative ones. The desktop half: it uses `std` and allocates, deliberately.
 
 - **`drifters-eqf`** — an equivariant filter after Fornasier et al., with the
   `SE₂(3)`-based symmetry, self-calibrating lever arm and magnetometer, and a
@@ -68,6 +69,10 @@ the list below is what the release *is* rather than what changed.
 ### Notes on this release
 
 - **No `unsafe`.** Every crate is `#![forbid(unsafe_code)]`.
+- **No heap on the target.** `drifters-core`, `-filter`, `-eqf` and `-proto`
+  are `no_std` and require no allocator — CI fails if one of them names
+  `extern crate alloc`. Everything that needs a heap is in `drifters-gnss` and
+  the tooling, on the other side of a deliberate line.
 - **One dependency** in the shipped stack: `libm`, for the `no_std` float math.
 - **Measured, not asserted.** The accuracy, footprint and consistency figures in
   the documentation come from tests in this repository, and the results that did

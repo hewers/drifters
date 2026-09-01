@@ -157,7 +157,7 @@ mod size_tests {
         // two navigation states.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
-            if cfg!(feature = "alloc") { 23_168 } else { 4_920 },
+            if cfg!(feature = "smoothing") { 23_168 } else { 4_920 },
             "whole engine"
         );
     }

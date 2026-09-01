@@ -76,6 +76,12 @@
 //! so where the storage lives is the caller's decision: a `Vec` on a desktop,
 //! a fixed array on a target. A bounded window is a fixed-lag smoother and
 //! runs on hardware; the same function does both.
+//!
+//! Which is why this module is always compiled, with no feature gating it.
+//! Nothing in this crate touches a heap. The `smoothing` feature controls only
+//! whether [`crate::GinsEngine`] carries the recorder that produces
+//! [`Checkpoint`]s, and what that costs is space — three 21×21 matrices, four
+//! times the rest of the engine — not allocation.
 
 use crate::state::{StateMatrix, StateVector};
 use drifters_core::math::Cholesky;

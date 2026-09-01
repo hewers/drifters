@@ -536,10 +536,28 @@ Each step is gated on a measurement rather than on the previous one compiling.
       *Gate:* NEES at both precisions, side by side. This is where
       [adr/0005](adr/0005-scalar-type.md)'s question gets a new answer, or its
       old one confirmed on new premises.
-- [ ] **Crate restructure**: `no_std` by default, `std`/`alloc` additive, and
-      the measurement models moved below the boundary so the desktop tooling
-      exercises the same code the target runs.
-      *Gate:* NEES and replay run against a `no_std` build of the filter.
+- [x] **Crate restructure**, and the boundary turned out to be sharper than
+      this item assumed. The plan said `std`/`alloc` additive; the runtime
+      crates need **neither**. `drifters-core`, `-filter`, `-eqf` and `-proto`
+      are `no_std` and touch no heap at all — `drifters-proto`'s `Vec` and
+      `String` are `heapless`, fixed-capacity and on the stack — and CI now
+      fails if any of them names `extern crate alloc`.
+
+      So there is no `alloc` feature anywhere in the runtime stack. What used
+      to be one on `drifters-filter` gated the smoothing recorder, and it was
+      misnamed: nothing allocated, and the cost was **space** — three 21×21
+      matrices, taking the engine from 4 920 bytes to 23 168. It is now
+      `smoothing`, and [`smoother`] itself is unconditional, because writing
+      into a caller-provided slice needs no heap and a bounded window is a
+      fixed-lag smoother that runs on the target.
+
+      Everything that does need `std` — RINEX ingest, the batch fit, the
+      observable solvers whose satellite count is not known at compile time —
+      is `drifters-gnss`, which uses it deliberately and says so.
+      *Gate:* met. The four runtime crates build for `thumbv6m-none-eabi` and
+      `riscv32imac-unknown-none-elf` with no allocator present.
+
+      [`smoother`]: ../crates/drifters-filter/src/smoother.rs
 - [x] **Tight coupling** — per-satellite pseudoranges, single-differenced within
       each constellation so no clock states are needed and the footprint is
       unchanged. In [`range`](../crates/drifters-filter/src/range.rs), `no_std`
@@ -772,9 +790,9 @@ churn.
       than against crates.io, so it works on a branch and survives a yank.
       Before the first tag it has no baseline, which it reports and passes —
       a green check that checked nothing would be worse than no check. The
-      bare-metal job also grew a `drifters-gnss` step, which needs its
-      `--no-default-features --features alloc` configuration named because the
-      crate defaults to `std` for the RINEX reader
+      bare-metal job also grew a `drifters-filter --features smoothing` step,
+      and a check that no crate in the runtime stack names `extern crate
+      alloc` — see the crate restructure in [M14](#m14--local-first-architecture--proposed)
 - [ ] Publish, in the order [releasing.md](releasing.md) gives
 
 Deliberately **not** blocking on M14. Its steps are measurement-gated and

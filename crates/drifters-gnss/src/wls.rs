@@ -19,14 +19,9 @@
 //! A clock state per constellation is required, not optional: solving one
 //! common clock leaves 16.8 m of median residual.
 
-// `std` makes the inherent float methods visible and they win over the trait's,
-// so this looks unused there. See drifters_core::math::real.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
-use drifters_core::math::Real;
 use crate::robust::{self, Clocks, Row, elevation_sigma, NX};
 use drifters_core::frames::Ecef;
 use drifters_core::math::{Cholesky, Matrix};
-use alloc::vec::Vec;
 
 /// Speed of light, m/s.
 const C: f64 = 299_792_458.0;

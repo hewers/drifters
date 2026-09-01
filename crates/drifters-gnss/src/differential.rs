@@ -61,13 +61,8 @@
 //! is worth it is a per-constellation question, so corrections are built per
 //! constellation and can be enabled per constellation.
 
-// `std` makes the inherent float methods visible and they win over the trait's,
-// so this looks unused there. See drifters_core::math::real.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
-use drifters_core::math::Real;
 use crate::rinex::Base;
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use std::collections::BTreeMap;
 
 /// Speed of light, m/s.
 const C: f64 = 299_792_458.0;
@@ -296,7 +291,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use super::*;
     use crate::rinex::{BaseEpoch, BaseRange};
 
