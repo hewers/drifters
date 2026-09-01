@@ -744,3 +744,32 @@ the cheapest way to not repeat this is to keep the instrument that caught it.
 **What it cost.** The claim was in five documents and had been used to argue for
 UD factorisation. That argument now stands on conditioning and guaranteed
 positive-definiteness alone; see [adr/0009](adr/0009-local-first-architecture.md).
+
+---
+
+## M16 — Publishing 🔨 in progress
+
+The library code is out of the harness. `drifters-gnss` holds what used to be
+six modules of `drifters-cli`: robust pseudorange positioning, time-differenced
+carrier phase, RINEX ingest, reference-station corrections, the banded
+trajectory fit, and the reweighted step they share. It is `no_std` with
+`alloc`, `std` gating only the RINEX reader's file access, and it packages to
+twelve files.
+
+That was the blocking item, because crate names and boundaries are the one
+decision a `0.x` release cannot walk back. Everything else about the API can
+churn.
+
+- [x] Extract `drifters-gnss` — three thousand lines nobody could depend on,
+      in a `publish = false` binary crate
+- [x] Unblock `drifters-eqf`, held back on a condition that expired when M10
+      landed
+- [ ] Confirm `drifters-gnss` is free on crates.io. The other names were
+      checked; the API refuses requests from here, so this one is by hand
+- [ ] `CHANGELOG.md`
+- [ ] `cargo-semver-checks` in CI
+- [ ] Publish, in the order [releasing.md](releasing.md) gives
+
+Deliberately **not** blocking on M14. Its steps are measurement-gated and
+open-ended, and `0.x` exists precisely so a release does not have to wait for
+them.

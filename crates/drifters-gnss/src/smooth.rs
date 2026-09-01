@@ -30,7 +30,13 @@
 //! a desktop tool over the same measurements the on-target filter uses, not a
 //! second estimator with its own models.
 
+// `std` makes the inherent float methods visible and they win over the trait's,
+// so this looks unused there. See drifters_core::math::real.
+#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+use drifters_core::math::Real;
 use drifters_core::math::Vec3;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// How hard to work at rejecting measurements that do not fit.
 ///
@@ -232,6 +238,7 @@ pub fn smooth(
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use super::*;
 
     fn anchors(positions: &[Vec3], sigma: f64) -> Vec<Anchor> {

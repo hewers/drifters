@@ -14,7 +14,12 @@
 //! were written separately the first thing that went wrong was that they did
 //! not.
 
+// `std` makes the inherent float methods visible and they win over the trait's,
+// so this looks unused there. See drifters_core::math::real.
+#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+use drifters_core::math::Real;
 use drifters_core::math::{Cholesky, Matrix};
+use alloc::vec::Vec;
 
 /// Position plus one clock per supported constellation.
 pub const NX: usize = 3 + 6;

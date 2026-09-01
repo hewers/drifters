@@ -20,9 +20,14 @@
 //! about two thirds of what the phone saw. That is a property of the archive
 //! rather than of this code; NOAA CORS publishes 2.11 only.
 
+#[cfg(feature = "std")]
 use std::fs::File;
+#[cfg(feature = "std")]
 use std::io::{BufRead, BufReader};
+#[cfg(feature = "std")]
 use std::path::Path;
+use alloc::vec::Vec;
+use alloc::string::{String, ToString};
 
 /// Which system a satellite belongs to, in the GSDC files' numbering, so that
 /// a base observation can be matched to a phone observation without a second
@@ -113,6 +118,7 @@ pub struct Base {
 }
 
 /// Why a file could not be read as RINEX 2 observations.
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub enum RinexError {
     /// The file could not be opened or read.
@@ -121,6 +127,7 @@ pub enum RinexError {
     Header(&'static str),
 }
 
+#[cfg(feature = "std")]
 impl std::fmt::Display for RinexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -130,14 +137,17 @@ impl std::fmt::Display for RinexError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for RinexError {}
 
+#[cfg(feature = "std")]
 impl From<std::io::Error> for RinexError {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
     }
 }
 
+#[cfg(feature = "std")]
 /// A fixed-width slice of a line, trimmed, or `""` if the line stops short.
 ///
 /// Short lines are normal in RINEX: trailing blank fields are simply not
@@ -156,6 +166,7 @@ fn at(line: &str, start: usize, len: usize) -> &str {
     }
 }
 
+#[cfg(feature = "std")]
 /// Seconds of GPS week from a `yy mm dd hh mm ss` epoch line.
 ///
 /// RINEX 2 writes a two-digit year, which is unambiguous for this archive:
@@ -184,6 +195,7 @@ fn tow_from(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: f64) -> f64 {
 /// rather than as a fallback chain: `["C1", "C5"]` yields up to two entries
 /// for a satellite, one per band, because they are two measurements and not
 /// two chances at one.
+#[cfg(feature = "std")]
 pub fn read_base(path: &Path, wanted: &[&str]) -> Result<Base, RinexError> {
     let mut lines = BufReader::new(File::open(path)?).lines();
 
@@ -341,8 +353,10 @@ pub fn read_base(path: &Path, wanted: &[&str]) -> Result<Base, RinexError> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
+    use alloc::format;
+    use alloc::vec;
     use super::*;
     use std::io::Write;
 

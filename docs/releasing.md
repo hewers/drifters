@@ -8,23 +8,31 @@ registry, so a crate cannot be published before the crates it depends on.
 ```text
 1. drifters-core        no internal dependencies
 2. drifters-filter      depends on core
-3. drifters-proto       depends on core + filter
-4. drifters-interop     depends on core
+3. drifters-gnss        depends on core
+4. drifters-eqf         depends on core
+5. drifters-proto       depends on core + filter
+6. drifters-interop     depends on core
 ```
 
-`drifters-eqf`, `drifters-cli` and `xtask` are `publish = false`:
+`drifters-cli` and `xtask` are `publish = false`:
 
-- **drifters-eqf** — contains the Lie group machinery and no filter yet.
-  Publishing a crate named "equivariant filter" with no filter in it would
-  misrepresent it. Flip when M10 lands.
 - **drifters-cli** — a replay and validation tool, not a library. Its binary is
-  called `drifters`, which is unrelated to the (taken) crate name.
+  called `drifters`, which is unrelated to the (taken) crate name. It holds no
+  library code of its own any more: the observable processing that used to live
+  in it is `drifters-gnss`, because a `publish = false` binary crate is no place
+  for three thousand lines nobody can depend on.
 - **xtask** — repository automation.
+
+**`drifters-gnss`'s name is not yet confirmed free.** The others were checked
+when this file was written; crates.io's API refuses requests from the
+development environment here, so this one needs checking by hand before the
+first publish.
 
 ## Names
 
 Checked against crates.io: `drifters-core`, `drifters-filter`, `drifters-proto`,
-`drifters-interop` and `drifters-eqf` are all free.
+`drifters-interop` and `drifters-eqf` are all free. `drifters-gnss` is **not yet
+checked** — see above.
 
 The bare name **`drifters` is taken** by an unrelated config-synchronisation
 tool, so there is no umbrella facade crate. Nothing depends on having one.

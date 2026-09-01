@@ -7,19 +7,19 @@
 //! Exposed as a library so the regression test can drive a replay directly
 //! rather than shelling out to the binary and parsing its output.
 
-pub mod differential;
+/// GNSS observable processing, re-exported so the harness and its documentation
+/// keep one name for it. The implementations moved to their own crate: they are
+/// a library, not a replay tool, and a `publish = false` binary crate is no
+/// place for one.
+pub use drifters_gnss::{differential, rinex, robust, smooth, tdcp, wls};
+
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
 pub mod nees;
 pub mod plot;
-pub mod rinex;
-pub mod robust;
-pub mod smooth;
 pub mod stats;
-pub mod tdcp;
 pub mod truth;
-pub mod wls;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};

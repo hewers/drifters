@@ -427,6 +427,7 @@ dependencies = [
  "drifters-core",
  "drifters-eqf",
  "drifters-filter",
+ "drifters-gnss",
 ]
 
 [[package]]
@@ -451,6 +452,13 @@ name = "drifters-filter"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "drifters-core",
+]
+
+[[package]]
+name = "drifters-gnss"
+version = "0.1.0"
+dependencies = [
  "drifters-core",
 ]
 

@@ -309,7 +309,7 @@ Reporting the first alone throws the second away.
 Fitting both at once is a least-squares problem whose normal equations are
 tridiagonal — epoch `i` couples only to `i ± 1` — so with diagonal weights it
 is three scalar solves of length `n`, each strictly diagonally dominant, in
-`O(n)`. [`smooth.rs`](../crates/drifters-cli/src/smooth.rs) has it. The effect
+`O(n)`. [`smooth.rs`](../crates/drifters-gnss/src/smooth.rs) has it. The effect
 is to average the pseudorange error over as many epochs as the deltas hold
 together, which here is the whole trace.
 
@@ -463,8 +463,8 @@ three-dimensional map to predict which returns are non-line-of-sight.
 
 The sub-metre entries in the Google challenge used a reference station, which
 is the one thing the competition files cannot supply. Building that is
-[`rinex.rs`](../crates/drifters-cli/src/rinex.rs) and
-[`differential.rs`](../crates/drifters-cli/src/differential.rs): a RINEX 2.11
+[`rinex.rs`](../crates/drifters-gnss/src/rinex.rs) and
+[`differential.rs`](../crates/drifters-gnss/src/differential.rs): a RINEX 2.11
 reader, satellite matching by constellation, id and band, and corrections
 built from a CORS station 11 km away.
 

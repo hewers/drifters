@@ -1,0 +1,32 @@
+[package]
+name = "drifters-gnss"
+description = "GNSS observable processing for aided inertial navigation: robust pseudorange positioning, time-differenced carrier phase, RINEX ingest, reference-station corrections and batch trajectory fitting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+categories = ["no-std", "science", "algorithms"]
+keywords = ["gnss", "gps", "rinex", "carrier-phase", "navigation"]
+
+[dependencies]
+drifters-core = { workspace = true }
+
+[features]
+default = ["std"]
+## Filesystem access, for the RINEX reader. Everything else needs only `alloc`.
+std = ["alloc", "drifters-core/std"]
+## Heap allocation. The observable solvers work on a variable number of
+## satellites, so they allocate; the fixed-size measurement models that run
+## on-target are in `drifters-filter` instead.
+alloc = []
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

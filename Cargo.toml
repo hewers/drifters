@@ -4,6 +4,7 @@ members = [
     "crates/drifters-core",
     "crates/drifters-filter",
     "crates/drifters-eqf",
+    "crates/drifters-gnss",
     "crates/drifters-proto",
     "crates/drifters-interop",
     "crates/drifters-cli",
@@ -21,6 +22,7 @@ authors = ["drifters contributors"]
 [workspace.dependencies]
 drifters-core = { version = "0.1.0", path = "crates/drifters-core", default-features = false }
 drifters-eqf = { version = "0.1.0", path = "crates/drifters-eqf", default-features = false }
+drifters-gnss = { version = "0.1.0", path = "crates/drifters-gnss", default-features = false }
 drifters-filter = { version = "0.1.0", path = "crates/drifters-filter", default-features = false }
 drifters-proto = { version = "0.1.0", path = "crates/drifters-proto", default-features = false }
 
