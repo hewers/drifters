@@ -177,6 +177,24 @@ pub struct NeesReport {
     pub overall: Running,
     /// Per-block NEES, three states each.
     pub blocks: [Running; 7],
+    /// NEES over each *pair* of blocks jointly, six states each, expected 6.
+    ///
+    /// The diagnostic the per-block figures cannot give. A pair reading far
+    /// above six while both its blocks read three is a correlation between
+    /// them that the filter has wrong — the marginals stay right because the
+    /// error is in the off-diagonal, and only a joint quadratic form sees it.
+    /// Indexed by `(i, j)` with `i < j` over the first five blocks.
+    pub pairs: [[Running; 5]; 5],
+    /// The error vector at each run's last scored epoch, and the covariance
+    /// the filter held there.
+    ///
+    /// A NEES says the covariance is wrong; these say *what* it should have
+    /// been. The sample covariance across runs is the truth the filter is
+    /// trying to predict, and comparing the two term by term points at the
+    /// term rather than at the symptom.
+    pub final_errors: Vec<[f64; 15]>,
+    /// See [`Self::final_errors`]. One per run, matching it by index.
+    pub final_covariance: Vec<[[f64; 15]; 15]>,
     /// Runs abandoned because the covariance stopped being invertible.
     pub singular: usize,
 }
@@ -305,7 +323,10 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
         runs,
         overall: Running::new(),
         blocks: core::array::from_fn(|_| Running::new()),
-        singular: 0,
+        pairs: core::array::from_fn(|_| core::array::from_fn(|_| Running::new())),
+        final_errors: Vec::new(),
+            final_covariance: Vec::new(),
+            singular: 0,
     };
 
     for run in 0..runs {
@@ -499,22 +520,17 @@ mod tests {
             // wide enough for an ordinarily imperfect filter. That case is
             // caught in `smoother.rs` instead, by requiring the covariance to
             // actually shrink.
-            assert!(
-                (4.5..18.0).contains(&r.smoothed_nees),
-                "seed {seed}: smoothed NEES {:.2} is not near nine",
-                r.smoothed_nees
-            );
-            // Worth its own assertion because it is the opposite of what a
-            // reader expects: the *filter* is overconfident on this world,
-            // reading two to four times nine, and the backward pass lands far
-            // closer to consistent than the pass it came from.
-            assert!(
-                (r.smoothed_nees - 9.0).abs() < (r.filtered_nees - 9.0).abs(),
-                "seed {seed}: smoothing should not make consistency worse — \
-                 filtered {:.2}, smoothed {:.2}",
-                r.filtered_nees,
-                r.smoothed_nees
-            );
+            //
+            // Both passes sit near nine. An earlier version asserted that the
+            // smoother was *more* consistent than the filter, which was true
+            // only because this harness had the attitude and bias error signs
+            // backwards and so scored the filter at two to four times nine.
+            for (what, nees) in [("filtered", r.filtered_nees), ("smoothed", r.smoothed_nees)] {
+                assert!(
+                    (4.5..18.0).contains(&nees),
+                    "seed {seed}: {what} NEES {nees:.2} is not near nine"
+                );
+            }
         }
     }
     use super::*;
@@ -625,8 +641,11 @@ mod tests {
     /// quadrature. With the earlier first-order stepper the same sweep ran 23.9,
     /// 26.4, 47.5, 287 — the harness's own discretisation error, fixed in
     /// magnitude and therefore dominating as the injected noise fell.
+    /// The EqF's 14 %, not the ESKF's — which turned out not to exist; see
+    /// M15 in the milestones. This harness scores the EqF, whose error vector
+    /// uses one sign convention throughout, so it was never affected.
     #[test]
-    fn the_overconfidence_is_not_a_discretisation_artefact() {
+    fn the_eqf_overconfidence_is_not_a_discretisation_artefact() {
         let coarse = run_nees_at(8, 60.0, 4242, 0.02).overall.mean();
         let fine = run_nees_at(8, 60.0, 4242, 0.002).overall.mean();
         assert!(
@@ -857,7 +876,7 @@ pub mod eskf {
             let tow = state.time.tow();
             let d = state.position().ned_from(truth_at(tow));
             let dv = state.velocity().to_vec3() - velocity.to_vec3();
-            let phi = Quat::from_dcm(&state.pva.attitude.dcm.matmul(&r_nb.transpose()))
+            let phi = Quat::from_dcm(&r_nb.matmul(&state.pva.attitude.dcm.transpose()))
                 .to_rotation_vector();
             let mut e = Matrix::<9, 1>::zeros();
             for i in 0..3 {
@@ -933,6 +952,9 @@ pub mod eskf {
             runs,
             overall: Running::new(),
             blocks: core::array::from_fn(|_| Running::new()),
+            pairs: core::array::from_fn(|_| core::array::from_fn(|_| Running::new())),
+            final_errors: Vec::new(),
+            final_covariance: Vec::new(),
             singular: 0,
         };
 
@@ -1032,10 +1054,22 @@ pub mod eskf {
                 let est = nav.position();
                 let d = est.ned_from(truth_pos);
                 let dv = nav.velocity().to_vec3() - velocity.to_vec3();
-                let phi = Quat::from_dcm(&nav.pva.attitude.dcm.matmul(&r_nb.transpose()))
+                // `q_true = exp(φ) ⊗ q_est`, so φ rotates the *estimate to the
+                // truth* — see the convention block in `measurement.rs`. The
+                // other blocks are estimate minus truth, and taking this one
+                // the other way round flips every velocity/attitude cross
+                // term while leaving the marginals untouched: overall NEES
+                // read 38 against an expected 15 with every block consistent,
+                // which is what sent this looking for a defect in the filter.
+                let phi = Quat::from_dcm(&r_nb.matmul(&nav.pva.attitude.dcm.transpose()))
                     .to_rotation_vector();
-                let e_bg = nav.imu_error.gyro_bias - bg;
-                let e_ba = nav.imu_error.accel_bias - ba;
+                // Truth minus estimate, not estimate minus truth. `feedback`
+                // *adds* the IMU error states and *subtracts* the others — the
+                // error state is a correction to the compensation for these,
+                // and estimate-minus-truth for the rest. Getting it backwards
+                // here flips every cross term the bias blocks take part in.
+                let e_bg = bg - nav.imu_error.gyro_bias;
+                let e_ba = ba - nav.imu_error.accel_bias;
 
                 let mut e = [0.0; N_STATE];
                 for i in 0..3 {
@@ -1080,6 +1114,55 @@ pub mod eskf {
                         slot.push((0..3).map(|i| e[base + i] * sv[(i, 0)]).sum());
                     }
                 }
+
+                // Each pair of blocks jointly. Two blocks that are individually
+                // consistent can still be jointly hopeless if the correlation
+                // between them is wrong, and that is invisible to every
+                // marginal.
+                // The last scored epoch of the run, for the empirical
+                // covariance below.
+                if t + 1.5 > seconds {
+                    let mut row = [0.0; 15];
+                    row[..15].copy_from_slice(&e[..15]);
+                    let mut cov = [[0.0; 15]; 15];
+                    for (i, r) in cov.iter_mut().enumerate() {
+                        for (j, c) in r.iter_mut().enumerate() {
+                            *c = p[(i, j)];
+                        }
+                    }
+                    if report.final_errors.len() < run + 1 {
+                        report.final_errors.push(row);
+                        report.final_covariance.push(cov);
+                    } else {
+                        report.final_errors[run] = row;
+                        report.final_covariance[run] = cov;
+                    }
+                }
+
+                for (a, (_, ia)) in BLOCKS.iter().enumerate().take(5) {
+                    for (b, (_, ib)) in BLOCKS.iter().enumerate().take(5).skip(a + 1) {
+                        let (ia, ib) = (*ia, *ib);
+                        let mut joint = Matrix::<6, 6>::zeros();
+                        let mut v = Matrix::<6, 1>::zeros();
+                        for (r, sr) in [ia, ib].iter().enumerate() {
+                            for (c, sc) in [ia, ib].iter().enumerate() {
+                                for i in 0..3 {
+                                    for j in 0..3 {
+                                        joint[(3 * r + i, 3 * c + j)] = p[(sr + i, sc + j)];
+                                    }
+                                }
+                            }
+                            for i in 0..3 {
+                                v[(3 * r + i, 0)] = e[sr + i];
+                            }
+                        }
+                        if let Some(jc) = Cholesky::new(&joint) {
+                            let sv = jc.solve(&v);
+                            report.pairs[a][b]
+                                .push((0..6).map(|i| v[(i, 0)] * sv[(i, 0)]).sum());
+                        }
+                    }
+                }
             }
         }
         report
@@ -1116,6 +1199,93 @@ pub mod eskf {
                 slot.mean(),
                 verdict(slot.mean(), blo, bhi)
             );
+        }
+        // What the covariance *should* have been. The sample covariance of the
+        // errors across runs is the quantity the filter is predicting, so
+        // dividing one by the other names the term that is wrong rather than
+        // reporting that something is.
+        let n = r.final_errors.len();
+        if n >= 8 {
+            let mut mean = [0.0; 15];
+            for e in &r.final_errors {
+                for (m, v) in mean.iter_mut().zip(e) {
+                    *m += v / n as f64;
+                }
+            }
+            let mut empirical = [[0.0; 15]; 15];
+            for e in &r.final_errors {
+                for i in 0..15 {
+                    for j in 0..15 {
+                        empirical[i][j] += (e[i] - mean[i]) * (e[j] - mean[j]) / (n - 1) as f64;
+                    }
+                }
+            }
+            let mut predicted = [[0.0; 15]; 15];
+            for c in &r.final_covariance {
+                for i in 0..15 {
+                    for j in 0..15 {
+                        predicted[i][j] += c[i][j] / n as f64;
+                    }
+                }
+            }
+            let correlation = |m: &[[f64; 15]; 15], i: usize, j: usize| {
+                let d = (m[i][i] * m[j][j]).sqrt();
+                if d > 0.0 { m[i][j] / d } else { 0.0 }
+            };
+            println!(
+                "\nfilter covariance against the sample covariance over {n} runs,\n\
+                 at each run's last epoch. A ratio far from 1 is a variance the\n\
+                 filter has wrong; a correlation far from the sample one is a\n\
+                 coupling it has wrong."
+            );
+            println!("{:<26} {:>9} {:>9} {:>8}", "", "predicted", "sample", "ratio");
+            for (name, k) in [
+                ("position north", 0usize),
+                ("velocity north", 3),
+                ("attitude east", 7),
+                ("gyro bias x", 9),
+                ("accel bias x", 12),
+            ] {
+                println!(
+                    "{name:<26} {:>9.3e} {:>9.3e} {:>8.2}",
+                    predicted[k][k],
+                    empirical[k][k],
+                    predicted[k][k] / empirical[k][k]
+                );
+            }
+            println!("\n{:<26} {:>9} {:>9}", "correlation", "predicted", "sample");
+            for (name, a, b) in [
+                ("velocity N / attitude E", 3usize, 7usize),
+                ("velocity E / attitude N", 4, 6),
+                ("velocity D / attitude D", 5, 8),
+                ("position N / velocity N", 0, 3),
+                ("attitude E / accel bias X", 7, 12),
+            ] {
+                println!(
+                    "{name:<26} {:>9.3} {:>9.3}",
+                    correlation(&predicted, a, b),
+                    correlation(&empirical, a, b)
+                );
+            }
+        }
+
+        let names = ["position", "velocity", "attitude", "gyro bias", "accel bias"];
+        let (plo, phi) = stats::nis_interval(6, r.pairs[0][1].count().max(1));
+        println!("\nper pair, expected 6, 95 % interval [{plo:.2}, {phi:.2}]");
+        for a in 0..5 {
+            for b in (a + 1)..5 {
+                let m = r.pairs[a][b].mean();
+                if !m.is_finite() {
+                    continue;
+                }
+                println!(
+                    "  {:<11} + {:<11} {:>8.3}   {}",
+                    names[a],
+                    names[b],
+                    m,
+                    verdict(m, plo, phi)
+                );
+            }
         }
     }
 }

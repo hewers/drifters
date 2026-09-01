@@ -234,8 +234,10 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
       which needs their C++ build in the loop
 - [x] Monte Carlo NEES over synthetic trajectories, where ground truth exists
       and the *state* error is checked rather than only the innovations. It
-      found the overconfidence recorded below, which no amount of NIS could
-      have: NIS conflates a wrong covariance with a wrong model.
+      found — and then, after its own sign error was corrected, unfound — the
+      overconfidence recorded in [M15](#m15--the-cross-covariances--closed).
+      No amount of NIS could have done either: NIS conflates a wrong covariance
+      with a wrong model.
 
 ---
 
@@ -562,8 +564,8 @@ Each step is gated on a measurement rather than on the previous one compiling.
 
 **Why now.** The four findings are in [adr/0009](adr/0009-local-first-architecture.md)
 in full: `f32` is blocked by the *frame* rather than by the filter; the
-covariance conditioning is already tight in `f64`; both estimators are
-measurably overconfident and the ESKF's fault sits in the cross-covariances; and
+covariance conditioning is already tight in `f64`; the EqF is measurably
+overconfident by about 14 % while the ESKF is consistent; and
 a covariance filter provably cannot be run backwards, which is why smoothing
 belongs as a backward recursion over stored quantities rather than as a reverse
 pass.
@@ -699,53 +701,46 @@ over-trusts it. See [gsdc.md](gsdc.md).
 
 ---
 
-## M15 — The cross-covariances 📋 proposed
+## M15 — The cross-covariances ✅ closed, and it was the instrument
 
-The largest open correctness defect, and now localised. Monte Carlo NEES over
-the synthetic world, where truth is exact, 30 runs of 120 s:
+Monte Carlo NEES read 38.15 against an expected 15 while every per-block figure
+was consistent — position 2.91, velocity 2.95, attitude 2.61, gyro bias 2.96,
+accel bias 2.59, all against 3. Marginals right and the joint two and a half
+times too small is not a mis-scaled covariance, so this was opened as a defect
+in the correlations between blocks.
 
-```
-overall    38.154   expected 15                    OVERCONFIDENT
+**It was a sign error in the harness.** The ESKF's error state does not use one
+convention: position and velocity are estimate minus truth and are fed back by
+*subtraction*, while the attitude and IMU-bias states are corrections, fed back
+by *addition* and by `q_true = exp(φ) ⊗ q_est`. The harness scored all five
+blocks as estimate minus truth, so two of them carried the wrong sign against
+the covariance they were being compared with.
 
-per block, expected 3
-  position       2.911   consistent
-  velocity       2.951   consistent
-  attitude       2.606   conservative
-  gyro bias      2.962   consistent
-  accel bias     2.591   conservative
-```
+A uniform sign error would have been invisible — `eᵀP⁻¹e` does not change when
+`e` flips — which is why this survived so long. A *mixed* one flips exactly the
+cross terms between the two groups and leaves every marginal untouched, and
+that is the signature that was mistaken for a defect.
 
-**Every marginal is right and the joint is two and a half times too small.**
-That is not a mis-scaled covariance — a covariance uniformly too small would
-show in the blocks first. It means the *correlations between* blocks are wrong:
-the filter believes certain linear combinations of states are far better known
-than they are, `P` is correspondingly small in those directions, and an error
-lying along one reads enormous.
+| | before | after |
+|---|---|---|
+| overall, expected 15 | 38.15 | **13.88** |
+| velocity + attitude, expected 6 | 20.11 | **5.59** |
+| position + attitude, expected 6 | 7.67 | **5.55** |
+| every block, expected 3 | consistent | consistent |
 
-Two things are already ruled out. It is **not discretisation** — a tenfold
-change in the IMU interval does not move it, which the test
-`the_overconfidence_is_not_a_discretisation_artefact` pins. And it is **not the
-measurement model**: the RTS smoother, which reuses the same forward
-covariances, reads 9.6–14.7 against an expected 9 where the filter reads 21–37
-on the same runs.
+**The ESKF is consistent, slightly conservative.** So is the smoother, whose
+docs claimed it repaired a badly overconfident filter — it was not repairing
+anything. The EqF's 23.6 against 21 stands: its harness uses one convention
+throughout, and a global flip changes no quadratic form.
 
-Why it matters more than its size suggests: a filter that is wrong about its
-own uncertainty is worse than one that is merely imprecise. Everything
-downstream — gating, fusion with another sensor, a smoother, an operator
-deciding whether to trust a fix — reads that covariance and is misled by it.
+**What found it.** Not a sharper test but a different one. Per-block NEES said
+every marginal was fine. Scoring each *pair* of blocks jointly put
+velocity-plus-attitude at 20 against 6 and everything else in range, and then
+comparing the filter's predicted correlation against the sample correlation
+across runs — `+0.794` against `−0.697` — showed a sign rather than a magnitude
+at fault. Both diagnostics are now permanent in `drifters nees --eskf`, because
+the cheapest way to not repeat this is to keep the instrument that caught it.
 
-Where to look, in order of suspicion:
-
-- **`process_noise` has no cross terms.** The true errors are correlated across
-  blocks — a gyro bias error becomes an attitude error becomes a velocity
-  error — and the filter is left to generate all of that through `Φ` alone.
-- **The attitude/gyro-bias pair**, which is nearly unobservable as a
-  difference. Both blocks read conservative individually, which is the
-  signature of correlation being carried in the wrong place.
-- **Second-order terms the linearisation drops**, which is the ordinary reason
-  an EKF is optimistic, and would put a floor under how far this can be
-  improved.
-
-*Gate:* overall NEES inside a factor of two of 15 on the synthetic campaign,
-with the per-block figures no worse than they are now, and both estimators
-re-measured on KF-GINS and GSDC to confirm accuracy did not pay for it.
+**What it cost.** The claim was in five documents and had been used to argue for
+UD factorisation. That argument now stands on conditioning and guaranteed
+positive-definiteness alone; see [adr/0009](adr/0009-local-first-architecture.md).

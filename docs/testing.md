@@ -487,20 +487,39 @@ for an ordinarily imperfect filter. Only requiring the covariance to strictly
 *shrink* catches it, which it must, because the smoother has more information
 than the filter at every epoch but the last.
 
-### The smoother is more consistent than the filter it came from
+### An instrument that was wrong for a long time
 
-Measured on the same synthetic world, NEES over the nine states whose truth is
-exact:
+This section used to report that the forward filter was two to four times
+overconfident and that the smoother repaired it. Both halves were wrong, and
+the cause was in the harness rather than in either estimator.
 
-| seed | filtered | smoothed |
+The ESKF's error state does not use one sign convention. Position and velocity
+are estimate minus truth and are fed back by *subtraction*; the attitude and
+IMU-bias states are corrections and are fed back by *addition* and by a
+pre-multiplication — `q_true = exp(φ) ⊗ q_est`. The harness took all five
+blocks as estimate minus truth, so two of the five carried the wrong sign
+relative to the covariance they were being scored against.
+
+A uniform sign error would have been invisible: `eᵀP⁻¹e` does not change when
+`e` flips. A *mixed* one is not, and it flips exactly the cross terms between
+the two groups while leaving every marginal untouched — which is precisely the
+signature that was recorded as a defect:
+
+| | before | after |
 |---|---|---|
-| 1 | 21.09 | 9.55 |
-| 7 | 22.17 | 14.69 |
-| 42 | 33.68 | 10.63 |
-| 1234 | 37.33 | 12.20 |
+| overall, expected 15 | 38.15 | **13.88** |
+| velocity + attitude, expected 6 | 20.11 | **5.59** |
+| every other pair | consistent | consistent |
+| every block, expected 3 | consistent | consistent |
 
-Expected is 9. The **forward filter** is two to four times overconfident here,
-which is the same defect [gsdc.md](gsdc.md) records against the real datasets,
-and the backward pass lands far closer to consistent. That is not what a reader
-expects — smoothing is normally sold as an accuracy improvement — so it has its
-own assertion rather than being left as a remark.
+The ESKF is **slightly conservative**, not overconfident. Smoothed and filtered
+NEES over the nine exactly-known states now read 11.0 and 8.9 against an
+expected 9 — the smoother is not repairing anything, because there was nothing
+to repair.
+
+What found it was not a sharper test but a different one. Per-block NEES said
+every marginal was fine; only scoring each *pair* of blocks jointly showed
+velocity-plus-attitude at 20 against 6, and only then did comparing the
+filter's predicted correlation against the sample correlation across runs —
+`+0.794` against `−0.697` — make it obvious that a sign rather than a magnitude
+was at fault. Both diagnostics are now in `drifters nees --eskf`.

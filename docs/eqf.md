@@ -613,28 +613,37 @@ truth or against the fixes rather than against the covariance.
 **The ESKF has now been through the same campaign, in its own Earth-referenced
 world** — `drifters nees --eskf`, with the trajectory prescribed in closed form
 and the IMU derived by inverting the navigation equations, so there is no
-integration error to disagree about. It is also overconfident, by more, and with
-a completely different signature:
+integration error to disagree about. It is **consistent**, in fact slightly
+conservative:
 
 | | NEES | expected |
 |---|---|---|
-| **overall (15 states)** | **38.2** | **15** |
+| **overall (15 states)** | **13.88** | **15** |
 | position | 2.91 | 3 |
-| velocity | 2.95 | 3 |
-| attitude | 2.61 | 3 |
-| gyro bias | 2.96 | 3 |
-| accel bias | 2.59 | 3 |
+| velocity | 2.98 | 3 |
+| attitude | 2.58 | 3 |
+| gyro bias | 2.90 | 3 |
+| accel bias | 2.47 | 3 |
 
-Every marginal is consistent or conservative while the joint is 2.5× too small,
-which localises the fault to the **cross-covariances** rather than to any one
-state. The EqF's excess is the opposite shape — marginals wrong in attitude and
-calibration, and a much smaller overall factor.
+This table used to read 38.2 overall, with every marginal consistent, and that
+was recorded here and in [adr/0009](adr/0009-local-first-architecture.md) as a
+defect localised to the ESKF's cross-covariances. **It was the harness.** The
+ESKF's error state does not use one sign convention — position and velocity are
+estimate minus truth and fed back by subtraction, while the attitude and bias
+states are corrections, fed back by addition and by `q_true = exp(φ) ⊗ q_est`.
+The harness took all five blocks as estimate minus truth, so two carried the
+wrong sign against the covariance scoring them.
 
-Two filters written independently, two different failure signatures, from one
-harness. That is the answer to whether the EqF's 12 % was an artefact of the
-measuring apparatus: it was not.
+A *uniform* sign error would have been invisible, since `eᵀP⁻¹e` is unchanged
+when `e` flips. A mixed one flips exactly the cross terms between the two
+groups and leaves every marginal alone, which is why it presented as a
+cross-covariance defect with consistent blocks. Correcting it took the joint
+from 38.15 to 13.88 and the velocity-plus-attitude pair from 20.11 to 5.59.
+[testing.md](testing.md) has the diagnostic that found it.
 
----
+So the comparison the section above draws is now the other way round: **the EqF
+is the one carrying a measured 14 % overconfidence, and the ESKF is not.**
+
 
 ## Uncertain observation handling (Sec. VI)
 

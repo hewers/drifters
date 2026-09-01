@@ -54,6 +54,13 @@
 //! | 42 | 0.399 m | 0.173 m |
 //! | 1234 | 0.375 m | 0.156 m |
 //!
+//! Both passes are about as consistent as each other: normalised estimation
+//! error squared over the nine exactly-known states reads 8.9 filtered against
+//! 11.0 smoothed, expected 9. An earlier version of this note claimed the
+//! smoother repaired a badly overconfident filter; that was an artefact of the
+//! measuring harness, which had the attitude and bias error signs backwards.
+//! The filter was consistent all along.
+//!
 //! It is not always a gain. A smoother leans on the process model harder than
 //! a filter does, because it carries information backward *through* the
 //! dynamics, so a model that is wrong hurts it more. On the GSDC phone traces,

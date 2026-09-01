@@ -43,11 +43,22 @@ overconfidence is untested — at the 120 s of the NEES campaign there are still
 it is a standing hazard on long runs and an argument for the factored form
 independent of `f32`.
 
-**Both filters are measurably overconfident.** `drifters nees`, on synthetic
-data drawn from each filter's own model, gives 23.6 against 21 for the EqF and
-38.2 against 15 for the ESKF. Neither is understood. The ESKF's marginals are
-all consistent while its joint is 2.5× too small, which localises it to the
-cross-covariances — the part of `P` that a factored form handles differently.
+**One filter is measurably overconfident.** `drifters nees`, on synthetic data
+drawn from each filter's own model, gives 23.6 against 21 for the EqF — about
+14 %, not understood — and 13.9 against 15 for the ESKF, which is consistent
+and slightly conservative.
+
+This paragraph used to say the ESKF read 38.2 against 15, with every marginal
+consistent, and argued that localised the fault to the cross-covariances and so
+to the part of `P` a factored form handles differently. That was a sign error
+in the NEES harness, not in the filter: it scored the attitude and bias blocks
+as estimate-minus-truth where the filter defines them as corrections, which
+flips every cross term between those blocks and the rest while leaving the
+marginals untouched. See [eqf.md](../eqf.md) and [testing.md](../testing.md).
+
+**The argument for UD survives it, but one of its supports does not.** Nothing
+here now says the ESKF's covariance is wrong, so the factored form has to stand
+on conditioning and guaranteed positive-definiteness alone.
 
 **A covariance filter cannot be run backwards.** Attempting a reverse pass for
 warm-starting produced a covariance that *contracted* under `Φ⁻¹` faster than
