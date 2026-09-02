@@ -12,6 +12,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The equivariant filter's covariance measures as consistent**, 21.007 against
+  an expected 21, where it had measured 23.6. The fault was the Monte-Carlo
+  harness's prior: it drew initial errors independently in physical coordinates
+  and handed the filter `diag(σ²)` as an ε-coordinate covariance, which the two
+  are only at the anchor with no velocity. Nothing in the filter changed, and no
+  dataset result moves.
+
 ### Added
 
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
