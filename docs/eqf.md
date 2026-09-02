@@ -536,7 +536,7 @@ whereas GCU never rejects and never fully re-trusts.
 `α = 0` — isotropic inflation only, still within the paper's own range — is the
 default in `drifters gsdc`, and `--alpha` sets it.
 
-## Measured: the covariance is overconfident by about 14 %
+## Measured: the covariance is consistent
 
 Every consistency number from real data in this document is a NIS, computed
 from innovations, and NIS cannot separate a wrong covariance from a right
@@ -549,130 +549,66 @@ cargo run --release -p drifters-cli -- nees --runs 40 --seconds 120
 ```
 
 40 runs, scoring after a 10 s settle. A consistent filter averages the state
-dimension, 21.
+dimension, 21. It reads **21.007**, inside the 95 % interval [20.71, 21.29].
 
-| block | NEES | expected | |
-|---|---|---|---|
-| **overall** | **23.62** | **21** | **overconfident** |
-| attitude | 3.55 | 3 | overconfident |
-| velocity | 2.97 | 3 | consistent |
-| position | 2.91 | 3 | consistent |
-| gyro bias | 3.13 | 3 | overconfident |
-| accel bias | 2.88 | 3 | conservative |
-| lever arm | 2.71 | 3 | conservative |
-| mag calib | 3.68 | 3 | overconfident |
+### It read 23.6 until the prior was corrected
 
-**This is an implementation fault.** There is no model error in the experiment
-to attribute it to, so the covariance is about 12 % smaller than the error it is
-describing.
+The filter's covariance lives in **ε**, the chart the symmetry induces. The
+harness drew its initial error in **physical** coordinates — an attitude
+perturbation, a velocity perturbation, a position perturbation, each independent
+— and handed the filter `diag(σ²)` as though the two were the same thing.
 
-**It is invariant in both the step and the error magnitude.** Across a ten-fold
-sweep of the IMU interval it is flat, and across a *hundred*-fold sweep of error
-magnitude — `--strength`, sigmas by `s` and densities by `s²`, leaving the
-error-to-covariance ratio unchanged — it moves by 0.2 %: 23.63, 23.64, 23.65,
-23.66, 23.67 at `s` of 1, 0.3, 0.1, 0.03, 0.01. A scale-invariant fault.
+They are the same only at the anchor with no velocity. Away from it,
+`physical_jacobian` is not the identity:
 
-That flatness only appeared after the harness was fixed. With a first-order
-truth propagator the same sweep ran 23.9, 26.4, 47.5, **287** — the harness's own
-discretisation error, fixed in magnitude and so dominating as the injected noise
-fell. Giving the truth propagator Simpson quadrature removed it, and left the
-filter's term measurable at any strength. Two effects, and the first was
-masking how cleanly the second could be measured.
+```text
+δv = −v̂^ ε₁,ω + ε₁,ν      δS = Êᵀ(ε₄ − ε₁,ω)
+δp = −p̂^ ε₁,ω + ε₁,ρ
+```
 
-**Where it is.** Attitude and the magnetometer calibration carry most of it, at
-roughly 18 % and 23 %, with the gyro bias at 4 %. Position and velocity are
-clean. The magnetometer calibration is unobservable in this experiment — no
-magnetometer update is applied — so its NEES is testing the transition matrix
-alone, and the attitude and calibration blocks are coupled through `−₃A`.
+So a magnetometer-calibration error drawn with variance `σ_mag²` is an
+ε-variance of `σ_mag² + σ_att²`, correlated with attitude — and the filter was
+told `σ_mag²` with no correlation. The harness now inverts the Jacobian, whose
+block-triangular structure makes that a matter of writing it down rather than
+factorising anything.
 
-**Leading hypothesis, tested and rejected.** The reset was not transporting the
-covariance: `X̂ ← exp(Δ) X̂` was applied without adjusting `Σ`. The exact
-Jacobian of `ε_new = log(exp(ε) exp(−Δ))` at `ε = Δ` is `Ad_{exp(Δ)} J_r(Δ)`,
-first-order `I + ½ ad_Δ`. Since the approximation runs at every update and the
-excess sits in the rotational states, it was the obvious candidate.
+**The test that confirms it.** The mismatch grows with range, because the
+Jacobian's off-diagonal blocks are `v̂^` and `p̂^`. Starting the vehicle away from
+the anchor, before and after:
 
-Implementing it moved NEES from **23.910 to 23.870**. The transport is retained,
-being the more correct form and costing one `21 × 21` product per update, but it
-accounts for none of the discrepancy.
-
-**Not the cross-covariances.** `drifters nees` now scores each pair of blocks
-jointly, the diagnostic that found the ESKF's fault to be in its harness rather
-than its filter. Here it exonerates the correlations: every pair containing
-attitude or the magnetometer calibration is overconfident, and every pair among
-the other five blocks is consistent or conservative. The pairs track the two bad
-marginals rather than adding anything of their own.
-
-**It is attitude, and the rest is inherited.** Per-block NEES against run length:
-
-| block | 20 s | 120 s | 480 s |
-|---|---|---|---|
-| attitude | 4.193 | 3.547 | 3.112 |
-| gyro bias | 3.426 | 3.131 | 2.946 |
-| mag calib | 3.561 | 3.675 | 3.857 |
-
-Attitude and gyro bias decay toward consistency; the magnetometer calibration
-grows. Comparing the filter's predicted variance against the realised squared
-error over a run separates them. The attitude covariance is **2.1× too small at
-the start** — 1.36e-4 predicted against 2.90e-4 realised — and the two agree by
-about 200 s. So the filter reduces its attitude uncertainty faster than the
-attitude error actually falls, and the excess washes out as the run lengthens.
-
-The magnetometer block is unobservable here, and the physical error it is scored
-against is `δS = Êᵀ(ε₄ − ε₁,ω)` — a combination of the calibration state *and*
-the attitude. Its predicted variance at the first scored epoch is 1.296 times
-the drawn `σ²`, which is `Σ_ε₄ + Σ_ε₁,ω` to within a per cent. It inherits the
-attitude error, and it grows with time because the attitude covariance keeps
-shrinking while the physical error does not. The blocks the updates barely touch
-confirm the reading: gyro bias 0.958 and lever arm 0.998 against their drawn
-variances.
-
-**What is left.** One fault, in the attitude covariance, rather than the two the
-block figures suggest. The flatness in `dt` still rules out anything scaling
-with the step — the transition matrix truncation, the `Q dt` discretisation —
-so what remains is how fast the attitude uncertainty is reduced by a position
-update: the observability the linearisation credits attitude with through the
-lever arm and the dynamics.
-
-**What it means for the numbers already reported.** Anything derived from the
-EqF's covariance is optimistic by roughly this margin: the NIS-based tuning of
-[gsdc.md](gsdc.md), the innovation gating, and the GCU inflation, which reads
-`Σ` directly. It does not affect the accuracy figures, which are scored against
-truth or against the fixes rather than against the covariance.
-
-**The ESKF has now been through the same campaign, in its own Earth-referenced
-world** — `drifters nees --eskf`, with the trajectory prescribed in closed form
-and the IMU derived by inverting the navigation equations, so there is no
-integration error to disagree about. It is **consistent**, in fact slightly
-conservative:
-
-| | NEES | expected |
+| start position | before | after |
 |---|---|---|
-| **overall (15 states)** | **13.88** | **15** |
-| position | 2.91 | 3 |
-| velocity | 2.98 | 3 |
-| attitude | 2.58 | 3 |
-| gyro bias | 2.90 | 3 |
-| accel bias | 2.47 | 3 |
+| at the anchor | 23.62 | **21.007** |
+| 1 km | 46.56 | **21.007** |
+| 10 km | 50.08 | **21.007** |
 
-This table used to read 38.2 overall, with every marginal consistent, and that
-was recorded here and in [adr/0009](adr/0009-local-first-architecture.md) as a
-defect localised to the ESKF's cross-covariances. **It was the harness.** The
-ESKF's error state does not use one sign convention — position and velocity are
-estimate minus truth and fed back by subtraction, while the attitude and bias
-states are corrections, fed back by addition and by `q_true = exp(φ) ⊗ q_est`.
-The harness took all five blocks as estimate minus truth, so two carried the
-wrong sign against the covariance scoring them.
+Identical to three decimals at every range, where it had doubled by a kilometre.
 
-A *uniform* sign error would have been invisible, since `eᵀP⁻¹e` is unchanged
-when `e` flips. A mixed one flips exactly the cross terms between the two
-groups and leaves every marginal alone, which is why it presented as a
-cross-covariance defect with consistent blocks. Correcting it took the joint
-from 38.15 to 13.88 and the velocity-plus-attitude pair from 20.11 to 5.59.
-[testing.md](testing.md) has the diagnostic that found it.
+### What was ruled out on the way
 
-So the comparison the section above draws is now the other way round: **the EqF
-is the one carrying a measured 14 % overconfidence, and the ESKF is not.**
+- **The reset not transporting the covariance.** Implementing
+  `Ad_{exp(Δ)} J_r(Δ)` moved NEES from 23.910 to 23.870. Retained as the more
+  correct form, at one 21×21 product per update, but it was not the cause.
+- **Anything scaling with the step.** The figure is flat across a ten-fold sweep
+  of `dt`, which rules out the transition matrix truncation and the `Q dt`
+  discretisation.
+- **The process noise.** Scaling the filter's gyro density by 1.65 brings the
+  overall to 21, which looks like a fix and is not: every block overshoots into
+  conservative — attitude 2.70, velocity 2.53, gyro bias 2.48 — while the
+  magnetometer block, the one that was actually wrong, barely moves. A tuning
+  knob compensating for a structural error.
+- **The correlations.** `drifters nees` scores each pair of blocks jointly, the
+  diagnostic that found the ESKF's fault. Here it exonerated them: the pairs
+  tracked two overconfident marginals and added nothing of their own.
 
+### What is left
+
+The overall figure is consistent and the marginals are not uniformly so:
+attitude reads 3.431 against 3, and the magnetometer calibration 2.477. They
+offset in the joint. Since a correct filter has every marginal at 3, something
+in how a position update is allowed to redistribute uncertainty between those
+two blocks is still wrong, and it is worth about 14 % of one block rather than
+the 12 % of the whole covariance it started as.
 
 ## Uncertain observation handling (Sec. VI)
 

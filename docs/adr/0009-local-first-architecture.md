@@ -59,10 +59,11 @@ ill-conditioned directions are ones the reported position does not depend on.
 Neither is established here, and a longer dataset would separate them. See
 [adr/0005](0005-scalar-type.md).
 
-**One filter is measurably overconfident.** `drifters nees`, on synthetic data
-drawn from each filter's own model, gives 23.6 against 21 for the EqF — about
-14 %, not understood — and 13.9 against 15 for the ESKF, which is consistent
-and slightly conservative.
+**Both filters are consistent, once the instrument is right.** `drifters nees`,
+on synthetic data drawn from each filter's own model, gives 21.0 against 21 for
+the EqF and 13.9 against 15 for the ESKF. Each read wrong until its harness was
+corrected, and in both cases the harness and the filter disagreed about
+coordinates rather than about the estimate.
 
 This paragraph used to say the ESKF read 38.2 against 15, with every marginal
 consistent, and argued that localised the fault to the cross-covariances and so

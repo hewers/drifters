@@ -315,28 +315,58 @@ changing what the filter computes at 21 states.
 
 ## M9 — Hardware validation
 
-Everything that an emulator cannot answer. Nothing here is startable without a
-board on a desk.
+What an emulator cannot answer. Nothing under "still needs a board" is startable
+without one on a desk.
+
+### Answered without a board
+
+Instructions retired can be counted exactly: `qemu -icount shift=0` advances the
+virtual clock one tick per instruction, so SysTick counts instructions. That is
+not a cycle count — no pipeline, no wait states, no FPU latency — but it
+measures how much *work* a change removes, which on a part whose FPU is
+single-precision is most of the soft-float question. Per `add_imu` on
+`mps2-an386`:
+
+| configuration | instructions |
+|---|---|
+| 21-state, `f64` | 21 398 |
+| 21-state, `f32-covariance` | **11 868** |
+| 15-state (`reduced-state`) | **5 911** |
+
+- [x] **Cost of software-emulated `f64`, in work rather than time.** The
+      single-precision covariance removes 45 % of the instructions retired. On
+      `thumbv7em` the UD routines compile to `vmul.f32`, `vdiv.f32` and
+      `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
+      `__aeabi_dadd` and `__aeabi_ddiv` without it. What remains for a board is
+      turning that into cycles, below.
+- [x] **Mixed precision, the covariance half.** `--features f32-covariance`,
+      measured to change no result — KF-GINS 0.0330 m, NIS 1.459, GSDC 3.244,
+      NEES 13.874. See [adr/0005](adr/0005-scalar-type.md).
+- [x] **Where the remaining work is.** Stubbing one stage at a time against the
+      shipping configuration: the covariance recursion dominates, the transition
+      matrix costs 986 instructions, and the earth model cost 1 560 until
+      `Local` took it to one evaluation per point. Recorded in
+      [testing.md](testing.md), along with the two ways this measurement gave a
+      wrong answer first.
+
+### Still needs a board
 
 - [ ] Cycle-count benchmarks for `predict` and `update` on real Cortex-M4F/M7
-- [ ] Cost of software-emulated `f64`, measured rather than assumed
 - [ ] Flash wait-state and cache effects at realistic clock speeds
 - [ ] Sustained-rate check: does a 200 Hz IMU keep up with a 1 Hz GNSS update?
 - [ ] Power per filter step
-- [ ] Mixed-precision experiment (`f32` for the IMU-error states), once there is
-      a baseline to compare against — see [adr/0005](adr/0005-scalar-type.md).
-      The covariance half of this is done and needs only the cycle count: on
-      `thumbv7em` the UD routines compile to `vmla.f32`/`vmul.f32`/`vdiv.f32`
-      under `f32-covariance` and to `bl __aeabi_dmul`/`__aeabi_dadd` without
-      it, which is the soft-float cost this milestone exists to measure.
+- [ ] Mixed precision for the *states*, which the covariance half does not
+      cover. [adr/0009](adr/0009-local-first-architecture.md) parks the local
+      frame it would need, on the grounds that the mechanization is 24 % of the
+      work and single precision would spend accuracy to get part of it.
 - [ ] True cross-implementation comparison against KF-GINS's C++ output
 
-**Why this is separate.** QEMU models no pipeline, cache, flash wait states or
-FPU latency, so every timing number it produces is meaningless. On a real M4F
+**Why the rest is separate.** QEMU models no pipeline, cache, flash wait states
+or FPU latency, so any *timing* number it produces is meaningless. On a real M4F
 running from flash with wait states the same code can be several times slower
-than from zero-wait RAM. Stack and size are exact under emulation and are
-already measured in M8; timing is not, and this repository claims nothing about
-it until this milestone runs.
+than from zero-wait RAM. Stack, size and instructions retired are exact under
+emulation; time is not, and this repository claims nothing about it until the
+remaining items run.
 
 ---
 
@@ -721,7 +751,8 @@ Each step is gated on a measurement rather than on the previous one compiling.
 **Why now.** The four findings are in [adr/0009](adr/0009-local-first-architecture.md)
 in full: `f32` is blocked by the *frame* rather than by the filter; the
 covariance conditioning is already tight in `f64`; the EqF is measurably
-overconfident by about 14 % while the ESKF is consistent; and
+read overconfident by about 14 % while the ESKF was consistent, both since
+resolved to the harness; and
 a covariance filter provably cannot be run backwards, which is why smoothing
 belongs as a backward recursion over stored quantities rather than as a reverse
 pass.
@@ -895,8 +926,8 @@ that is the signature that was mistaken for a defect.
 
 **The ESKF is consistent, slightly conservative.** So is the smoother, whose
 docs claimed it repaired a badly overconfident filter — it was not repairing
-anything. The EqF's 23.6 against 21 stands: its harness uses one convention
-throughout, and a global flip changes no quadratic form.
+anything. The EqF's 23.6 against 21 turned out to be its own harness, for a
+different reason — see below.
 
 **And the hole is now closed rather than commented.** The convention lived in
 [`apply_correction`](../crates/drifters-filter/src/engine.rs), which had no
@@ -925,10 +956,10 @@ across runs — `+0.794` against `−0.697` — showed a sign rather than a magn
 at fault. Both diagnostics are now permanent in `drifters nees --eskf`, because
 the cheapest way to not repeat this is to keep the instrument that caught it.
 
-The pairwise score runs for the equivariant filter too, where it *exonerates*
-the correlations: its pairs track two overconfident marginals and add nothing of
-their own, so its 23.6 against 21 is one covariance rather than a coupling. See
-[eqf.md](eqf.md).
+The pairwise score runs for the equivariant filter too, and there it exonerated
+the correlations: the pairs tracked two overconfident marginals rather than a
+coupling. That pointed at the prior, and the EqF now reads **21.007 against 21**.
+See [eqf.md](eqf.md).
 
 **What it cost.** The claim was in five documents and had been used to argue for
 UD factorisation. That argument now stands on conditioning and guaranteed

@@ -290,13 +290,46 @@ fn initial_sigma() -> [f64; DIM] {
     s
 }
 
-fn initial_covariance_scaled(strength: f64) -> Matrix<DIM, DIM> {
+/// The prior in ε coordinates, for physical errors drawn independently with
+/// [`initial_sigma`].
+///
+/// The filter's covariance lives in ε, and ε is not the physical error: the map
+/// between them is [`physical_jacobian`], which is the identity only at the
+/// anchor with no velocity. Handing the filter `diag(σ²)` therefore tells it a
+/// prior that is not the one the errors were drawn from — the magnetometer
+/// block especially, where `δS = Êᵀ(ε₄ − ε₁,ω)` makes the ε-variance
+/// `σ_mag² + σ_att²` rather than `σ_mag²`, and correlates it with attitude.
+///
+/// `J` is block lower triangular, so its inverse is written out rather than
+/// computed:
+///
+/// ```text
+/// ε₁,ω = δφ                ε₂ = −Ad⁻¹ δb
+/// ε₁,ν = δv + v̂^ δφ        ε₃ = −Â⁻ᵀ δt
+/// ε₁,ρ = δp + p̂^ δφ        ε₄ = Ê⁻ᵀ δS + δφ
+/// ```
+fn initial_covariance_scaled(strength: f64, estimate: &State) -> Matrix<DIM, DIM> {
     let s = initial_sigma().map(|v| v * strength);
+    let (v, p) = (estimate.pose.velocity, estimate.pose.position);
+
+    let mut m = Matrix::<DIM, DIM>::zeros();
+    m.set_block(0, 0, &Mat3::identity());
+    m.set_block(3, 0, &v.skew());
+    m.set_block(3, 3, &Mat3::identity());
+    m.set_block(6, 0, &p.skew());
+    m.set_block(6, 6, &Mat3::identity());
+    m.set_block(9, 9, &-Mat3::identity());
+    m.set_block(12, 12, &-Mat3::identity());
+    m.set_block(15, 15, &-Mat3::identity());
+    m.set_block(18, 0, &Mat3::identity());
+    m.set_block(18, 18, &Mat3::identity());
+
     let mut d = [0.0; DIM];
     for i in 0..DIM {
         d[i] = s[i] * s[i];
     }
-    Matrix::from_diagonal(&d)
+    let phys = Matrix::from_diagonal(&d);
+    m.matmul(&phys).mul_transpose(&m)
 }
 
 /// Run a Monte Carlo NEES campaign against the equivariant filter.
@@ -377,7 +410,8 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
             ),
         };
 
-        let mut filter = EqFilter::new(&start, initial_covariance_scaled(strength), GRAVITY);
+        let mut filter =
+            EqFilter::new(&start, initial_covariance_scaled(strength, &start), GRAVITY);
         filter.alpha = 0.0; // GCU off: this measures the covariance, not robustness.
         let mut bad = false;
 
@@ -677,37 +711,40 @@ mod tests {
 
     /// The campaign, small enough for CI.
     ///
-    /// # This asserts a known defect, not the property we want
+    /// # The covariance is consistent
     ///
-    /// A consistent filter would score 21. It scores about 24, so the EqF's
-    /// covariance is roughly 14 % too small on data generated from exactly the
-    /// model it assumes. That is an implementation fault: there is no model
-    /// error in this experiment to blame it on.
+    /// Over data generated from exactly the model the filter assumes, a
+    /// consistent filter scores the state dimension, 21. It does.
     ///
-    /// The bound below brackets the measured behaviour so a regression that
-    /// makes it materially worse fails, while the test still runs and reports.
-    /// Tighten it to the acceptance interval once the cause is fixed.
+    /// It read about 24 until the prior this harness hands the filter was
+    /// corrected: the errors are drawn independently in physical coordinates
+    /// and the filter's covariance lives in ε, which are the same thing only at
+    /// the anchor with no velocity. See `initial_covariance_scaled`.
     #[test]
-    fn the_covariance_is_overconfident_by_a_known_margin() {
-        let report = run_nees(12, 90.0, 20_260_811);
+    fn the_covariance_is_consistent() {
+        // Twenty runs over 120 s. Twelve over 90 s reads 22.3: the campaign's
+        // first seconds carry the initial transient, and a short run weights it
+        // more heavily.
+        let report = run_nees(20, 120.0, 20_260_811);
         assert_eq!(report.singular, 0, "covariance stopped being invertible");
         assert!(report.overall.count() > 500, "too few samples to conclude");
 
         let mean = report.overall.mean();
         let (lo, hi) = stats::nis_interval(DIM, report.overall.count());
-        assert!(
-            mean > lo,
-            "NEES {mean:.3} fell below {lo:.3}: the filter turned conservative, \
-             which is a different fault from the one recorded here"
+        // Twice the interval width, this being sized for CI rather than for
+        // the tightest bound available. It reads 21.2 here; the full forty-run
+        // campaign over the same 120 s lands at 21.007 against [20.71, 21.29].
+        let (wide_lo, wide_hi) = (
+            DIM as f64 - (DIM as f64 - lo) * 2.0,
+            hi + (hi - DIM as f64) * 2.0,
         );
         assert!(
-            mean < 28.0,
-            "NEES {mean:.3} exceeds the recorded 24; the covariance has got worse \
-             (a consistent filter would score {DIM}, interval upper bound {hi:.3})"
+            mean > wide_lo && mean < wide_hi,
+            "NEES {mean:.3} outside [{wide_lo:.3}, {wide_hi:.3}]; a consistent \
+             filter scores {DIM}"
         );
 
-        // Position and velocity are the blocks that are actually consistent,
-        // and they should stay that way.
+        // Position and velocity should stay consistent block by block.
         let (blo, bhi) = stats::nis_interval(3, report.blocks[1].count());
         for i in [1, 2] {
             let m = report.blocks[i].mean();
@@ -719,34 +756,26 @@ mod tests {
         }
     }
 
-    /// The overconfidence is invariant in both the step and the error
-    /// magnitude, which is what a scale-invariant fault in the filter looks
-    /// like and rules out most alternatives.
+    /// NEES is invariant in the step, which is what separates the filter from
+    /// the apparatus measuring it.
     ///
     /// Scaling every error by `strength` — sigmas by `s`, densities by `s²` —
-    /// leaves the error-to-covariance ratio unchanged, so NEES should not move.
-    /// It does not: 23.63, 23.64, 23.65, 23.66, 23.67 across `s` from 1 down to
-    /// 0.01, a hundred-fold range.
+    /// leaves the error-to-covariance ratio unchanged, so NEES should not move
+    /// either. Across `s` from 1 down to 0.01 it does not.
     ///
     /// That flatness only appeared once the truth propagator was given Simpson
-    /// quadrature. With the earlier first-order stepper the same sweep ran 23.9,
-    /// 26.4, 47.5, 287 — the harness's own discretisation error, fixed in
-    /// magnitude and therefore dominating as the injected noise fell.
-    /// The EqF's 14 %, not the ESKF's — which turned out not to exist; see
-    /// M15 in the milestones. This harness scores the EqF, whose error vector
-    /// uses one sign convention throughout, so it was never affected.
+    /// quadrature. With a first-order stepper the same sweep ran 23.9, 26.4,
+    /// 47.5, 287: the harness's own discretisation error, fixed in magnitude and
+    /// so dominating as the injected noise fell. A step-dependent NEES means the
+    /// harness is measuring itself.
     #[test]
-    fn the_eqf_overconfidence_is_not_a_discretisation_artefact() {
+    fn nees_does_not_depend_on_the_step() {
         let coarse = run_nees_at(8, 60.0, 4242, 0.02).overall.mean();
         let fine = run_nees_at(8, 60.0, 4242, 0.002).overall.mean();
         assert!(
             (coarse - fine).abs() < 0.25 * coarse,
-            "NEES moved from {coarse:.2} to {fine:.2} over a 10x dt change; if it \
-             now scales with dt the cause has changed"
-        );
-        assert!(
-            fine > 22.0,
-            "fine-step NEES {fine:.2} is no longer overconfident"
+            "NEES moved from {coarse:.2} to {fine:.2} over a 10x dt change, so it \
+             is measuring the discretisation rather than the covariance"
         );
     }
 }
