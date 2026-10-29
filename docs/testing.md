@@ -321,7 +321,9 @@ cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if the peak exceeds 20 KiB.
+CI runs it on every push and fails if the peak exceeds 18 KiB, or 16 KiB with
+`f32-covariance` — ceilings the dense held-state update, retired since, did not
+fit under.
 
 ### How the measurement works
 
@@ -355,7 +357,8 @@ repository claims otherwise.
 **Instructions retired can be measured, though, and they answer the useful
 half.** `qemu-system-arm -icount shift=0` advances the virtual clock one tick
 per instruction, so SysTick counts instructions; the harness reports
-`INSTRUCTIONS add_imu` under that flag and garbage without it. It cannot see
+`INSTRUCTIONS add_imu`, and `INSTRUCTIONS apply_zupt` for the held-state update,
+under that flag and garbage without it. It cannot see
 pipeline stalls, flash wait states or FPU latency, so it is not a cycle count.
 What it measures exactly is how much *work* a change removes — and on a part
 whose FPU is single-precision, that is the whole soft-float question, since an

@@ -26,6 +26,10 @@
 //! [`crate::range`] share a reference satellite, so theirs is dense. Passing
 //! correlated rows in one at a time gives a wrong answer, quietly.
 //!
+//! [`Ud::rank_one_update`] adds `c v vᵀ` for `c ≥ 0`. The filter needs it for
+//! held states: their update is the optimal one plus a positive term, which
+//! is how [`crate::eskf::HeldStates`] stays factored.
+//!
 //! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
 use drifters_core::math::{Cholesky, Matrix};
@@ -161,9 +165,9 @@ impl Ud {
     /// [`Self::from_covariance`], factoring in the caller's buffer.
     ///
     /// The sweep is destructive, so the copying variant above has to make one.
-    /// On a 21-state filter that copy is 3 528 bytes of stack, which matters on
-    /// the held-state update path where several `StateMatrix` temporaries are
-    /// already live at once. `p` is left holding the sweep's leftovers and must
+    /// On a 21-state filter that copy is 3 528 bytes of stack, which matters
+    /// wherever other `StateMatrix` temporaries are already live, as they are
+    /// in [`crate::anchor`]. `p` is left holding the sweep's leftovers and must
     /// be treated as consumed.
     pub fn from_covariance_in_place(work: &mut StateMatrix) -> Option<Self> {
         // Upper-triangular Cholesky-like sweep, from the bottom right up, which
@@ -347,6 +351,59 @@ impl Ud {
             k[(i, 0)] = (g / alpha) as F;
         }
         Some((k, alpha as F))
+    }
+
+    /// The Agee–Turner rank-one update: the factors of `U D Uᵀ + c v vᵀ`.
+    ///
+    /// Only for `c ≥ 0`. Adding a positive semi-definite term is the stable
+    /// direction, since every new `D` entry is a sum of non-negative terms;
+    /// subtracting one is a downdate and needs a different recursion. A
+    /// negative or non-finite `c` is refused and nothing changes.
+    ///
+    /// Sweeps from the bottom row up and does nothing at a row where what is
+    /// left of `v` is zero. A `v` confined to a few states costs nothing above
+    /// the highest of them.
+    pub fn rank_one_update(&mut self, c: F, v: &StateVector) -> Option<()> {
+        if !c.is_finite() || c < 0.0 {
+            return None;
+        }
+        let mut a: [Scalar; N_STATE] = core::array::from_fn(|i| v[(i, 0)] as Scalar);
+        let mut c = c as Scalar;
+        for j in (0..N_STATE).rev() {
+            // `get` rather than indexing, for the reason in `column_of`: across
+            // the early exits below the optimiser stops carrying `j < N_STATE`,
+            // and indexing linked a bounds check into the data path.
+            let (Some(&p), Some(&d)) = (a.get(j), self.diagonal.get(j)) else {
+                break;
+            };
+            if c == 0.0 {
+                break;
+            }
+            if p == 0.0 {
+                continue;
+            }
+            // d uⱼuⱼᵀ + c a aᵀ, with a = p uⱼ + ã, is d̃ ũⱼũⱼᵀ + c̃ ã ãᵀ once
+            // the square is completed: d̃ = d + c p², ũⱼ = uⱼ + (c p / d̃) ã and
+            // c̃ = c d / d̃. `ã` is zero from row `j` down, so the next column
+            // up inherits a strictly shorter vector.
+            let updated = d + c * p * p;
+            if !updated.is_finite() {
+                return None;
+            }
+            if updated <= 0.0 {
+                continue;
+            }
+            let b = c * p / updated;
+            c *= d / updated;
+            if let Some(slot) = self.diagonal.get_mut(j) {
+                *slot = updated;
+            }
+            for (entry, x) in self.column_of_mut(j).iter_mut().zip(a.iter_mut()) {
+                *x -= p * *entry;
+                *entry += b * *x;
+            }
+        }
+        Some(())
     }
 
     /// Thornton's time update, by modified weighted Gram-Schmidt.
@@ -771,6 +828,68 @@ mod tests {
         }
         let worst = worst_relative(&dense, &ud.to_covariance());
         assert!(worst < 1.0e-8 * SLACK, "covariance differs by {worst:.2e}");
+    }
+
+    #[test]
+    fn a_rank_one_update_matches_the_dense_one() {
+        let mut rng = Rng(1977);
+        for (seed, c) in [(5u64, 0.7), (21, 3.0e2), (64, 1.0e-4)] {
+            let p = covariance(seed, 1.0e4);
+            let mut ud = Ud::from_covariance(&p).unwrap();
+            let mut v = StateVector::zeros();
+            for i in 0..N_STATE {
+                v[(i, 0)] = rng.signed();
+            }
+            let mut dense = p;
+            for i in 0..N_STATE {
+                for j in 0..N_STATE {
+                    dense[(i, j)] += c * v[(i, 0)] * v[(j, 0)];
+                }
+            }
+            ud.rank_one_update(c, &v).expect("c is non-negative");
+            let worst = worst_relative(&dense, &ud.to_covariance());
+            assert!(
+                worst < 1.0e-9 * SLACK,
+                "seed {seed}, c {c}: covariance differs by {worst:.2e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rank_one_update_confined_to_a_few_states_matches_the_dense_one() {
+        // The shape the held-state update hands it: non-zero only on the held
+        // rows, here three in the middle of the state, so the sweep skips the
+        // rows below them and has to carry the correction up through every
+        // row above.
+        let p = covariance(8, 1.0e3);
+        let mut ud = Ud::from_covariance(&p).unwrap();
+        let mut v = StateVector::zeros();
+        v[(6, 0)] = 0.4;
+        v[(7, 0)] = -1.3;
+        v[(8, 0)] = 0.02;
+        let c = 2.5;
+        let mut dense = p;
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                dense[(i, j)] += c * v[(i, 0)] * v[(j, 0)];
+            }
+        }
+        ud.rank_one_update(c, &v).unwrap();
+        let worst = worst_relative(&dense, &ud.to_covariance());
+        assert!(worst < 1.0e-9 * SLACK, "covariance differs by {worst:.2e}");
+    }
+
+    #[test]
+    fn a_rank_one_downdate_is_refused() {
+        let mut ud = Ud::from_covariance(&covariance(2, 1.0e3)).unwrap();
+        let before = ud;
+        let v = StateVector::from_column([1.0; N_STATE]);
+        assert!(ud.rank_one_update(-1.0, &v).is_none());
+        assert!(ud.rank_one_update(F::NAN, &v).is_none());
+        assert_eq!(ud.to_covariance(), before.to_covariance());
+        // Zero is a legal weight and changes nothing.
+        assert!(ud.rank_one_update(0.0, &v).is_some());
+        assert_eq!(ud.to_covariance(), before.to_covariance());
     }
 
     #[test]

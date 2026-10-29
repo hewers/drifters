@@ -44,7 +44,7 @@
 //!
 //! - [`mechanization`] — the strapdown INS integration.
 //! - [`measurement`] — auxiliary sensor models (ZUPT, NHC, odometer, …).
-//! - [`eskf`] — transition matrix, predict and Joseph-form update.
+//! - [`eskf`] — transition matrix, predict and the factored update.
 //! - [`engine`] — the orchestration, including GNSS epoch alignment.
 //! - [`state`] — the error-state index map.
 //! - [`config`] — configuration and its validation.

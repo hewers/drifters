@@ -228,9 +228,9 @@ Three changes brought it to 16 480:
    `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
 2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
    into a caller-supplied buffer, so `predict` and the Joseph update hold four
-   and three live 21×21 matrices respectively instead of a dozen. Both paths
-   were later replaced for the ordinary case — see the factored covariance
-   below — but Joseph remains for held states and still needs this.
+   and three live 21×21 matrices respectively instead of a dozen. Both were
+   later replaced by the factored recursions below, which form no 21×21
+   matrix at all.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
    copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
    on the hot path alone was worth 2.2 KiB.
@@ -253,29 +253,35 @@ filter to 15 states. Every matrix halves, and so does the stack:
 Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
-covariance was factored:
+covariance was factored, and again after the held-state update was:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 528 | 18 904 | **18 904** |
-| 21-state, `f32-covariance` | 12 840 | 17 976 | **17 976** |
-| 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
+| 21-state, `f64` | 16 212 | 7 604 *(was 18 904)* | **16 212** |
+| 21-state, `f32-covariance` | 12 540 | 6 404 *(was 17 976)* | **12 540** |
+| 15-state (`reduced-state`) | 9 740 | 5 260 *(was 10 464)* | **9 740** |
 
-`f32-covariance` takes 22 % off `add_imu`, because Thornton's working array is
-the largest single object on that frame and it halves. It barely moves
-`apply_zupt`, because the held-state path works densely in `f64` regardless.
+`f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
+the largest single object on that frame and it halves.
 
-The peak is now the **held-state update**, not `predict`. That path materialises
-`P` from the factors, applies the Joseph form to it and factors it back, so it
-carries three `StateMatrix` temporaries where the ordinary update carries none.
-A factored held-state update would remove it; Bierman's covariance update
-assumes an optimal gain and a held state is precisely a non-optimal one, so it
-cannot express this. CI re-measures the peak on every run against a 20 KiB
-ceiling, at both precisions.
+The peak is `predict` again. For one milestone it was the **held-state
+update**, which materialised `P` from the factors, applied the Joseph form and
+factored the result back, carrying three `StateMatrix` temporaries where the
+ordinary update carries none. The reason given for that path was that
+Bierman's recursion assumes an optimal gain and a held state is a non-optimal
+one. The conclusion did not follow. Joseph with the held rows of the gain
+zeroed expands to `(P − K S Kᵀ) + G S Gᵀ`, where `G` is the optimal gain's held
+rows: the optimal posterior, which Bierman computes, plus a positive
+semi-definite term with one rank-one piece per measurement row, which the
+Agee–Turner update adds to the factors. Nothing is formed, and nothing is
+refactored. CI re-measures the peak on every run against an 18 KiB ceiling at
+`f64` and 16 KiB at `f32`, both of which the dense held-state path exceeded.
 
-That is the difference between needing a 32 KiB task stack and fitting in
-16 KiB, which is what makes it the most useful lever available on a small part —
-it changes no numerics at all, it simply estimates fewer things.
+On M8's figures that was the difference between needing a 32 KiB task stack
+and fitting in 16 KiB. The gap is narrower now: the 21-state filter peaks just
+under 16 KiB, with 172 bytes to spare, and at 12.2 KiB with `f32-covariance`.
+Fifteen states still buy the most headroom, and they change no numerics at all —
+they simply estimate fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 
@@ -393,9 +399,11 @@ at the ingest boundary rather than allowed to poison the state.
   Neither recursion takes a square root. This replaced a Joseph-form update
   and was both smaller and faster than it, which is unusual for a numerical
   improvement and is why the timings are recorded in `ud`'s tests.
-- **Joseph form is retained** for the held-state path, where a measurement must
-  not be allowed to touch every state, and Bierman's scalar-sequential form
-  does not express that constraint.
+- **Held states stay factored.** A measurement that must not correct some
+  states is Bierman's update followed by one Agee–Turner rank-one update per
+  row, restoring exactly the uncertainty the held states would otherwise have
+  lost. The restoring waits until every row is in, because restoring between
+  rows runs a different filter from the one the Joseph form defines.
 - **Whitening before Bierman.** The scalar-sequential update requires
   independent rows, so a measurement with a dense `R` is premultiplied by its
   inverse Cholesky factor first. Applying correlated rows without it is wrong,

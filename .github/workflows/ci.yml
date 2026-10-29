@@ -255,15 +255,16 @@ jobs:
           cargo run --release | tee report.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
-          # Ceiling, not a target. 20 KiB leaves headroom over the measured
-          # 18.5 KiB while still failing if a change reintroduces the
+          # Ceiling, not a target. 18 KiB leaves headroom over the measured
+          # 15.8 KiB while failing if a change reintroduces the dense
+          # held-state update, which peaked at 18.5 KiB, or the
           # expression-chained form that cost 35.3 KiB.
           #
           # This job could not build for three weeks — `cargo run` went
           # ambiguous when a second binary was added — and in that window the
           # peak grew 63 % unnoticed. A job that fails to build is a job that
           # measures nothing, so the build is now a separate step above.
-          test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
+          test "$peak" -lt 18432 || { echo "stack budget exceeded"; exit 1; }
       - name: the 15-state configuration must fit a 16 KiB stack
         working-directory: cortex-m-harness
         run: |
@@ -272,7 +273,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 10 464 B.
+          # not. Measured at 9 740 B.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
@@ -282,8 +283,9 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 22 %. Measured at 17 976 B.
-          test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
+          # predict path it shrinks it by 23 %. Measured at 12 540 B; the dense
+          # held-state update this ceiling would catch peaked at 17 976 B.
+          test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |

@@ -20,6 +20,24 @@ breaking wire change becomes `v2` rather than a crate version bump.
   and handed the filter `diag(σ²)` as an ε-coordinate covariance, which the two
   are only at the anchor with no velocity. Nothing in the filter changed, and no
   dataset result moves.
+- **`Eskf::update` is exact from a non-zero error state.** With more than one
+  row, the Bierman path subtracted the standing error state's effect row by
+  row, which matches `K H δx` only to first order. It now runs the recursion
+  from `δx`, which is `K (ν − H δx)` exactly. The engine feeds back after every
+  update, so `δx` is always zero there and nothing it produces changes.
+
+### Changed
+
+- **Held-state updates stay factored.** A measurement with `HeldStates` — the
+  default zero-velocity update holds attitude — used to multiply `P` out, apply
+  the Joseph form and factor the result back. It now runs Bierman and then
+  restores the held states' share with one rank-one update per row, using
+  the new `Ud::rank_one_update` (Agee–Turner). Same covariance to 1.5e-15. On
+  Cortex-M4 a 21-state `apply_zupt` drops from 18 904 to 7 604 bytes of stack,
+  which makes `add_imu` the peak again in every configuration: 16 212 bytes
+  for 21 states, 12 540 with `f32-covariance`, 9 740 for 15 states. It also
+  does under a fifth of the work, and a twenty-sixth with `f32-covariance`,
+  where it now runs on the FPU.
 
 ### Added
 

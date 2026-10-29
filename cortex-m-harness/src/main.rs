@@ -240,6 +240,20 @@ fn main() -> ! {
             // SysTick counts down.
             let ticks = start.wrapping_sub(end) & 0x00FF_FFFF;
             hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", ticks / 500);
+
+            // The held-state update, timed one call at a time: a single call
+            // has been large enough that a batch would wrap the 24-bit
+            // counter. Each runs after a propagation, as it would on a
+            // vehicle, and only the update itself is counted.
+            let mut total: u64 = 0;
+            for k in 0..20 {
+                let _ = engine.add_imu(sample(5.0 + 0.005 * k as f64));
+                let start = cortex_m::peripheral::SYST::get_current();
+                let _ = engine.apply_zupt(Vec3::splat(0.02));
+                let end = cortex_m::peripheral::SYST::get_current();
+                total += u64::from(start.wrapping_sub(end) & 0x00FF_FFFF);
+            }
+            hprintln!("INSTRUCTIONS apply_zupt = {} (only under -icount shift=0)", total / 20);
         }
     }
 

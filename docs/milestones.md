@@ -667,9 +667,28 @@ Each step is gated on a measurement rather than on the previous one compiling.
       | 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
 
       `f32` takes 22 % off `add_imu` because Thornton's working array halves.
-      The remaining excess over M8's 16 432 is the held-state path's dense
-      round trip, which a factored held-state update would remove and Bierman
-      cannot express. Campaign results are bit-identical throughout.
+      Campaign results are bit-identical throughout.
+
+      The remaining excess over M8's 16 432 was the held-state path's dense
+      round trip, recorded here at the time as something Bierman cannot
+      express. That was wrong. Joseph with the held rows of the gain zeroed
+      is the optimal posterior plus `G S Gᵀ`, `G` being the optimal gain's
+      held rows: a positive term with one rank-one piece per measurement row,
+      which the Agee–Turner update adds to the factors. With that, nothing on
+      the data path forms `P`:
+
+      | configuration | `add_imu` | `apply_zupt` | peak |
+      |---|---|---|---|
+      | 21-state, `f64` | 16 212 | 7 604 | **16 212** |
+      | 21-state, `f32-covariance` | 12 540 | 6 404 | **12 540** |
+      | 15-state (`reduced-state`) | 9 740 | 5 260 | **9 740** |
+
+      Every configuration is now below M8's peak. A held zero-velocity update
+      also does under a fifth of the work at `f64` and a twenty-sixth at
+      `f32-covariance`, where it now runs on the single-precision FPU rather
+      than in soft-float: 77 471 to 13 746 and 79 830 to 3 086 SysTick ticks
+      under `-icount shift=0`. Against the dense Joseph form it agrees to
+      1.5e-15 at `f64`.
 
 - [x] **Single-precision covariance**, `--features f32-covariance`, which the
       factored form is what made available: `cond(U√D) = √cond(P)`, so the 13.6

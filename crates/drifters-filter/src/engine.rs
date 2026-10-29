@@ -1388,8 +1388,10 @@ mod tests {
 
     #[test]
     fn holding_keeps_the_covariance_positive_definite() {
-        // Joseph form is valid for any gain, not only the optimal one, which
-        // is what makes zeroing gain rows safe. Verified over many updates.
+        // A held update takes uncertainty out by Bierman and puts the held
+        // rows' share back by rank-one updates, 400 times over here. Neither
+        // step can make `D` negative, and this checks that the round trip
+        // does not drift either.
         let mut e = GinsEngine::new(options()).unwrap();
         for i in 1..=20_000 {
             let t = i as F * 0.01;
