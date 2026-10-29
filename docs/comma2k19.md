@@ -1,0 +1,141 @@
+# comma2k19: a phone-class IMU on the highway
+
+[comma2k19](https://github.com/commaai/comma2k19) is comma.ai's record of 33
+hours of commuting on California's I-280: an EON — a phone-class IMU and
+camera on the windshield — a u-blox receiver in the car's grey panda, CAN
+from the car, and for every video frame a pose from comma's post-processed
+tightly-coupled INS/GNSS/vision optimiser. It is the third real dataset here,
+after KF-GINS's tactical-grade van and GSDC's phone, and the first with
+wheel speed.
+
+Everything below uses the 64 one-minute segments of the Hugging Face demo
+split, 21 drives of one RAV4. Fetching them, and the single segment comma ships
+in its repository, is in [datasets.md](datasets.md#comma2k19).
+
+```bash
+cargo run --release -p drifters-cli -- comma --dir datasets/comma2k19-holdout --mount 3.33,0.68 --wheel 0.3 --nhc 0.2,0.5 --outage 20,30
+```
+
+**The reference is an estimate.** comma's poses are far better than the u-blox
+fixes and the best this dataset offers, but they are not survey truth, so a
+few decimetres of difference between this filter and the reference is not
+attributable to either. Every error on this page is against that reference.
+
+**Fitted on one set, reported on another.** The latency, the mount and every
+sigma below were chosen on the July drives — 19 segments — and then applied
+unchanged to the 45 August segments. The holdout tables are the result; the
+fit set's own numbers are within a few per cent of them except where noted.
+
+## What the data needed before the filter saw it
+
+Each of these was measured on the data, and each would have cost more than any
+tuning could recover.
+
+- **comma's arrays are Fortran-ordered.** A `(6256, 3)` accelerometer array is
+  every x, then every y, then every z. The converted demo split is C-ordered.
+  [`npy`](../crates/drifters-cli/src/npy.rs) reads both, and the original and
+  converted copies of the shared segment replay to identical numbers.
+- **The u-blox fix is logged about 80 ms after its epoch.** Shifting each
+  segment's fixes to best match the reference gives a median of −80 ms,
+  interquartile −110 to −60, and takes the fixes' horizontal RMS from 1.98 m to
+  0.82 m. The fix's own UTC stamp, mapped onto the boot clock through the
+  frames' GPS times, lands 202 ms early instead — so one of those two clocks is
+  off by ~120 ms, and this dataset cannot say which. The replay uses the log
+  time less 80 ms, which is what lines up with the reference.
+- **The IMU's axes are the camera's**, forward-right-down: the specific force
+  predicted from the reference trajectory in the camera frame matches the
+  accelerometer to 0.5 m/s² RMS. The camera is pitched 3.33° and yawed 0.68°
+  from the direction of travel on the fit drives, 3.68° and 0.80° on the
+  holdout. `--mount` rotates the IMU into the vehicle frame.
+- **Accelerometer and gyro timestamps differ in 30 of the 64 segments**, so the
+  reader pairs samples by time rather than by index.
+- **The u-blox height is ellipsoidal**, this library's datum. The fixes sit a
+  median 1.6 m below the camera; horizontally they sit on it, with a
+  per-segment scatter of ±0.7 m in no consistent direction. No lever arm is
+  modelled, and the vertical figures carry whatever of the 1.6 m is antenna
+  placement.
+
+## Results, on the 45 holdout segments
+
+Horizontal error in metres, on the fix epochs from ten seconds after the filter
+starts, against the reference:
+
+| | RMS | p50 | p95 | heading RMS |
+|---|---|---|---|---|
+| u-blox fixes | 1.404 | 1.174 | 2.456 | |
+| ESKF, GNSS only | 1.397 | 1.161 | 2.503 | 5.22° |
+| ESKF, with wheel speed and NHC | **1.389** | **1.122** | 2.481 | **1.99°** |
+
+Horizontal error at the end of a GNSS outage beginning twenty seconds after the
+filter starts, over 44 segments — the 45th does not pass 3 m/s until 43 s in,
+so the window runs past its data:
+
+| outage | IMU alone, median / p95 | with wheel speed and NHC, median / p95 / max |
+|---|---|---|
+| 10 s | 6.6 / 18.7 m | **3.6 / 7.6 / 8.1 m** |
+| 30 s | 70.7 / 313 m | **11.6 / 41.4 / 45.8 m** |
+
+## What it says
+
+**Absolute accuracy here is the receiver's.** The u-blox runs at 5–10 Hz and its
+error is mostly a slowly varying offset, about a metre, different on every
+segment. Nothing an IMU measures can see an offset that moves at the speed
+the vehicle does, so the filter lands on the fixes and stays there: 1.397 m
+against 1.404, and odometry buys 3 % at the median. Fix NIS of 0.9 against an
+expected 3 says the same from the other side — the part of the fix error that
+behaves like white noise is well under the 0.5 m sigma; the rest is bias. This
+is the GSDC lesson again from a different direction: there the fixes were 1 Hz
+and noisy, and fusing an IMU bought up to 30 %; here they are fast and smooth,
+and there is nothing for it to buy.
+
+**What the IMU buys is time without GNSS.** Alone, a phone IMU is at 7 m after
+ten seconds and 71 m after thirty, with a tail into the hundreds. With CAN
+wheel speed and non-holonomic constraints the same outage ends at 3.6 m and
+11.6 m, and the worst of 44 segments at 46 m. That is the case for this library
+on a car: not a better fix, but a fix that survives a tunnel.
+
+**Non-holonomic constraints are what make the heading.** On a highway the
+vehicle rarely accelerates hard enough for GNSS to observe yaw, and GNSS-only
+heading is 5.2° RMS. The constraint ties the body's lateral velocity to zero,
+which is a heading measurement whenever the car moves, and takes it to 2.0°.
+The median segment does far better than that — the aided p95 is 1.1° — and the
+RMS is one segment: Android's gyro calibration leaves −0.22°/s of yaw bias on
+2018-08-17--12-07-08/37, the car slows from 9.5 m/s to a stop, the constraint
+switches off below 3 m/s, and the heading walks 17.7° in a minute. The
+zero-velocity update cannot catch it, because it holds attitude by design. A
+zero-angular-rate update while stopped would read the bias directly; this
+library does not have one.
+
+**A constraint too tight to fail is one that fails.** At 0.1 m/s on both rows,
+three of the nineteen fit segments drifted 74–126 m in a thirty-second outage.
+Tracing one: every non-holonomic update was rejected by the chi-squared gate
+for the whole outage, and 92 m of cross-track error built up under a heading
+only 1–3° out. At 28 m/s a degree of heading error is 0.5 m/s of lateral body
+velocity, five sigma at 0.1, so once the heading had drifted a degree the one
+measurement that could correct it was refused, and the error grew unopposed.
+The engine's lockout recovery, which inflates the covariance after repeated
+rejections, never fired: it counts consecutive rejections across every
+measurement type, and the wheel-speed update in between was accepted every
+time. A lateral sigma of 0.2 m/s removes the failure and takes the fit set's
+thirty-second p95 from 100 m to 30; the vertical sigma makes no difference
+between 0.2 and 1 m/s once the lateral is right.
+
+**The mount is a modest, mixed gain.** Rotating the IMU into the vehicle frame
+improves the fit set's heading from 1.59° to 1.19° RMS and the median
+thirty-second outage from 9.5 m to 7.9, and worsens the worst one from 48 m to
+70. It is kept because the median is what a user sees.
+
+## Fitting
+
+On the 19 fit segments, one knob at a time from the GNSS-only optimum:
+
+| knob | tried | chosen | why |
+|---|---|---|---|
+| fix horizontal sigma | 0.5, 1, 2 m | 0.5 | lowest RMS and p95, GNSS only |
+| IMU noise scale | 1, 3, 10 aided; to 100 GNSS only | 3 | 1 worsens the median fix; 10 the outages |
+| wheel-speed sigma | 0.2, 0.3, 0.5 m/s | 0.3 | 0.2 more than doubles the 30 s p95; 0.5 no better |
+| NHC sigma, lateral | 0.1, 0.2, 0.3, 0.5 m/s | 0.2 | 0.1 is rejected mid-outage, above |
+| NHC sigma, vertical | 0.2, 0.3, 0.5, 1 m/s | 0.5 | no difference from 0.2 to 1 |
+
+The odometry runs at 10 Hz rather than at the CAN rate: consecutive CAN samples
+share their error, and applying each would count it ninety times a second.

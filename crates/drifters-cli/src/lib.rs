@@ -13,10 +13,12 @@
 /// place for one.
 pub use drifters_gnss::{differential, rinex, robust, smooth, tdcp, wls};
 
+pub mod comma;
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
 pub mod nees;
+pub mod npy;
 pub mod plot;
 pub mod stats;
 pub mod truth;
@@ -946,6 +948,50 @@ pub fn tune_gsdc(
         });
     }
     Ok(rows)
+}
+
+/// Knobs for a comma2k19 replay: how each segment is read, and how it is run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CommaOptions {
+    /// See [`comma::ReadOptions`].
+    pub read: comma::ReadOptions,
+    /// See [`comma::ReplayOptions`].
+    pub replay: comma::ReplayOptions,
+}
+
+/// Every segment under a directory, replayed.
+#[derive(Debug, Default)]
+pub struct CommaReport {
+    /// One per segment that ran.
+    pub segments: Vec<comma::SegmentReport>,
+    /// Segments that could not be read or started, and why. Listed rather than
+    /// failing the run: one segment that never moves should not cost the other
+    /// sixty-three.
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Replay every comma2k19 segment at or below `root`.
+pub fn run_comma(
+    root: &Path,
+    options: &CommaOptions,
+) -> Result<CommaReport, Box<dyn std::error::Error>> {
+    let dirs = comma::find_segments(root)?;
+    if dirs.is_empty() {
+        return Err(format!("no comma2k19 segments under {}", root.display()).into());
+    }
+    let mut report = CommaReport::default();
+    for dir in dirs {
+        let outcome = comma::read_segment(&dir, &options.read)
+            .map_err(|e| e.to_string())
+            .and_then(|segment| {
+                comma::replay(&segment, &options.replay).map_err(|e| e.to_string())
+            });
+        match outcome {
+            Ok(r) => report.segments.push(r),
+            Err(e) => report.skipped.push((dir.display().to_string(), e)),
+        }
+    }
+    Ok(report)
 }
 
 /// Convenience for callers that do not depend on `drifters-core` directly.

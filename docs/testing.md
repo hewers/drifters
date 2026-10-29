@@ -638,6 +638,18 @@ The result on smartphone data is a **negative one**, recorded in full at
 1.7 %. That is worth as much as a positive result — it bounds where this filter
 helps, and it was diagnosed rather than tuned away.
 
+comma2k19 is the second dataset scored this way, against comma's
+post-processed pose rather than survey truth, so a few decimetres there are not
+resolvable. `comma2k19_regression` replays one segment and holds two things:
+that the filter lands on the u-blox fixes' own accuracy, which a mistimed fix
+or a misread array breaks; and that wheel speed and non-holonomic constraints
+bound a thirty-second outage to under a quarter of the IMU's drift. Both
+failures were introduced to check that the test catches them. The fixes and the
+filter are scored on the same epochs: scoring the filter at every IMU sample
+weighs a 5 Hz segment twice as heavily in one column as the other, and made the
+filter's median look 0.35 m worse than the fixes it was tracking.
+[comma2k19.md](comma2k19.md) has the results.
+
 ## Layer 12 — the smoother, against generated truth
 
 A smoother cannot be validated on a real dataset. The measurements are the

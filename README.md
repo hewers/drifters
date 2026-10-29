@@ -32,7 +32,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 442, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 455, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -181,6 +181,25 @@ Three findings on the way there are worth more than the number:
 Full diagnosis in [docs/gsdc.md](docs/gsdc.md) and
 [docs/gsdc-observables.md](docs/gsdc-observables.md).
 
+### A car, with wheel speed: comma2k19
+
+comma.ai's [comma2k19](https://github.com/commaai/comma2k19) pairs a phone-class
+IMU with a 10 Hz u-blox receiver and the car's CAN. On 45 held-out highway
+segments, scored against comma's own post-processed pose:
+
+| | horizontal RMS | heading RMS | after a 30 s GNSS outage, median / p95 |
+|---|---|---|---|
+| u-blox fixes | 1.40 m | | |
+| ESKF, IMU + GNSS | 1.40 m | 5.2° | 71 m / 313 m |
+| ESKF, + wheel speed and non-holonomic | **1.39 m** | **2.0°** | **11.6 m / 41 m** |
+
+The receiver's error is a slowly varying metre that no IMU can see, so the
+fused fix is no better than the receiver's own. What the library buys on a car
+is the outage. Getting there meant measuring an 80 ms fix latency, a camera
+pitched 3.3° off the direction of travel, and a constraint sigma tight enough
+that the gate refused it exactly when the heading needed it. Details in
+[docs/comma2k19.md](docs/comma2k19.md).
+
 ## Status
 
 **Working and validated:** core math, strapdown mechanization, 21-state ESKF,
@@ -297,6 +316,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [frames.md](docs/frames.md) — coordinate frames and conventions
 - [testing.md](docs/testing.md) — eleven layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
+- [comma2k19.md](docs/comma2k19.md) — a phone IMU on the highway, with wheel speed
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
 - [milestones.md](docs/milestones.md) — roadmap and measured outcomes

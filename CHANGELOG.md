@@ -46,6 +46,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`drifters comma`** — a reader and replay for comma.ai's
+  [comma2k19](https://github.com/commaai/comma2k19): phone-class IMU, 10 Hz
+  u-blox, CAN wheel speed, scored against comma's post-processed pose, with
+  optional wheel-speed and non-holonomic aiding and a GNSS outage. A `.npy`
+  reader for comma's Fortran-ordered arrays, a regression test on comma's
+  example segment, and a script unpacking the 64-segment Hugging Face demo
+  split. On 45 held-out segments the filter matches the receiver, 1.39 m
+  against 1.40, and bounds a thirty-second outage to 11.6 m median against
+  71 m on the IMU alone. See [`docs/comma2k19.md`](docs/comma2k19.md).
 - **Cortex-M7's double-precision FPU, measured and in CI.** Neither Cortex-M4
   nor M7 has floating-point SIMD, but many M7 parts have a double-precision
   FPU that the generic `thumbv7em` target leaves unused. Built with
