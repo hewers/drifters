@@ -153,8 +153,6 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Replay a GSDC phone-trace and report the filter against the phone's own
-/// GNSS solution, both scored on ground truth.
 /// `drifters comma --dir <path>`: every comma2k19 segment below `path`.
 ///
 /// ```text
@@ -323,6 +321,8 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+/// Replay a GSDC phone-trace and report the filter against the phone's own
+/// GNSS solution, both scored on ground truth.
 fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");

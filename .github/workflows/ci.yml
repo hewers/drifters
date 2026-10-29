@@ -285,7 +285,7 @@ jobs:
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
           # predict path it shrinks it by 23 %. Measured at 12 420 B; the dense
-          # held-state update this ceiling would catch peaked at 17 976 B.
+          # held-state update this ceiling would catch peaked at 18 048 B.
           test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
       # Many Cortex-M7 parts have a double-precision FPU, and this is the build
       # that uses it: every `f64` operation in hardware, a quarter of the work

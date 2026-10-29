@@ -464,15 +464,15 @@ So `core::simd` above was never vectorising: eight lanes lower to eight scalar
 FPU instructions. What it changed was what the optimiser could keep in
 registers, and the same is available on stable by writing the eight partial
 sums as named locals rather than as an array, with the same reduction order and
-so bit-identical results. Per `add_imu`, in SysTick ticks under
-`-icount shift=0` — the harness's `INSTRUCTIONS` line, which on these boards is
-one tick per 40 instructions:
+so bit-identical results. Per `add_imu`, built with rustc 1.99, in SysTick
+ticks under `-icount shift=0` — the harness's `INSTRUCTIONS` line, which on
+these boards is one tick per 40 instructions:
 
 | | array, stable | named, stable | `core::simd`, nightly |
 |---|---|---|---|
-| Cortex-M4, `f64` | 21 394 | **20 308** | 22 750 |
-| Cortex-M4, `f32-covariance` | 11 865 | **9 949** | 9 631 |
-| Cortex-M7 with DP FPU, `f64` | 7 418 | **5 133** | 4 851 |
+| Cortex-M4, `f64` | 21 388 | **20 321** | 22 750 |
+| Cortex-M4, `f32-covariance` | 11 843 | **9 937** | 9 631 |
+| Cortex-M7 with DP FPU, `f64` | 7 361 | **5 087** | 4 851 |
 
 The nightly column is against nightly's own baseline, which on the M4 at `f64`
 is 24 157: the toolchain moved more than the cfg did. Stack costs at most 80
@@ -488,25 +488,25 @@ nowhere. Measured on `mps2-an500`:
 
 | per call, ticks | Cortex-M4 | Cortex-M7, `target-cpu=cortex-m7` |
 |---|---|---|
-| `add_imu`, 21-state, `f64` | 20 308 | **5 133** |
-| `add_imu`, 21-state, `f32-covariance` | 9 949 | 5 292 |
-| `add_imu`, 15-state | 5 533 | **2 362** |
-| held `apply_zupt`, 21-state, `f64` | 13 746 | **1 221** |
+| `add_imu`, 21-state, `f64` | 20 321 | **5 087** |
+| `add_imu`, 21-state, `f32-covariance` | 9 937 | 5 248 |
+| `add_imu`, 15-state | 5 445 | **2 365** |
+| held `apply_zupt`, 21-state, `f64` | 13 691 | **1 163** |
 
-Four times less work per sample and eleven times per held update, with no
+Four times less work per sample and nearly twelve per held update, with no
 change to the code. The results do not move at all: hardware and soft-float
 `f64` are both correctly rounded, Rust does not contract a multiply and an add
 into a fused one, and a fingerprint over the final state and every covariance
 entry is identical between the two builds, at both precisions.
 
 Two things follow. On such a part `f32-covariance` buys memory and not work —
-5 292 against 5 133, the difference being conversions — so the reason to
+5 248 against 5 087, the difference being conversions — so the reason to
 choose it there is the 924 bytes rather than the arithmetic. And the flag
 matters more than the precision did: an M7 built for the generic `thumbv7em`
 target runs `f64` in soft-float exactly as an M4 does, and so does an M7 whose
-FPU is single precision — 20 397 with `-C target-feature=-fp64`, against the
-M4's 20 308. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
-on the M4 is a wash, 4 % better at `f64` and 5 % worse with `f32-covariance`;
+FPU is single precision — 20 639 with `-C target-feature=-fp64`, against the
+M4's 20 321. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
+on the M4 is a wash, 5 % better at `f64` and 5 % worse with `f32-covariance`;
 and `-C target-feature=+fp64` without the CPU works, but `fp64` is a feature
 rustc warns is unstable.
 

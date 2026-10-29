@@ -359,7 +359,7 @@ single-precision is most of the soft-float question. Per `add_imu` on
       accumulators get most of it on stable — 16 % off `add_imu` on the M4
       with `f32-covariance`, bit-identical. The lever that is there is the
       M7's optional double-precision FPU: with `-C target-cpu=cortex-m7`,
-      `add_imu` does a quarter of the work and a held update an eleventh,
+      `add_imu` does a quarter of the work and a held update under an eleventh,
       again bit-identical. CI builds and runs that configuration on
       `mps2-an500`. See [testing.md](testing.md), Layer 9.
 
@@ -689,18 +689,19 @@ Each step is gated on a measurement rather than on the previous one compiling.
       is the optimal posterior plus `G S Gᵀ`, `G` being the optimal gain's
       held rows: a positive term with one rank-one piece per measurement row,
       which the Agee–Turner update adds to the factors. With that, nothing on
-      the data path forms `P`:
+      the data path forms `P`. Built with rustc 1.99, under which the dense
+      path above measures 18 968, 18 048 and 10 536:
 
       | configuration | `add_imu` | `apply_zupt` | peak |
       |---|---|---|---|
-      | 21-state, `f64` | 16 212 | 7 604 | **16 212** |
-      | 21-state, `f32-covariance` | 12 540 | 6 404 | **12 540** |
-      | 15-state (`reduced-state`) | 9 740 | 5 260 | **9 740** |
+      | 21-state, `f64` | 16 156 | 7 676 | **16 156** |
+      | 21-state, `f32-covariance` | 12 420 | 6 476 | **12 420** |
+      | 15-state (`reduced-state`) | 9 684 | 5 340 | **9 684** |
 
       Every configuration is now below M8's peak. A held zero-velocity update
       also does under a fifth of the work at `f64` and a twenty-sixth at
       `f32-covariance`, where it now runs on the single-precision FPU rather
-      than in soft-float: 77 471 to 13 746 and 79 830 to 3 086 SysTick ticks
+      than in soft-float: 77 175 to 13 691 and 79 524 to 3 018 SysTick ticks
       under `-icount shift=0`. Against the dense Joseph form it agrees to
       1.5e-15 at `f64`.
 

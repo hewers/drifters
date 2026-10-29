@@ -43,11 +43,11 @@ breaking wire change becomes `v2` rather than a crate version bump.
   the Joseph form and factor the result back. It now runs Bierman and then
   restores the held states' share with one rank-one update per row, using
   the new `Ud::rank_one_update` (Agee–Turner). Same covariance to 1.5e-15. On
-  Cortex-M4 a 21-state `apply_zupt` drops from 18 904 to 7 604 bytes of stack,
-  which makes `add_imu` the peak again in every configuration: 16 212 bytes
-  for 21 states, 12 540 with `f32-covariance`, 9 740 for 15 states. It also
-  does under a fifth of the work, and a twenty-sixth with `f32-covariance`,
-  where it now runs on the FPU.
+  Cortex-M4, built with rustc 1.99, a 21-state `apply_zupt` drops from 18 968
+  to 7 676 bytes of stack, which makes `add_imu` the peak again in every
+  configuration: 16 156 bytes for 21 states, 12 420 with `f32-covariance`,
+  9 684 for 15 states. It also does under a fifth of the work, and a
+  twenty-sixth with `f32-covariance`, where it now runs on the FPU.
 - **The factored recursions' dot product keeps eight named partial sums**
   rather than an array of eight. Same reduction order, so bit-identical, and
   it gets most of what `--cfg drifters_nightly_simd` gets, on stable: `add_imu`
@@ -76,10 +76,10 @@ breaking wire change becomes `v2` rather than a crate version bump.
   nor M7 has floating-point SIMD, but many M7 parts have a double-precision
   FPU that the generic `thumbv7em` target leaves unused. Built with
   `-C target-cpu=cortex-m7`, every `f64` operation is a hardware instruction:
-  `add_imu` does a quarter of the work it does on the M4 and a held update an
-  eleventh, with bit-identical results. The bare-metal harness now reports
-  the core and whether `f64` is in hardware, and CI runs that build on QEMU's
-  `mps2-an500` with a stack ceiling and the panic audit. See
+  `add_imu` does a quarter of the work it does on the M4 and a held update
+  under an eleventh, with bit-identical results. The bare-metal harness now
+  reports the core and whether `f64` is in hardware, and CI runs that build on
+  QEMU's `mps2-an500` with a stack ceiling and the panic audit. See
   [`docs/testing.md`](docs/testing.md), Layer 9.
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
   geodetic position, answering gravity, earth rate, transport rate and the radii

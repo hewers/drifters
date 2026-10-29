@@ -258,9 +258,9 @@ rustc 1.99:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 156 | 7 676 *(was 18 904)* | **16 156** |
-| 21-state, `f32-covariance` | 12 420 | 6 476 *(was 17 976)* | **12 420** |
-| 15-state (`reduced-state`) | 9 684 | 5 340 *(was 10 464)* | **9 684** |
+| 21-state, `f64` | 16 156 | 7 676 *(was 18 968)* | **16 156** |
+| 21-state, `f32-covariance` | 12 420 | 6 476 *(was 18 048)* | **12 420** |
+| 15-state (`reduced-state`) | 9 684 | 5 340 *(was 10 536)* | **9 684** |
 
 `f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
 the largest single object on that frame and it halves.
