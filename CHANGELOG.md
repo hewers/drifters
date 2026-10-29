@@ -35,6 +35,17 @@ breaking wire change becomes `v2` rather than a crate version bump.
   row, which matches `K H δx` only to first order. It now runs the recursion
   from `δx`, which is `K (ν − H δx)` exactly. The engine feeds back after every
   update, so `δx` is always zero there and nothing it produces changes.
+- **The bare-metal harness's instruction count could wrap, and did.** It timed
+  500 `add_imu` calls as one batch against SysTick, a 24-bit counter that
+  wraps above 33 554 ticks per call, and every soft-float build costs more than
+  that. The 21-state figure it printed, 20 321, is 87 425; the 15-state one,
+  5 445, is 38 995. What rested on them moves with them: a Cortex-M7 with a
+  double-precision FPU does a seventeenth of the M4's work, not a quarter, and
+  `f32-covariance` removed 85 % of it when it landed, not 41 %. Calls are now
+  timed one at a time, and a call near the wrap is reported as untrustworthy
+  rather than as a number. The `f32-covariance`, Cortex-M7 and held-update
+  figures were below the wrap and stand. See
+  [`docs/testing.md`](docs/testing.md), Layer 9.
 
 ### Changed
 
@@ -51,8 +62,9 @@ breaking wire change becomes `v2` rather than a crate version bump.
 - **The factored recursions' dot product keeps eight named partial sums**
   rather than an array of eight. Same reduction order, so bit-identical, and
   it gets most of what `--cfg drifters_nightly_simd` gets, on stable: `add_imu`
-  does 5 % less work on Cortex-M4, 16 % less with `f32-covariance`, and 31 %
-  less on a Cortex-M7 with a double-precision FPU. Up to 80 bytes of stack.
+  does 16 % less work on Cortex-M4 with `f32-covariance` and 31 % less on a
+  Cortex-M7 with a double-precision FPU, and 1.2 % less with `f64` in
+  software, where the arithmetic dominates. Up to 80 bytes of stack.
 
 ### Added
 
@@ -76,7 +88,7 @@ breaking wire change becomes `v2` rather than a crate version bump.
   nor M7 has floating-point SIMD, but many M7 parts have a double-precision
   FPU that the generic `thumbv7em` target leaves unused. Built with
   `-C target-cpu=cortex-m7`, every `f64` operation is a hardware instruction:
-  `add_imu` does a quarter of the work it does on the M4 and a held update
+  `add_imu` does a seventeenth of the work it does on the M4 and a held update
   under an eleventh, with bit-identical results. The bare-metal harness now
   reports the core and whether `f64` is in hardware, and CI runs that build on
   QEMU's `mps2-an500` with a stack ceiling and the panic audit. See

@@ -299,7 +299,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 - **On a Cortex-M7, build with `-C target-cpu=cortex-m7`.** Many M7 parts have
   a double-precision FPU, and the generic `thumbv7em` target does not use it.
   With the flag every `f64` operation is a hardware instruction and `add_imu`
-  does a quarter of the work, with bit-identical results. Neither core has
+  does a seventeenth of the work, with bit-identical results. Neither core has
   floating-point SIMD; what there is, and what it is worth, is in
   [docs/testing.md](docs/testing.md), Layer 9.
 

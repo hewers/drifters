@@ -359,9 +359,16 @@ single-precision is most of the soft-float question. Per `add_imu` on
       accumulators get most of it on stable — 16 % off `add_imu` on the M4
       with `f32-covariance`, bit-identical. The lever that is there is the
       M7's optional double-precision FPU: with `-C target-cpu=cortex-m7`,
-      `add_imu` does a quarter of the work and a held update under an eleventh,
-      again bit-identical. CI builds and runs that configuration on
+      `add_imu` does a seventeenth of the work and a held update under an
+      eleventh, again bit-identical. CI builds and runs that configuration on
       `mps2-an500`. See [testing.md](testing.md), Layer 9.
+- [x] **The instruction count could wrap, and did.** SysTick is 24 bits and
+      the harness timed 500 `add_imu` calls as one batch, which wraps above
+      33 554 ticks per call. Every soft-float figure was a remainder — 20 321
+      for what is 87 425 — and so were the claims resting on them: the M7 does
+      a seventeenth of the M4's work, not a quarter, and `f32-covariance`
+      removed 85 % of it, not 41 %. Calls are now timed one at a time. See
+      [testing.md](testing.md), Layer 9.
 
 ### Still needs a board
 
@@ -633,12 +640,14 @@ Each step is gated on a measurement rather than on the previous one compiling.
       measurement Jacobian and the proto schema.
 
       Instructions retired per `add_imu` on `mps2-an386` say it does not pay.
-      `f32-covariance` already took the build from 22 415 to 13 238 — 41 % —
-      and of what remains the mechanization is 3 209, or 24 %. Even converting
-      as well as the covariance did, at 56 %, the rewrite is worth about 13 %
-      of current, and it buys that by spending accuracy the covariance change
-      never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
-      anchor, and doing the arithmetic in `f32` would cost more.
+      `f32-covariance` already took the build from 89 524 to 13 238 — 85 % —
+      and of what remains the mechanization is 3 209, or 24 %. Even a perfect
+      conversion is worth at most that 24 % of current, and it buys it by
+      spending accuracy the covariance change never had to: `f32` position
+      *storage* alone costs 7 % of NIS at a 1 km anchor, and doing the
+      arithmetic in `f32` would cost more. (First written against 22 415, a
+      count that had wrapped, which put the covariance's share at 41 % and the
+      rewrite's worth at 13 %; see [testing.md](testing.md), Layer 9.)
 
       One cheaper thing was worth more and cost no precision: the earth model
       was evaluated afresh at every call site, about twelve `sin`/`cos` per

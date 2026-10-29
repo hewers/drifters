@@ -93,7 +93,9 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
 - On `thumbv7em-none-eabihf` the UD routines compile to `vmul.f32`, `vdiv.f32`
   and `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
   `__aeabi_dadd` and `__aeabi_ddiv` without it. Measured over a full `add_imu`,
-  that is 22 415 instructions retired against **13 238**.
+  that is 89 524 instructions retired against **13 238**, a seventh of the
+  work. (Recorded here as 22 415 until the harness was found to wrap its
+  counter on soft-float builds; see [testing.md](../testing.md), Layer 9.)
 - The covariance halves, 1 848 bytes to 924, and the engine goes 3 240 to 2 320.
 - Position stays `f64` on every target, so the remaining soft-float cost is the
   mechanization's. [adr/0009](0009-local-first-architecture.md) records why
@@ -102,7 +104,7 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
   emulate `f32` too, and gain only the smaller footprint.
 - A Cortex-M7 with a double-precision FPU, built with
   `-C target-cpu=cortex-m7`, runs every `f64` operation in hardware. `add_imu`
-  does a quarter of the work it does on the M4, bit-identically, and
+  does a seventeenth of the work it does on the M4, bit-identically, and
   `f32-covariance` there saves its 924 bytes and no arithmetic — slightly the
   reverse, for the conversions. Measured in [testing.md](../testing.md),
   Layer 9.

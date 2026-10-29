@@ -368,16 +368,18 @@ whose FPU is single-precision, that is the whole soft-float question, since an
 cd cortex-m-harness && cargo run --release -- -icount shift=0
 ```
 
-Measured per `add_imu` on `mps2-an386`:
+Measured per `add_imu` on `mps2-an386` when this section was written, and
+corrected since: the `f64` figures were what was left after the counter wrapped,
+and [the section on that](#and-it-has-to-count-what-it-says-it-counts) is below.
 
-| configuration | instructions |
-|---|---|
-| 21-state, `f64` | **21 398** |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| configuration | as first published | corrected |
+|---|---|---|
+| 21-state, `f64` | 21 398 | **88 507** |
+| 21-state, `f32-covariance` | 11 868 | **11 868** |
+| 15-state (`reduced-state`) | 5 911 | **39 465** |
 
-The single-precision covariance removes 45 % of the work on this part, having
-cost nothing measurable in accuracy.
+The single-precision covariance removes 87 % of the work on this part, not the
+45 % first published, having cost nothing measurable in accuracy.
 
 **Stub one stage out at a time, and leave the rest running.** Stubbing two at
 once gives a number that is not the cost of either: with the covariance
@@ -407,21 +409,23 @@ Two things beat it.
 the mechanization calls them about twelve times per sample at two distinct
 latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
 answers all of them, which took `add_imu` from 13 238 to **11 868** with
-`f32-covariance` — 10.4 % — and 22 415 to 21 398 without. Results are
-bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it to
-that.
+`f32-covariance` — 10.4 % — and 89 524 to 88 507 without, 1.1 %, where the
+saved `sin`/`cos` are a smaller share of a larger total. (Published as 22 415 to
+21 398, both wrapped.) Results are bit-identical, and
+`local_agrees_with_the_free_functions_exactly` holds it to that.
 
 **`core::simd`**, from a two-line change. Expressing the lane-split dot products
 as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 22 336 | 21 422 | −4 % |
+| `f64` | 89 445 | 88 531 | −1.0 % |
 | `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
 
 (Measured before the earth-model change above, so both baselines are the older
 ones. The two are independent — one is the covariance recursion, the other the
-mechanization.)
+mechanization. The `f64` row was published as 22 336 against 21 422, a 4 %
+saving; both had wrapped, and two counter periods restore them.)
 
 On a part with no SIMD unit at all, because eight lanes lower to eight
 independent FPU operations without the iterator machinery the hand-written form
@@ -470,13 +474,16 @@ these boards is one tick per 40 instructions:
 
 | | array, stable | named, stable | `core::simd`, nightly |
 |---|---|---|---|
-| Cortex-M4, `f64` | 21 388 | **20 321** | 22 750 |
-| Cortex-M4, `f32-covariance` | 11 843 | **9 937** | 9 631 |
+| Cortex-M4, `f64` | 88 492 | **87 425** | 89 854 |
+| Cortex-M4, `f32-covariance` | 11 838 | **9 933** | 9 626 |
 | Cortex-M7 with DP FPU, `f64` | 7 361 | **5 087** | 4 851 |
 
-The nightly column is against nightly's own baseline, which on the M4 at `f64`
-is 24 157: the toolchain moved more than the cfg did. Stack costs at most 80
-bytes.
+So 1.2 % at `f64` in software, where the arithmetic itself dominates, 16.1 %
+with `f32-covariance` and 30.9 % on the M7. The `f64` row was first published as
+21 388, 20 321 and 22 750, with the saving put at 5 %; all three had wrapped. The
+nightly column is against nightly's own baseline (rustc 1.101 nightly), 90 195
+at `f64`, 10 059 with `f32-covariance` and 5 087 on the M7: `core::simd` buys
+0.4 %, 4.3 % and 4.6 % over it. Stack costs at most 80 bytes.
 
 ### The lever that is there: the M7's double-precision FPU
 
@@ -488,27 +495,29 @@ nowhere. Measured on `mps2-an500`:
 
 | per call, ticks | Cortex-M4 | Cortex-M7, `target-cpu=cortex-m7` |
 |---|---|---|
-| `add_imu`, 21-state, `f64` | 20 321 | **5 087** |
-| `add_imu`, 21-state, `f32-covariance` | 9 937 | 5 248 |
-| `add_imu`, 15-state | 5 445 | **2 365** |
-| held `apply_zupt`, 21-state, `f64` | 13 691 | **1 163** |
+| `add_imu`, 21-state, `f64` | 87 425 | **5 087** |
+| `add_imu`, 21-state, `f32-covariance` | 9 933 | 5 248 |
+| `add_imu`, 15-state | 38 995 | **2 365** |
+| held `apply_zupt`, 21-state, `f64` | 13 690 | **1 163** |
 
-Four times less work per sample and nearly twelve per held update, with no
-change to the code. The results do not move at all: hardware and soft-float
-`f64` are both correctly rounded, Rust does not contract a multiply and an add
-into a fused one, and a fingerprint over the final state and every covariance
-entry is identical between the two builds, at both precisions.
+Seventeen times less work per sample and nearly twelve per held update, with no
+change to the code. (First published as four times per sample, against M4
+figures of 20 321 and 5 445 that had wrapped.) The results do not move at all:
+hardware and soft-float `f64` are both correctly rounded, Rust does not contract
+a multiply and an add into a fused one, and a fingerprint over the final state
+and every covariance entry is identical between the two builds, at both
+precisions.
 
 Two things follow. On such a part `f32-covariance` buys memory and not work —
 5 248 against 5 087, the difference being conversions — so the reason to
 choose it there is the 924 bytes rather than the arithmetic. And the flag
 matters more than the precision did: an M7 built for the generic `thumbv7em`
 target runs `f64` in soft-float exactly as an M4 does, and so does an M7 whose
-FPU is single precision — 20 639 with `-C target-feature=-fp64`, against the
-M4's 20 321. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
-on the M4 is a wash, 5 % better at `f64` and 5 % worse with `f32-covariance`;
-and `-C target-feature=+fp64` without the CPU works, but `fp64` is a feature
-rustc warns is unstable.
+FPU is single precision — 87 745 with `-C target-feature=-fp64`, against the
+M4's 87 425. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
+on the M4 is a wash, 1.1 % better at `f64` and 5.4 % worse with
+`f32-covariance`; and `-C target-feature=+fp64` without the CPU works, but
+`fp64` is a feature rustc warns is unstable.
 
 As everywhere in this layer, this measures work and not cycles. A
 double-precision operation can take more cycles than a single-precision one on
@@ -544,6 +553,43 @@ _start`, and locked the core up on boot with `can't escalate 3 to HardFault`.
 The link argument now comes from `build.rs`, which `RUSTFLAGS` does not
 override. Both are one-line causes that a green checkmark would never have
 distinguished from a healthy run.
+
+### And it has to count what it says it counts
+
+Every soft-float `add_imu` figure this layer published was a remainder. The
+harness timed 500 calls as one batch against SysTick, a 24-bit down-counter that
+wraps every 16 777 216 ticks — 33 554 per call over 500 — and reading it says
+nothing about whether it did. With `f64` in software a 21-state `add_imu` costs
+about 87 000 ticks, so the batch wrapped twice and the harness printed what was
+left: 20 321. The 15-state filter wrapped once, 38 995 reported as 5 445. Every
+`f32-covariance` and Cortex-M7 figure, and every held-update figure, which was
+already timed one call at a time, sat below the wrap and is right.
+
+It surfaced the way the last one did, as a number that disagreed with another.
+A change that measured two to three times less work on every build with the
+covariance in hardware floating point measured 47 % *more* in soft-float, and
+250 % more at fifteen states. Timing the same calls a hundred at a time, which
+cannot wrap at these costs, gave 85 000 for the old code and 27 600 for the new,
+and 87 425 less two counter periods is within five ticks of the 20 321 the
+harness had printed.
+
+The harness now times each call on its own and sums in 64 bits, and if a single
+call comes within an eighth of the wrap it says so instead of printing a figure.
+What the correction changes:
+
+| claim | as published | corrected |
+|---|---|---|
+| `add_imu`, 21-state, `f64` | 20 321 | **87 425** |
+| `add_imu`, 15-state | 5 445 | **38 995** |
+| work removed by `f32-covariance`, when it landed | 41 %: 22 415 → 13 238 | **85 %**: 89 524 → 13 238 |
+| Cortex-M7 against M4, per `add_imu` | a quarter | **a seventeenth** |
+| named partial sums, at `f64` | −5 % | **−1.2 %** |
+| `-C target-cpu=cortex-m4`, at `f64` | −5 % | **−1.1 %** |
+
+Figures from commits that are not re-run here are corrected by adding back two
+counter periods, 2 × 33 554. The fixed harness confirms that on `main`: the
+published 21 398 corrects to 88 507, and it measures 88 492 there now. The
+`f32-covariance`, Cortex-M7 and held-update figures stand as published.
 
 ## Layer 10 — the data path links no panic machinery
 

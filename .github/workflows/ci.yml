@@ -288,11 +288,11 @@ jobs:
           # held-state update this ceiling would catch peaked at 18 048 B.
           test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
       # Many Cortex-M7 parts have a double-precision FPU, and this is the build
-      # that uses it: every `f64` operation in hardware, a quarter of the work
-      # per `add_imu`, bit-identical results. docs/testing.md recommends it, so
-      # it has to keep building and running. The banner check is what makes it
-      # mean anything — a flag that quietly stopped taking effect would still
-      # build, run and fit.
+      # that uses it: every `f64` operation in hardware, a seventeenth of the
+      # work per `add_imu`, bit-identical results. docs/testing.md recommends
+      # it, so it has to keep building and running. The banner check is what
+      # makes it mean anything — a flag that quietly stopped taking effect
+      # would still build, run and fit.
       - name: the Cortex-M7 double-precision build must run and fit
         working-directory: cortex-m-harness
         env:
