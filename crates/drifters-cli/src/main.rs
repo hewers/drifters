@@ -166,6 +166,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 ///   --zaru <sigma>         zero-angular-rate updates while CAN speed reads zero, rad/s
 ///   --outage <start,len>   withhold fixes, seconds after the filter starts
 ///   --settle <s>           unscored seconds after the start (default 10)
+///   --partial <spec>       partial-update shares, e.g. sg=30,sa=30 (percent)
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
 ///   --per-segment          a line per segment
 /// ```
@@ -217,6 +218,10 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 .map(str::parse)
                 .transpose()?
                 .unwrap_or(defaults.replay.settle),
+            partial: match flag(args, "--partial") {
+                Some(spec) => drifters_cli::partial_update_from_spec(spec)?,
+                None => defaults.replay.partial,
+            },
         },
     };
     let report = drifters_cli::run_comma(&dir, &options)?;

@@ -82,6 +82,21 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Partial updates**, `PartialUpdate` and `GinsOptions::partial_update`: a
+  state can take a percentage of each correction rather than all of it, the
+  partial-update Schmidt-Kalman filter of Brink in the factored form of
+  Ramos, Brink, Ganesh and Hurtado (JGCD, 2022). The covariance is the Joseph
+  form's for the gain applied, `P_opt + (I − Γ) K S Kᵀ (I − Γ)`, exact at
+  any shares and kept factored the way held states are, which become the
+  share-zero case; `Eskf::update_gated_partial` takes the shares directly.
+  Every state defaults to its whole share, which is the previous filter bit
+  for bit, and `drifters comma --partial` sweeps them. On comma2k19 no setting
+  helps: scale factors do not move enough in a minute to matter, and a half
+  share on the accelerometer bias improved the fit set's thirty-second
+  outages but not the holdout's median. A held update does 0.4 % more work
+  at `f64` and 1.6 % more with `f32-covariance`, the engine grows 24 bytes, and
+  `drifters.v1.GinsOptions` carries the shares as `partial_update_percent`,
+  empty for the ordinary filter so older messages decode unchanged.
 - **A zero-angular-rate update**, `measurement::zero_angular_rate` and
   `GinsEngine::apply_zero_rate`. Still, a gyro reads its bias plus the earth's
   rotation; this asserts exactly that, so a stop can read the yaw-rate bias a

@@ -70,6 +70,6 @@ pub mod ud;
 
 pub use config::{ConfigError, GinsOptions};
 pub use engine::GinsEngine;
-pub use eskf::{Eskf, FilterError};
+pub use eskf::{Eskf, FilterError, PartialUpdate};
 pub use measurement::{Measurement, StationarityConfig, StationarityDetector};
 pub use mechanization::mechanize;

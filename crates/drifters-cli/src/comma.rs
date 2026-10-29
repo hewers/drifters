@@ -417,6 +417,9 @@ pub struct ReplayOptions {
     pub outage: Option<(F, F)>,
     /// Seconds after the filter starts that are not scored.
     pub settle: F,
+    /// How much of each correction each state takes. See
+    /// [`drifters_filter::PartialUpdate`].
+    pub partial: drifters_filter::PartialUpdate,
 }
 
 impl Default for ReplayOptions {
@@ -428,6 +431,7 @@ impl Default for ReplayOptions {
             zaru_sigma: None,
             outage: None,
             settle: 10.0,
+            partial: drifters_filter::PartialUpdate::FULL,
         }
     }
 }
@@ -518,6 +522,7 @@ pub fn replay(
         initial_position_std: first.position_std,
         initial_velocity_std: Vec3::splat(0.5),
         initial_attitude_std: Vec3::new(2.0 * DEG_TO_RAD, 2.0 * DEG_TO_RAD, 5.0 * DEG_TO_RAD),
+        partial_update: options.partial,
         ..GinsOptions::default()
     }
     .with_initial_state(first.position, first.velocity.unwrap_or(Ned::ZERO), euler);

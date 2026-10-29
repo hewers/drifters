@@ -182,7 +182,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<9, 6>` (the noise mapping's navigation block) | 432 | 432 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 240 | **2 320** |
+| `GinsEngine` total | 3 264 | **2 344** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -251,10 +251,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 240 B | 2 304 B |
+| `GinsEngine` | 3 264 B | 2 320 B |
 | peak stack | 16 480 B | **9 504 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 840 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
 covariance was factored, and again after the held-state update was, built with
@@ -438,6 +438,10 @@ at the ingest boundary rather than allowed to poison the state.
   navigation states only; each IMU error state, which depends on nothing but
   itself, takes a rescaling and one rank-one update. Same factors as the full
   sweep to rounding, under a fifth of the working memory.
+- **Partial updates stay factored too.** A state can take a share of each
+  correction rather than all or none of it; the covariance is the Joseph
+  form's for that gain and goes back into the factors the same way, one
+  rank-one update per row. Held states are the share-zero case.
 - **Held states stay factored.** A measurement that must not correct some
   states is Bierman's update followed by one Agee–Turner rank-one update per
   row, restoring exactly the uncertainty the held states would otherwise have

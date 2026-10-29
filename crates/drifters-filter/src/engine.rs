@@ -349,7 +349,15 @@ impl GinsEngine {
 
         let r = fix.position_std.squared().to_diag();
         self.note_prior();
-        self.filter.update(&z, &h, &r)?;
+        // Ungated, as it always was; partial shares apply to it like any other.
+        self.filter.update_gated_partial(
+            &z,
+            &h,
+            &r,
+            None,
+            crate::eskf::HeldStates::NONE,
+            &self.options.partial_update,
+        )?;
         self.feedback();
 
         // A fix carrying velocity gives a second, independent measurement.
@@ -392,12 +400,13 @@ impl GinsEngine {
     /// rather than one per measurement.
     fn apply_inner<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
         self.note_prior();
-        let accepted = self.filter.update_gated_holding(
+        let accepted = self.filter.update_gated_partial(
             &m.innovation,
             &m.jacobian,
             &m.noise,
             m.gate,
             m.held,
+            &self.options.partial_update,
         )?;
         // Per kind: an accepted wheel speed says nothing about why the
         // non-holonomic constraint keeps failing, and must not reset its count.
@@ -1031,6 +1040,60 @@ mod tests {
                 assert_relative_eq!(got[i], want[i], epsilon = 1e-15);
             }
         }
+    }
+
+    #[test]
+    fn partial_shares_reach_both_update_paths() {
+        // The GNSS position fix and everything through `apply` go through
+        // different calls into the filter; both have to honour the options.
+        // A still IMU, then a fix 3 m north, with or without a 1 m/s north
+        // velocity: the position update runs on the first path and the
+        // velocity update on the second. The fix falls at the end of an IMU
+        // interval, so nothing propagates after it and the state read back is
+        // the update's alone.
+        use crate::eskf::PartialUpdate;
+        let run = |partial: PartialUpdate, with_velocity: bool| {
+            let mut e = GinsEngine::new(options().with_partial_update(partial)).unwrap();
+            for i in 1..=100 {
+                e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                    .unwrap();
+            }
+            let mut fix = GnssFix::position_only(
+                GpsTime::from_tow(1.01),
+                origin().shifted(Ned::new(3.0, 0.0, 0.0)),
+                Vec3::splat(0.1),
+            );
+            if with_velocity {
+                fix.velocity = Some(Ned::new(1.0, 0.0, 0.0));
+                fix.velocity_std = Vec3::splat(0.1);
+            }
+            e.add_gnss(fix);
+            e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
+            let state = e.nav_state();
+            (state.position().ned_from(origin()).n, state.pva.velocity.n)
+        };
+
+        // Position at half share takes exactly half the correction the full
+        // filter made: everything up to the fix is the same filter, and the
+        // still IMU leaves the position where it started to well under the
+        // tolerance.
+        let (north_full, _) = run(PartialUpdate::FULL, false);
+        let (north_half, _) = run(PartialUpdate::FULL.with(P_ID..P_ID + 3, 50), false);
+        assert!(north_full > 2.0, "{north_full}");
+        assert!(
+            (north_half - 0.5 * north_full).abs() < 1e-6,
+            "half share moved {north_half} m against {north_full}"
+        );
+
+        // Velocity at zero share: neither the position update, through the
+        // correlation, nor the velocity update may move it.
+        let (_, speed_full) = run(PartialUpdate::FULL, true);
+        let (_, speed_held) = run(PartialUpdate::FULL.with(V_ID..V_ID + 3, 0), true);
+        assert!(speed_full > 0.5, "{speed_full}");
+        assert!(
+            speed_held.abs() < 1e-9,
+            "a zero share moved velocity to {speed_held}"
+        );
     }
 
     #[test]

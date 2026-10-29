@@ -5,6 +5,8 @@ use drifters_core::math::{Euler, Vec3};
 use drifters_core::types::{Attitude, ImuError, ImuNoise, Pva};
 use drifters_core::F;
 
+use crate::eskf::PartialUpdate;
+
 /// Everything the engine needs to start, mirroring KF-GINS's `GINSOptions`.
 ///
 /// The initial standard deviations matter as much as the initial state: they
@@ -73,6 +75,15 @@ pub struct GinsOptions {
     /// re-admit measurements within a few cycles without discarding what the
     /// filter has learned about correlations.
     pub rejection_inflation: F,
+    /// How much of each correction each error state takes, in percent.
+    ///
+    /// Every state at 100 by default, which is the ordinary filter. Lower a
+    /// state that the measurements see only weakly or through an imperfect
+    /// model — a phone IMU's scale factors, say — to slow it without
+    /// discarding the information. Applied to every measurement the engine
+    /// processes, on top of any states a measurement holds. See
+    /// [`PartialUpdate`].
+    pub partial_update: PartialUpdate,
 }
 
 impl Default for GinsOptions {
@@ -93,6 +104,7 @@ impl Default for GinsOptions {
             zupt_holds_attitude: true,
             max_consecutive_rejections: 10,
             rejection_inflation: 4.0,
+            partial_update: PartialUpdate::FULL,
         }
     }
 }
@@ -119,6 +131,12 @@ impl GinsOptions {
     /// Replace the IMU stochastic error model.
     pub fn with_imu_noise(mut self, imu_noise: ImuNoise) -> Self {
         self.imu_noise = imu_noise;
+        self
+    }
+
+    /// Replace how much of each correction each state takes.
+    pub fn with_partial_update(mut self, partial_update: PartialUpdate) -> Self {
+        self.partial_update = partial_update;
         self
     }
 
@@ -171,6 +189,9 @@ impl GinsOptions {
         if self.max_consecutive_rejections > u32::from(u8::MAX) {
             return Some(ConfigError::RejectionLimitTooLarge);
         }
+        if !self.partial_update.is_valid() {
+            return Some(ConfigError::InvalidPartialUpdate);
+        }
         None
     }
 }
@@ -197,6 +218,9 @@ pub enum ConfigError {
     /// The rejection limit is above 255, which the per-kind counters cannot
     /// reach, so the recovery would silently never fire.
     RejectionLimitTooLarge,
+    /// A partial-update share is above 100 %, which would overshoot the
+    /// optimal correction rather than take part of it.
+    InvalidPartialUpdate,
 }
 
 impl ConfigError {
@@ -210,6 +234,7 @@ impl ConfigError {
             Self::InvalidLeverArm => "antenna lever arm is not finite",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
             Self::RejectionLimitTooLarge => "max consecutive rejections must be <= 255",
+            Self::InvalidPartialUpdate => "partial-update shares must be at most 100 %",
         }
     }
 }
@@ -326,6 +351,17 @@ mod tests {
             assert_eq!(v[SG_ID], 8.0);
             assert_eq!(v[SA_ID], 9.0);
         }
+    }
+
+    #[test]
+    fn a_partial_update_above_the_whole_is_rejected() {
+        use crate::state::BG_ID;
+        let fine = GinsOptions::default()
+            .with_partial_update(PartialUpdate::FULL.with(BG_ID..BG_ID + 3, 30));
+        assert_eq!(fine.validate(), None);
+        let over = GinsOptions::default()
+            .with_partial_update(PartialUpdate::FULL.with(BG_ID..BG_ID + 3, 101));
+        assert_eq!(over.validate(), Some(ConfigError::InvalidPartialUpdate));
     }
 
     #[test]

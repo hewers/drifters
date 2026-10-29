@@ -119,4 +119,14 @@ message GinsOptions {
   // behaviour that diverges. Absent means "use the recommended default", which
   // is true.
   optional bool zupt_holds_attitude = 16;
+
+  // How much of each correction each error state takes, in percent: one byte
+  // per state, in state order, each at most 100. See `PartialUpdate`.
+  //
+  // Empty means every state takes its whole correction, which is the ordinary
+  // filter, so a message written before this field existed decodes to the
+  // behaviour it was written for. Otherwise it must hold exactly one entry per
+  // state of the build reading it — 21, or 15 under `reduced-state` — and the
+  // wire capacity is fixed at 21 for the reason `Covariance` gives.
+  bytes partial_update_percent = 17;
 }

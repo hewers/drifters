@@ -261,6 +261,128 @@ impl HeldStates {
     }
 }
 
+/// How much of each measurement's correction each error state takes, in
+/// percent.
+///
+/// The partial-update Schmidt-Kalman filter of Brink, in the factored form of
+/// Ramos, Brink, Ganesh and Hurtado (JGCD 45(9), 2022). A state at `p` %
+/// takes `p/100` of the optimal correction: 100 is the ordinary Kalman update,
+/// 0 is a Schmidt "consider" state — what [`HeldStates`] does for one
+/// measurement — and in between slows a state that the measurements see only
+/// weakly, or through a model that is not quite right, without discarding what
+/// they say about it. Scale factors on a phone-class IMU are the usual
+/// candidates.
+///
+/// The covariance is the Joseph form's for the gain actually applied, `Γ K`
+/// with `Γ` the shares on the diagonal, which expands to
+/// `P_opt + (I − Γ) K S Kᵀ (I − Γ)`. That is exact for any shares, never
+/// optimistic, and factored the same way held states are: Bierman, then one
+/// rank-one update per measurement row. See [`Eskf::update_gated_partial`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartialUpdate([u8; N_STATE]);
+
+impl PartialUpdate {
+    /// Every state takes all of every correction: the ordinary filter.
+    pub const FULL: Self = Self([100; N_STATE]);
+
+    /// The same shares with `percent` for the states in `states`.
+    ///
+    /// Indices past the last state are ignored. A percentage above 100 is
+    /// stored as given and refused by [`GinsOptions::validate`], since a share
+    /// above one would overshoot the optimal correction.
+    ///
+    /// [`GinsOptions::validate`]: crate::config::GinsOptions::validate
+    pub const fn with(mut self, states: core::ops::Range<usize>, percent: u8) -> Self {
+        let mut i = states.start;
+        while i < states.end && i < N_STATE {
+            self.0[i] = percent;
+            i += 1;
+        }
+        self
+    }
+
+    /// Shares given as one percentage per state, in state order.
+    pub const fn from_percents(percents: [u8; N_STATE]) -> Self {
+        Self(percents)
+    }
+
+    /// One percentage per state, in state order.
+    pub const fn percents(&self) -> [u8; N_STATE] {
+        self.0
+    }
+
+    /// The percentage state `index` takes, or 100 past the last state.
+    #[inline]
+    pub const fn percent(&self, index: usize) -> u8 {
+        if index < N_STATE {
+            self.0[index]
+        } else {
+            100
+        }
+    }
+
+    /// True when every state takes its whole correction.
+    pub const fn is_full(&self) -> bool {
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] != 100 {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// The states short of a whole share, as bits, with `held`'s added: the
+    /// states whose correction is scaled and whose uncertainty is partly
+    /// restored. Zero is the ordinary update.
+    fn short(&self, held: HeldStates) -> u32 {
+        let mut bits = held.0;
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] < 100 {
+                bits |= 1 << i;
+            }
+            i += 1;
+        }
+        bits
+    }
+
+    /// True when every share is a percentage, at most 100.
+    pub const fn is_valid(&self) -> bool {
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] > 100 {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// State `index`'s share of a correction, `Γᵢᵢ`, after `held` takes its
+    /// states to zero for this measurement.
+    ///
+    /// The whole and empty shares are written out rather than divided: on a
+    /// part with `f64` in software a divide is a library call.
+    fn share(&self, index: usize, held: HeldStates) -> F {
+        if held.contains(index) {
+            return 0.0;
+        }
+        match self.percent(index) {
+            100 => 1.0,
+            0 => 0.0,
+            percent => F::from(percent) / 100.0,
+        }
+    }
+}
+
+impl Default for PartialUpdate {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
 /// The discrete process noise `Q = G Qc Gᵀ`, built directly as 3×3 blocks.
 ///
 /// `Qc` is diagonal by construction and `G` is block structured — see
@@ -564,8 +686,15 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
     ) -> Result<(), FilterError> {
-        self.update_inner(innovation, h, r, None, HeldStates::NONE)
-            .map(|_| ())
+        self.update_inner(
+            innovation,
+            h,
+            r,
+            None,
+            HeldStates::NONE,
+            &PartialUpdate::FULL,
+        )
+        .map(|_| ())
     }
 
     /// Apply a measurement update, rejecting it if it fails a chi-squared gate.
@@ -587,7 +716,14 @@ impl Eskf {
         r: &Matrix<M, M>,
         threshold: F,
     ) -> Result<bool, FilterError> {
-        self.update_inner(innovation, h, r, Some(threshold), HeldStates::NONE)
+        self.update_inner(
+            innovation,
+            h,
+            r,
+            Some(threshold),
+            HeldStates::NONE,
+            &PartialUpdate::FULL,
+        )
     }
 
     /// Apply a gated update, holding the states in `held` fixed.
@@ -609,7 +745,26 @@ impl Eskf {
         threshold: Option<F>,
         held: HeldStates,
     ) -> Result<bool, FilterError> {
-        self.update_inner(innovation, h, r, threshold, held)
+        self.update_inner(innovation, h, r, threshold, held, &PartialUpdate::FULL)
+    }
+
+    /// Apply a gated update in which each state takes only its share of the
+    /// correction, and the states in `held` none of it.
+    ///
+    /// See [`PartialUpdate`]. The gate, the NIS and the innovation covariance
+    /// are the optimal update's: partial shares change what the filter does
+    /// with a measurement, not whether it believes it. With every share at
+    /// 100 % and nothing held this is [`Self::update_gated`], bit for bit.
+    pub fn update_gated_partial<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        threshold: Option<F>,
+        held: HeldStates,
+        partial: &PartialUpdate,
+    ) -> Result<bool, FilterError> {
+        self.update_inner(innovation, h, r, threshold, held, partial)
     }
 
     /// The normalised innovation squared `νᵀ S⁻¹ ν` a measurement would
@@ -656,6 +811,14 @@ impl Eskf {
     /// uncertainty back between rows hands the next row a covariance the batch
     /// update never saw, and runs a different filter from the one Joseph
     /// defines; `a_held_update_matches_the_dense_joseph_form` catches it.
+    ///
+    /// # Partial shares
+    ///
+    /// Holding is the case `Γ = 0` of a gain `K̃ = Γ K` with `Γ` diagonal. The
+    /// same expansion gives `(P − K S Kᵀ) + (I − Γ) K S Kᵀ (I − Γ)` for any
+    /// shares, so each row's restore vector is `(I − Γ) kᵢ` and the correction
+    /// is `Γ K ν`. A held state has share zero, a fully updated one share one
+    /// and a zero restore, and a [`PartialUpdate`] anything between.
     fn update_inner<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -663,6 +826,7 @@ impl Eskf {
         r: &Matrix<M, M>,
         gate: Option<F>,
         held: HeldStates,
+        partial: &PartialUpdate,
     ) -> Result<bool, FilterError> {
         if !self.covariance.is_healthy() {
             return Err(FilterError::Diverged);
@@ -689,8 +853,15 @@ impl Eskf {
         // holds, which makes it exactly `K (ν − H dx)`. With feedback `dx` is
         // zero and the two sums are the same sum.
         let mut correction = StateVector::zeros();
-        // Each row's `αᵢ` and the held rows of its gain, for the restoring
-        // described above.
+        // Which states take less than their whole correction, as bits. The
+        // ordinary update has none and skips the restoring entirely; the
+        // loops below test the bits and work out a share only where one is
+        // short, so a held-only update costs what it did before shares
+        // existed.
+        let short = partial.short(held);
+        let restoring = short != 0;
+        // Each row's `αᵢ` and the part of its gain the states did not take,
+        // for the restoring described above.
         let mut restore = [(0.0, StateVector::zeros()); M];
 
         for (row, slot) in restore.iter_mut().enumerate() {
@@ -713,11 +884,13 @@ impl Eskf {
                 scored[(j, 0)] += gain[(j, 0)] * residual;
                 correction[(j, 0)] += gain[(j, 0)] * against_prior;
             }
-            if !held.is_empty() {
+            if restoring {
+                // A whole share keeps nothing back, and skipping it leaves a
+                // held-only update doing what it did before shares existed.
                 let mut kept = StateVector::zeros();
                 for j in 0..N_STATE {
-                    if held.contains(j) {
-                        kept[(j, 0)] = gain[(j, 0)];
+                    if (short >> j) & 1 == 1 {
+                        kept[(j, 0)] = (1.0 - partial.share(j, held)) * gain[(j, 0)];
                     }
                 }
                 *slot = (alpha, kept);
@@ -731,15 +904,15 @@ impl Eskf {
             }
         }
 
-        if !held.is_empty() {
+        if restoring {
             for (alpha, kept) in restore.iter() {
                 trial
                     .rank_one_update(*alpha, kept)
                     .ok_or(FilterError::Diverged)?;
             }
             for j in 0..N_STATE {
-                if held.contains(j) {
-                    correction[(j, 0)] = 0.0;
+                if (short >> j) & 1 == 1 {
+                    correction[(j, 0)] *= partial.share(j, held);
                 }
             }
         }
@@ -996,22 +1169,23 @@ mod factored_holding_tests {
         (innovation, h, l.mul_transpose(&l))
     }
 
-    /// The dense Joseph update with the held rows of the gain zeroed.
+    /// The dense Joseph update with each row of the gain scaled by its
+    /// state's share: zero for a held state, one for an ordinary one.
     fn dense<const M: usize>(
         p: &StateMatrix,
         dx: &StateVector,
         innovation: &Matrix<M, 1>,
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
-        held: HeldStates,
+        shares: &[F; N_STATE],
     ) -> (StateMatrix, StateVector) {
         let hp = h.matmul(p);
         let s = hp.mul_transpose(h) + *r;
         let chol = Cholesky::new(&s).unwrap();
         let mut k = chol.solve(&hp).transpose();
-        for i in 0..N_STATE {
-            if held.contains(i) {
-                k.data[i] = [0.0; M];
+        for (row, share) in k.data.iter_mut().zip(shares.iter()) {
+            for entry in row.iter_mut() {
+                *entry *= share;
             }
         }
         let residual = *innovation - h.matmul(dx);
@@ -1037,6 +1211,11 @@ mod factored_holding_tests {
 
     /// Run one update both ways from the same prior and compare.
     fn agrees_with_dense(seed: u64, held: HeldStates) {
+        agrees_with_dense_partial(seed, held, &PartialUpdate::FULL);
+    }
+
+    /// The same, with partial shares on top of the held states.
+    fn agrees_with_dense_partial(seed: u64, held: HeldStates, partial: &PartialUpdate) {
         let mut rng = Rng(seed);
         let p = covariance(&mut rng, 1.0e3);
         let (innovation, h, r) = measurement(&mut rng);
@@ -1052,10 +1231,19 @@ mod factored_holding_tests {
         assert!(filter.set_covariance(&p));
         filter.dx = dx;
         let p = filter.covariance();
-        let (want_p, want_x) = dense(&p, &dx, &innovation, &h, &r, held);
+        // The shares worked out here from the percentages, not through the
+        // filter's own `share`, so a mistake there cannot cancel itself.
+        let shares: [F; N_STATE] = core::array::from_fn(|i| {
+            if held.contains(i) {
+                0.0
+            } else {
+                F::from(partial.percent(i)) / 100.0
+            }
+        });
+        let (want_p, want_x) = dense(&p, &dx, &innovation, &h, &r, &shares);
 
         assert!(filter
-            .update_gated_holding(&innovation, &h, &r, None, held)
+            .update_gated_partial(&innovation, &h, &r, None, held, partial)
             .unwrap());
 
         let worst = worst_relative(&want_p, &filter.covariance());
@@ -1069,9 +1257,109 @@ mod factored_holding_tests {
                 (got - want).abs() < TOLERANCE * want.abs().max(1.0),
                 "seed {seed}: dx[{i}] = {got} against {want}"
             );
-            if held.contains(i) {
+            if held.contains(i) || partial.percent(i) == 0 {
                 assert_eq!(got, dx[(i, 0)], "seed {seed}: held state {i} moved");
             }
+        }
+    }
+
+    /// Shares that exercise every case: one block taking none of its
+    /// correction, two taking part of it, and the rest all of it.
+    fn mixed_shares() -> PartialUpdate {
+        PartialUpdate::FULL
+            .with(BG_ID..BG_ID + 3, 30)
+            .with(BA_ID..BA_ID + 3, 75)
+            .with(PHI_ID + 2..PHI_ID + 3, 0)
+    }
+
+    #[test]
+    fn a_partial_update_matches_the_dense_joseph_form() {
+        // The claim behind `PartialUpdate`: Bierman, then one rank-one update
+        // per row with `(I − Γ) kᵢ`, is the Joseph form for the gain `Γ K`, at
+        // any shares and from a standing error state.
+        for seed in [11u64, 29, 1987] {
+            agrees_with_dense_partial(seed, HeldStates::NONE, &mixed_shares());
+            agrees_with_dense_partial(seed, HeldStates::ATTITUDE, &mixed_shares());
+            agrees_with_dense_partial(
+                seed,
+                HeldStates::NONE,
+                &PartialUpdate::FULL.with(0..N_STATE, 1),
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_partial_update_is_the_ordinary_update() {
+        // Not merely close: the same arithmetic. Every share at one skips the
+        // restoring and multiplies the correction by exactly one.
+        let mut rng = Rng(404);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut ordinary = Eskf::new(&[1.0; N_STATE]);
+        assert!(ordinary.set_covariance(&p));
+        let mut partial = ordinary;
+        assert!(ordinary.update_gated(&innovation, &h, &r, 1.0e9).unwrap());
+        assert!(partial
+            .update_gated_partial(
+                &innovation,
+                &h,
+                &r,
+                Some(1.0e9),
+                HeldStates::NONE,
+                &PartialUpdate::FULL
+            )
+            .unwrap());
+        assert_eq!(ordinary.covariance(), partial.covariance());
+        assert_eq!(ordinary.dx, partial.dx);
+    }
+
+    #[test]
+    fn a_zero_share_is_the_same_as_holding() {
+        let mut rng = Rng(808);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut held = Eskf::new(&[1.0; N_STATE]);
+        assert!(held.set_covariance(&p));
+        let mut zero = held;
+        assert!(held
+            .update_gated_holding(&innovation, &h, &r, None, HeldStates::GYRO_BIAS)
+            .unwrap());
+        assert!(zero
+            .update_gated_partial(
+                &innovation,
+                &h,
+                &r,
+                None,
+                HeldStates::NONE,
+                &PartialUpdate::FULL.with(BG_ID..BG_ID + 3, 0)
+            )
+            .unwrap());
+        assert_eq!(held.covariance(), zero.covariance());
+        assert_eq!(held.dx, zero.dx);
+    }
+
+    #[test]
+    fn a_partial_update_never_reports_less_uncertainty_than_the_optimal_one() {
+        // `(I − Γ) K S Kᵀ (I − Γ)` is positive semi-definite, so every variance
+        // a partial update leaves is at least the optimal update's.
+        let mut rng = Rng(1234);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut optimal = Eskf::new(&[1.0; N_STATE]);
+        assert!(optimal.set_covariance(&p));
+        let mut partial = optimal;
+        assert!(optimal.update(&innovation, &h, &r).is_ok());
+        assert!(partial
+            .update_gated_partial(&innovation, &h, &r, None, HeldStates::NONE, &mixed_shares())
+            .unwrap());
+        let (o, q) = (optimal.std_deviations(), partial.std_deviations());
+        for i in 0..N_STATE {
+            assert!(
+                q[i] >= o[i] * (1.0 - TOLERANCE),
+                "state {i}: {} below {}",
+                q[i],
+                o[i]
+            );
         }
     }
 

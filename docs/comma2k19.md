@@ -143,6 +143,18 @@ the fit set's heading from 0.98° to 0.53° RMS and the median thirty-second
 outage from 10.0 m to 8.4, and the worst one from 24 m to 27. It is kept
 because the median is what a user sees.
 
+**Partial updates buy nothing here.** A
+[`PartialUpdate`](../crates/drifters-filter/src/eskf.rs) lets a state take
+only part of each correction, which the literature recommends for states the
+measurements see weakly. On the fit routes, scale factors at any share from
+none to half change nothing at the precision of the tables: in a one-minute
+segment they barely move from their prior. Half a share on the accelerometer
+bias took the fit set's thirty-second outage from 8.40 m to 7.68 m median and
+from 23.4 m to 20.5 m p95, for a worse ten-second median. On the holdout only
+the p95 survived, 33.8 m to 31.4 m, while the median went from 11.1 m to
+11.7 m, the worst case from 45 m to 51 m and the ten-second median from 3.5 m
+to 3.9 m. Every state stays at its whole share.
+
 ## Fitting
 
 On the 19 fit segments, one knob at a time from the GNSS-only optimum:

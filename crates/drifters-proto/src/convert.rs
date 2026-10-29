@@ -32,6 +32,7 @@ use drifters_core::types::{Attitude, GnssFix, ImuError, ImuNoise, ImuSample, Nav
 use drifters_core::F;
 use drifters_filter::config::GinsOptions;
 use drifters_filter::state::{StateMatrix, N_STATE};
+use drifters_filter::PartialUpdate;
 
 use crate::pb;
 
@@ -474,6 +475,22 @@ pub fn state_matrix(msg: &pb::Covariance) -> Result<StateMatrix, ConvertError> {
 
 // --- configuration ------------------------------------------------------
 
+/// Per-state partial-update shares from the wire: empty is the ordinary
+/// filter, so a message from before the field existed decodes to what it
+/// meant, and anything else must be one byte per state of this build.
+/// Percentages above 100 are left to `GinsOptions::validate`.
+fn partial_update(bytes: &[u8]) -> Result<PartialUpdate, ConvertError> {
+    if bytes.is_empty() {
+        return Ok(PartialUpdate::FULL);
+    }
+    let percents: [u8; N_STATE] = bytes.try_into().map_err(|_| ConvertError::WrongLength {
+        field: "partial_update_percent",
+        expected: N_STATE,
+        actual: bytes.len(),
+    })?;
+    Ok(PartialUpdate::from_percents(percents))
+}
+
 impl From<&GinsOptions> for pb::GinsOptions {
     fn from(o: &GinsOptions) -> Self {
         let mut msg = Self {
@@ -496,6 +513,14 @@ impl From<&GinsOptions> for pb::GinsOptions {
         msg.set_imu_noise((&o.imu_noise).into());
         msg.set_antenna_lever_arm_m((&o.antenna_lever_arm).into());
         msg.set_zupt_holds_attitude(o.zupt_holds_attitude);
+        // Left empty for the ordinary filter, which is what an empty field
+        // decodes to. Otherwise one byte per state; the capacity is 21 and no
+        // build has more states, so this cannot overflow.
+        if !o.partial_update.is_full() {
+            let _ = msg
+                .r#partial_update_percent
+                .extend_from_slice(&o.partial_update.percents());
+        }
         msg
     }
 }
@@ -562,6 +587,7 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
             // written before this field existed must not silently decode to
             // the setting that lets the accel-bias/tilt pair diverge.
             zupt_holds_attitude: msg.r#zupt_holds_attitude().copied().unwrap_or(true),
+            partial_update: partial_update(msg.r#partial_update_percent())?,
         };
         if options.validate().is_some() {
             return Err(ConvertError::Invalid("gins_options"));
@@ -1119,5 +1145,50 @@ mod option_defaults {
     fn an_explicit_true_survives_the_round_trip() {
         let msg = pb::GinsOptions::from(&GinsOptions::default());
         assert!(GinsOptions::try_from(&msg).unwrap().zupt_holds_attitude);
+    }
+
+    #[test]
+    fn an_empty_partial_update_field_is_the_ordinary_filter() {
+        // What a message from before the field existed carries, and what the
+        // ordinary filter writes: nothing at all on the wire.
+        let msg = pb::GinsOptions::from(&GinsOptions::default());
+        assert!(msg.partial_update_percent().is_empty());
+        assert!(GinsOptions::try_from(&msg)
+            .unwrap()
+            .partial_update
+            .is_full());
+    }
+
+    #[test]
+    fn partial_shares_survive_the_round_trip() {
+        use drifters_filter::state::BA_ID;
+        let options = GinsOptions::default()
+            .with_partial_update(PartialUpdate::FULL.with(BA_ID..BA_ID + 3, 40).with(0..1, 0));
+        let msg = pb::GinsOptions::from(&options);
+        assert_eq!(msg.partial_update_percent().len(), N_STATE);
+        let decoded = GinsOptions::try_from(&msg).expect("valid");
+        assert_eq!(decoded.partial_update, options.partial_update);
+    }
+
+    #[test]
+    fn partial_shares_of_the_wrong_length_or_above_the_whole_are_refused() {
+        let mut msg = pb::GinsOptions::from(&GinsOptions::default());
+        let _ = msg.mut_partial_update_percent().extend_from_slice(&[50; 3]);
+        assert_eq!(
+            GinsOptions::try_from(&msg).unwrap_err(),
+            ConvertError::WrongLength {
+                field: "partial_update_percent",
+                expected: N_STATE,
+                actual: 3,
+            }
+        );
+        let mut msg = pb::GinsOptions::from(&GinsOptions::default());
+        let _ = msg
+            .mut_partial_update_percent()
+            .extend_from_slice(&[101; N_STATE]);
+        assert_eq!(
+            GinsOptions::try_from(&msg).unwrap_err(),
+            ConvertError::Invalid("gins_options")
+        );
     }
 }
