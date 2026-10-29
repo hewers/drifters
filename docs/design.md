@@ -257,9 +257,9 @@ covariance was factored, and again after the held-state update was:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 212 | 7 604 *(was 18 904)* | **16 212** |
-| 21-state, `f32-covariance` | 12 540 | 6 404 *(was 17 976)* | **12 540** |
-| 15-state (`reduced-state`) | 9 740 | 5 260 *(was 10 464)* | **9 740** |
+| 21-state, `f64` | 16 276 | 7 604 *(was 18 904)* | **16 276** |
+| 21-state, `f32-covariance` | 12 548 | 6 404 *(was 17 976)* | **12 548** |
+| 15-state (`reduced-state`) | 9 804 | 5 260 *(was 10 464)* | **9 804** |
 
 `f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
 the largest single object on that frame and it halves.
@@ -279,7 +279,7 @@ refactored. CI re-measures the peak on every run against an 18 KiB ceiling at
 
 On M8's figures that was the difference between needing a 32 KiB task stack
 and fitting in 16 KiB. The gap is narrower now: the 21-state filter peaks just
-under 16 KiB, with 172 bytes to spare, and at 12.2 KiB with `f32-covariance`.
+under 16 KiB, with 108 bytes to spare, and at 12.3 KiB with `f32-covariance`.
 Fifteen states still buy the most headroom, and they change no numerics at all —
 they simply estimate fewer things.
 

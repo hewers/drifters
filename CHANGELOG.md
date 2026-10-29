@@ -38,9 +38,23 @@ breaking wire change becomes `v2` rather than a crate version bump.
   for 21 states, 12 540 with `f32-covariance`, 9 740 for 15 states. It also
   does under a fifth of the work, and a twenty-sixth with `f32-covariance`,
   where it now runs on the FPU.
+- **The factored recursions' dot product keeps eight named partial sums**
+  rather than an array of eight. Same reduction order, so bit-identical, and
+  it gets most of what `--cfg drifters_nightly_simd` gets, on stable: `add_imu`
+  does 5 % less work on Cortex-M4, 16 % less with `f32-covariance`, and 31 %
+  less on a Cortex-M7 with a double-precision FPU. Up to 80 bytes of stack.
 
 ### Added
 
+- **Cortex-M7's double-precision FPU, measured and in CI.** Neither Cortex-M4
+  nor M7 has floating-point SIMD, but many M7 parts have a double-precision
+  FPU that the generic `thumbv7em` target leaves unused. Built with
+  `-C target-cpu=cortex-m7`, every `f64` operation is a hardware instruction:
+  `add_imu` does a quarter of the work it does on the M4 and a held update an
+  eleventh, with bit-identical results. The bare-metal harness now reports
+  the core and whether `f64` is in hardware, and CI runs that build on QEMU's
+  `mps2-an500` with a stack ceiling and the panic audit. See
+  [`docs/testing.md`](docs/testing.md), Layer 9.
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
   geodetic position, answering gravity, earth rate, transport rate and the radii
   of curvature from a single `sin_cos`. The free functions on `Wgs84` each

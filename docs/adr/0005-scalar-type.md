@@ -5,10 +5,15 @@
 ## Context
 
 `drifters_core::F` is an alias for `f64`, used by every state, measurement and
-matrix in the stack. Cortex-M4F and M7 have single-precision FPUs, so `f64`
-arithmetic on those parts is emulated in software by `compiler-builtins`. That
-is the largest performance question the project has: whether a narrower scalar
-is available anywhere it would matter.
+matrix in the stack. Cortex-M4F has a single-precision FPU, so `f64` arithmetic
+there is emulated in software by `compiler-builtins`, and so it is on any M7
+whose FPU is single precision or that is built for the generic `thumbv7em`
+target. That is the largest performance question the project has: whether a
+narrower scalar is available anywhere it would matter.
+
+The M7's FPU is double precision on many parts, and built with
+`-C target-cpu=cortex-m7` those run `f64` in hardware. There the question is
+about memory rather than arithmetic.
 
 It needs measurement rather than intuition. "Position needs `f64`" is easy to
 assert and easy to get wrong in either direction.
@@ -95,5 +100,11 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
   moving it is not currently worth the accuracy it would spend.
 - Parts with no FPU at all (Cortex-M0+, `thumbv6m`) are unaffected in kind: they
   emulate `f32` too, and gain only the smaller footprint.
+- A Cortex-M7 with a double-precision FPU, built with
+  `-C target-cpu=cortex-m7`, runs every `f64` operation in hardware. `add_imu`
+  does a quarter of the work it does on the M4, bit-identically, and
+  `f32-covariance` there saves its 924 bytes and no arithmetic — slightly the
+  reverse, for the conversions. Measured in [testing.md](../testing.md),
+  Layer 9.
 - The 15-state reduced configuration remains the cheapest large saving, because
   it removes work and memory without touching numerics.

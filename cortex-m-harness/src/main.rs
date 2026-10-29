@@ -149,7 +149,18 @@ fn main() -> ! {
     let bottom = cortex_m_rt::heap_start() as usize;
 
     hprintln!("drifters bare-metal harness");
-    hprintln!("target: thumbv7em-none-eabihf (Cortex-M4F, f64 in software)");
+    // The core is read from CPUID rather than assumed, so a Cortex-M7 build
+    // run on the M4 image, or the reverse, says so. Whether `f64` is in
+    // hardware is the build's choice, not the core's; see `build.rs`.
+    // SAFETY: CPUID is a read-only System Control Block register.
+    let part = unsafe { (*cortex_m::peripheral::CPUID::PTR).base.read() } >> 4 & 0xFFF;
+    let core = match part {
+        0xC24 => "Cortex-M4",
+        0xC27 => "Cortex-M7",
+        _ => "unknown core",
+    };
+    let f64_in = if cfg!(harness_hard_f64) { "hardware" } else { "software" };
+    hprintln!("target: thumbv7em-none-eabihf ({}, f64 in {})", core, f64_in);
     hprintln!(
         "config: {}-state, scale factors {}",
         N_STATE,

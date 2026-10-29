@@ -449,6 +449,71 @@ survey:
   code in the filter — or a lower-precision Φ recorded for the smoother is not
   worth 4 %.
 
+### What SIMD there is on Cortex-M4 and M7
+
+None that a floating-point filter can use. Both cores' FPUs are scalar:
+FPv4-SP on the M4F, FPv5 on the M7, single precision or optionally double.
+Vector floating point arrives with Helium in Armv8.1-M, on the M55 and M85. The
+SIMD these cores do have is the DSP extension's, which packs two 16-bit or four
+8-bit integers into a core register (`SADD16`, `SMLAD`, `UQADD8`). That is for
+fixed-point and integer pipelines, and this filter has neither. Disassembled,
+the harness contains one such instruction, a `pkhbt` outside the filter. Rust's
+intrinsics for them are nightly-only in any case.
+
+So `core::simd` above was never vectorising: eight lanes lower to eight scalar
+FPU instructions. What it changed was what the optimiser could keep in
+registers, and the same is available on stable by writing the eight partial
+sums as named locals rather than as an array, with the same reduction order and
+so bit-identical results. Per `add_imu`, in SysTick ticks under
+`-icount shift=0` — the harness's `INSTRUCTIONS` line, which on these boards is
+one tick per 40 instructions:
+
+| | array, stable | named, stable | `core::simd`, nightly |
+|---|---|---|---|
+| Cortex-M4, `f64` | 21 394 | **20 308** | 22 750 |
+| Cortex-M4, `f32-covariance` | 11 865 | **9 949** | 9 631 |
+| Cortex-M7 with DP FPU, `f64` | 7 418 | **5 133** | 4 851 |
+
+The nightly column is against nightly's own baseline, which on the M4 at `f64`
+is 24 157: the toolchain moved more than the cfg did. Stack costs at most 80
+bytes.
+
+### The lever that is there: the M7's double-precision FPU
+
+The M4F's FPU is single precision. The M7's is optionally double precision,
+and many shipping parts have it — STM32F76x/F77x and the STM32H7, i.MX
+RT1050/1060/1170, SAM E70/S70/V71. Built with `-C target-cpu=cortex-m7`, every
+`f64` operation is a hardware instruction and the binary calls `__aeabi_d*`
+nowhere. Measured on `mps2-an500`:
+
+| per call, ticks | Cortex-M4 | Cortex-M7, `target-cpu=cortex-m7` |
+|---|---|---|
+| `add_imu`, 21-state, `f64` | 20 308 | **5 133** |
+| `add_imu`, 21-state, `f32-covariance` | 9 949 | 5 292 |
+| `add_imu`, 15-state | 5 533 | **2 362** |
+| held `apply_zupt`, 21-state, `f64` | 13 746 | **1 221** |
+
+Four times less work per sample and eleven times per held update, with no
+change to the code. The results do not move at all: hardware and soft-float
+`f64` are both correctly rounded, Rust does not contract a multiply and an add
+into a fused one, and a fingerprint over the final state and every covariance
+entry is identical between the two builds, at both precisions.
+
+Two things follow. On such a part `f32-covariance` buys memory and not work —
+5 292 against 5 133, the difference being conversions — so the reason to
+choose it there is the 924 bytes rather than the arithmetic. And the flag
+matters more than the precision did: an M7 built for the generic `thumbv7em`
+target runs `f64` in soft-float exactly as an M4 does, and so does an M7 whose
+FPU is single precision — 20 397 with `-C target-feature=-fp64`, against the
+M4's 20 308. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
+on the M4 is a wash, 4 % better at `f64` and 5 % worse with `f32-covariance`;
+and `-C target-feature=+fp64` without the CPU works, but `fp64` is a feature
+rustc warns is unstable.
+
+As everywhere in this layer, this measures work and not cycles. A
+double-precision operation can take more cycles than a single-precision one on
+the M7, which this measurement cannot see; the cycle counts stay with M9.
+
 ### Why this layer exists
 
 The `docs/design.md` budget previously carried an estimate of ~11 KiB, reasoned

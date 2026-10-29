@@ -348,6 +348,15 @@ single-precision is most of the soft-float question. Per `add_imu` on
       `Local` took it to one evaluation per point. Recorded in
       [testing.md](testing.md), along with the two ways this measurement gave a
       wrong answer first.
+- [x] **SIMD on Cortex-M4 and M7.** There is none a floating-point filter can
+      use: both FPUs are scalar, and the DSP extension's SIMD is packed
+      integers. What `core::simd` was buying is register allocation, and named
+      accumulators get most of it on stable — 16 % off `add_imu` on the M4
+      with `f32-covariance`, bit-identical. The lever that is there is the
+      M7's optional double-precision FPU: with `-C target-cpu=cortex-m7`,
+      `add_imu` does a quarter of the work and a held update an eleventh,
+      again bit-identical. CI builds and runs that configuration on
+      `mps2-an500`. See [testing.md](testing.md), Layer 9.
 
 ### Still needs a board
 

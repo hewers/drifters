@@ -248,6 +248,7 @@ jobs:
           cargo build --release --features reduced-state
           cargo build --release --features f32-covariance
           cargo build --release --bin panic_audit
+          RUSTFLAGS="-D warnings -C target-cpu=cortex-m7" cargo build --release --target-dir target/m7
       - name: run harness under QEMU
         working-directory: cortex-m-harness
         run: |
@@ -256,7 +257,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
           # Ceiling, not a target. 18 KiB leaves headroom over the measured
-          # 15.8 KiB while failing if a change reintroduces the dense
+          # 15.9 KiB while failing if a change reintroduces the dense
           # held-state update, which peaked at 18.5 KiB, or the
           # expression-chained form that cost 35.3 KiB.
           #
@@ -273,7 +274,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 9 740 B.
+          # not. Measured at 9 804 B.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
@@ -283,14 +284,36 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 12 540 B; the dense
+          # predict path it shrinks it by 23 %. Measured at 12 548 B; the dense
           # held-state update this ceiling would catch peaked at 17 976 B.
           test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
+      # Many Cortex-M7 parts have a double-precision FPU, and this is the build
+      # that uses it: every `f64` operation in hardware, a quarter of the work
+      # per `add_imu`, bit-identical results. docs/testing.md recommends it, so
+      # it has to keep building and running. The banner check is what makes it
+      # mean anything — a flag that quietly stopped taking effect would still
+      # build, run and fit.
+      - name: the Cortex-M7 double-precision build must run and fit
+        working-directory: cortex-m-harness
+        env:
+          RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+          CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: >-
+            qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic
+            -semihosting-config enable=on,target=native -kernel
+        run: |
+          set -o pipefail
+          cargo run --release --target-dir target/m7 | tee m7.txt
+          grep -q 'Cortex-M7, f64 in hardware' m7.txt || { echo "not running f64 in hardware"; exit 1; }
+          peak=$(grep -oP 'PEAK\s+\K[0-9]+' m7.txt)
+          echo "Cortex-M7 peak stack: $peak bytes"
+          # Measured at 15 712 B.
+          test "$peak" -lt 16384 || { echo "Cortex-M7 budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |
           # Every configuration: `f32-covariance` and `reduced-state` change
-          # what the filter computes, so neither inherits the default's audit.
+          # what the filter computes, so neither inherits the default's audit,
+          # and the Cortex-M7 build is different code generation altogether.
           for features in "" "--features f32-covariance" "--features reduced-state"; do
             cargo build --release --bin panic_audit $features
             bin=target/thumbv7em-none-eabihf/release/panic_audit
@@ -300,6 +323,13 @@ jobs:
             fi
             echo "no panic machinery linked [${features:-default}]"
           done
+          RUSTFLAGS="-D warnings -C target-cpu=cortex-m7" \
+            cargo build --release --bin panic_audit --target-dir target/m7
+          if nm target/m7/thumbv7em-none-eabihf/release/panic_audit | grep -i 'core9panicking'; then
+            echo "the data path can reach a panic on Cortex-M7; see docs/testing.md Layer 10"
+            exit 1
+          fi
+          echo "no panic machinery linked [cortex-m7]"
 
   # `portable_simd` is opt-in through `--cfg drifters_nightly_simd`, not a cargo
   # feature, so that `--all-features` on stable does not try to enable a
