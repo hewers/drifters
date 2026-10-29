@@ -263,21 +263,6 @@ impl Ud {
         }
     }
 
-    /// Round every factor to `f32` precision, keeping `f64` storage.
-    ///
-    /// A probe, not a configuration. It answers whether a single-precision
-    /// covariance would survive a run *before* anyone builds one: applying it
-    /// after every operation makes the arithmetic carry no more information
-    /// than `f32` could, while leaving every other part of the filter alone,
-    /// so what it measures is the covariance's precision demand and nothing
-    /// else.
-    ///
-    /// The reason to ask is that this factorisation halves that demand — the
-    /// factors are conditioned as the square root of `P` — and
-    /// [`adr/0005`](https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md)
-    /// disqualified `f32` on a dense covariance whose diagonal alone spans 8.4
-    /// decimal digits against `f32`'s 7.2.
-    #[doc(hidden)]
     /// True when every element is finite and `D` is non-negative.
     pub fn is_healthy(&self) -> bool {
         self.diagonal.iter().all(|d| d.is_finite() && *d >= 0.0)
