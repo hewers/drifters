@@ -504,4 +504,11 @@ at the ingest boundary rather than allowed to poison the state.
   Navigation Systems*, 2nd ed. — the reference for the error-state dynamics.
 - P. Savage, "Strapdown Inertial Navigation Integration Algorithm Design" —
   coning and sculling.
+- J. R. Carpenter and C. N. D'Souza (eds.), *Navigation Filter Best Practices*,
+  NASA/TP-2018-219822 — the partitioned UDU time update (§8.3.2) and latent
+  measurements (§4.1).
+- J. H. Ramos, K. M. Brink, P. Ganesh and J. E. Hurtado, "Factorized
+  Partial-Update Schmidt–Kalman Filter", *JGCD* 45(9), 2022 — partial updates.
+- The rest of the literature this was read against, and what it suggests next:
+  [milestones.md, M17](milestones.md#m17--from-the-literature-survey).
 - NIMA TR8350.2 — WGS-84 defining and derived constants.

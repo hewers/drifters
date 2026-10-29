@@ -32,7 +32,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 463, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 489, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -207,11 +207,17 @@ median outage drift by more than a third. Details in
 
 ## Status
 
-**Working and validated:** core math, strapdown mechanization, 21-state ESKF,
-loosely-coupled GNSS, auxiliary sensors (ZUPT, zero angular rate,
-non-holonomic constraints, odometer, barometric height, magnetometer heading),
-protobuf serialization, bare-metal Cortex-M, KF-GINS and comma2k19 dataset
-regressions.
+**Working and validated:** core math, strapdown mechanization, 21-state ESKF
+with a partitioned factored time update and partial updates, loosely-coupled
+GNSS including fixes that arrive after their epoch, auxiliary sensors (ZUPT,
+zero angular rate, non-holonomic constraints, odometer with its scale factor
+estimated, barometric height, magnetometer heading), protobuf serialization,
+bare-metal Cortex-M, KF-GINS and comma2k19 dataset regressions.
+
+**Next, from the literature:** a time-correlated GNSS error model, invariant
+error definitions, an attitude covariance reset, underweighting, online mount
+angles and more, each with its source and the evidence for it, in
+[M17](docs/milestones.md#m17--from-the-literature-survey).
 
 **In progress:** the equivariant filter. It runs end to end on both datasets
 (see above) — symmetry group, lift, linearisation, group exponential, GCU and
