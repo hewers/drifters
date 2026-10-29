@@ -168,6 +168,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 ///   --settle <s>           unscored seconds after the start (default 10)
 ///   --partial <spec>       partial-update shares, e.g. sg=30,sa=30 (percent)
 ///   --wheel-scale          estimate the CAN speed's scale against GNSS speed
+///   --fixes-at-arrival     hand each fix over when it was logged, not at its epoch
+///   --max-fix-latency <s>  how late a fix may arrive and still be used (default 0.5)
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
 ///   --per-segment          a line per segment
 /// ```
@@ -188,13 +190,14 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let sigma_h: f64 = flag(args, "--sigma-h").unwrap_or("0.5").parse()?;
     let sigma_v: f64 = flag(args, "--sigma-v").unwrap_or("2").parse()?;
     let mount = pair("--mount")?.unwrap_or((0.0, 0.0));
+    let latency = flag(args, "--latency")
+        .map(str::parse)
+        .transpose()?
+        .unwrap_or(defaults.read.latency);
     let options = drifters_cli::CommaOptions {
         read: comma::ReadOptions {
             sigma: drifters_cli::vec3(sigma_h, sigma_h, sigma_v),
-            latency: flag(args, "--latency")
-                .map(str::parse)
-                .transpose()?
-                .unwrap_or(defaults.read.latency),
+            latency,
             mount: (mount.0.to_radians(), mount.1.to_radians()),
             uncalibrated_gyro: args.iter().any(|a| a == "--uncalibrated-gyro"),
             ..defaults.read
@@ -227,6 +230,13 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 .iter()
                 .any(|a| a == "--wheel-scale")
                 .then(drifters_filter::WheelScaleConfig::default),
+            arrival_delay: args
+                .iter()
+                .any(|a| a == "--fixes-at-arrival")
+                .then_some(latency),
+            max_fix_latency: flag(args, "--max-fix-latency")
+                .map(str::parse)
+                .transpose()?,
         },
     };
     let report = drifters_cli::run_comma(&dir, &options)?;

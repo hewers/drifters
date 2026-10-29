@@ -35,6 +35,10 @@ enum GnssPlacement {
     AtEnd,
     /// The fix falls strictly inside: split the IMU sample at the fix.
     Inside,
+    /// The fix's epoch is already behind the filter, by no more than
+    /// [`GinsOptions::max_fix_latency`]: apply it against the state worked
+    /// back to that epoch, then propagate.
+    Late,
 }
 
 /// A loosely-coupled GNSS/INS engine over the 21-state error model.
@@ -161,7 +165,11 @@ impl GinsEngine {
     /// Queue a GNSS fix.
     ///
     /// It is consumed by the next [`GinsEngine::add_imu`] whose interval
-    /// contains it. Invalid fixes are dropped rather than queued — a fix with a
+    /// contains it — or, if its epoch is already behind the filter, as a
+    /// receiver's latency makes it, by the very next one, against the state
+    /// worked back to that epoch, provided it is no more than
+    /// [`GinsOptions::max_fix_latency`] behind. Later than that it is never
+    /// applied. Invalid fixes are dropped rather than queued — a fix with a
     /// zero sigma would make the innovation covariance singular.
     pub fn add_gnss(&mut self, fix: GnssFix) -> bool {
         if !fix.is_valid() {
@@ -210,6 +218,10 @@ impl GinsEngine {
                 self.apply_pending_gnss()?;
                 self.propagate(&after);
             }
+            GnssPlacement::Late => {
+                self.apply_pending_gnss()?;
+                self.propagate(&imu);
+            }
         }
 
         self.state.time = raw.time;
@@ -231,15 +243,23 @@ impl GinsEngine {
             GnssPlacement::AtEnd
         } else if from_start > 0.0 && from_end < 0.0 {
             GnssPlacement::Inside
+        } else if from_start < 0.0 && -from_start <= self.options.max_fix_latency {
+            // Behind the filter, but recently enough to work back to.
+            GnssPlacement::Late
         } else {
-            // The fix is outside this interval. If it is in the past it is
-            // stale and will never be usable, so drop it; if it is in the
-            // future, hold it for a later sample.
+            // The fix is outside this interval. In the future, it is held for
+            // a later sample; too far in the past, it never becomes usable and
+            // waits only to be replaced.
             GnssPlacement::None
         }
     }
 
     /// Mechanize one interval and propagate the covariance across it.
+    ///
+    /// Out of line because [`Self::add_imu`] calls it from four placements,
+    /// and inlined into each the copies' locals did not share stack: adding
+    /// the fourth, for late fixes, took the peak from 9 820 bytes to 11 608.
+    #[inline(never)]
     fn propagate(&mut self, imu: &ImuSample) {
         let previous = self.state.pva;
         self.state.pva = mechanize(&previous, &self.previous_imu, imu);
@@ -331,33 +351,85 @@ impl GinsEngine {
         (antenna, lever_n)
     }
 
+    /// The navigation state as it was `dt` seconds ago, worked back from now.
+    ///
+    /// Over a gap of a fix's latency — tens of milliseconds — the last IMU
+    /// interval's specific force and rotation rate are taken to hold: the
+    /// position goes back by `v dt − ½ a dt²`, the velocity by `a dt`, and the
+    /// attitude by the body rotation `ω dt`. Coriolis and the navigation
+    /// frame's own rotation are left out; over 0.1 s they are below a
+    /// millimetre and ten microradians. `dt = 0` is the state itself, exactly.
+    fn backdated(&self, dt: F) -> Pva {
+        let pva = self.state.pva;
+        if dt <= 0.0 {
+            return pva;
+        }
+        let imu = &self.previous_imu;
+        let gravity = drifters_core::earth::Wgs84::gravity_n(pva.position.lat, pva.position.height);
+        let accel = pva.attitude.dcm * imu.accel() + gravity;
+        let velocity = pva.velocity.to_vec3();
+        let back = velocity * -dt + accel * (0.5 * dt * dt);
+        Pva {
+            position: pva.position.shifted_linear(Ned::from_vec3(back)),
+            velocity: Ned::from_vec3(velocity - accel * dt),
+            attitude: drifters_core::types::Attitude::from_quat(
+                pva.attitude.quat
+                    * drifters_core::math::Quat::from_rotation_vector(imu.gyro() * -dt),
+            ),
+        }
+    }
+
+    /// A Jacobian taken at an epoch `dt` seconds ago, carried to the error
+    /// state as it stands now.
+    ///
+    /// `δx(then) = Φ(then, now) δx(now)`, and over a short gap
+    /// `Φ(then, now) = Φ(now, then)⁻¹ ≈ I − F dt`, so the measurement sees
+    /// `H (I − F dt)`. That is NASA's treatment of a latent measurement
+    /// (NASA/TP-2018-219822, §4.1), with the process noise over the gap
+    /// neglected as it is there: over a tenth of a second it is far below a
+    /// fix's own noise. Its own frame so that `F`'s 3.5 KiB is gone before the
+    /// update runs.
+    #[inline(never)]
+    fn carried_forward<const M: usize>(&self, h: &Matrix<M, N_STATE>, dt: F) -> Matrix<M, N_STATE> {
+        if dt <= 0.0 {
+            return *h;
+        }
+        let mut f = crate::state::StateMatrix::zeros();
+        crate::eskf::transition_matrix_into(
+            &self.state.pva,
+            &self.previous_imu,
+            &self.options.imu_noise,
+            &mut f,
+        );
+        let hf = h.matmul(&f);
+        let mut out = *h;
+        for i in 0..M {
+            for j in 0..N_STATE {
+                out[(i, j)] -= hf[(i, j)] * dt;
+            }
+        }
+        out
+    }
+
+    /// Out of line: inlined into [`Self::add_imu`], its matrices sat on that
+    /// frame for every sample, fix or no fix, and took the peak stack from
+    /// 9 820 bytes to 11 608.
+    #[inline(never)]
     fn apply_pending_gnss(&mut self) -> Result<(), FilterError> {
         let Some(fix) = self.pending_gnss.take() else {
             return Ok(());
         };
-        let (antenna, lever_n) = self.antenna_position_and_lever();
-
-        // Innovation: where the INS thinks the antenna is, minus where GNSS
-        // says it is, in local NED metres.
-        let innovation = antenna.ned_from(fix.position);
-        let z = Matrix::<3, 1>::from_column([innovation.n, innovation.e, innovation.d]);
-
-        let mut h = Matrix::<3, N_STATE>::zeros();
-        h.set_block(0, P_ID, &Mat3::identity());
-        // A platform tilt swings the lever arm, moving the modelled antenna.
-        h.set_block(0, PHI_ID, &lever_n.skew());
-
-        let r = fix.position_std.squared().to_diag();
+        // How far behind the filter the fix's epoch is: zero for a fix on
+        // time, positive for a late one. Within the epoch tolerance it is on
+        // time, and everything below is then exactly what it always was.
+        let behind = self.state.time.seconds_since(fix.time);
+        let dt = if behind > self.epoch_tolerance {
+            behind
+        } else {
+            0.0
+        };
         self.note_prior();
-        // Ungated, as it always was; partial shares apply to it like any other.
-        self.filter.update_gated_partial(
-            &z,
-            &h,
-            &r,
-            None,
-            crate::eskf::HeldStates::NONE,
-            &self.options.partial_update,
-        )?;
+        self.apply_gnss_position(&fix, dt)?;
         self.feedback();
 
         // A fix carrying velocity gives a second, independent measurement.
@@ -371,17 +443,65 @@ impl GinsEngine {
             && fix.velocity_std.y > 0.0
             && fix.velocity_std.z > 0.0;
         if let Some(velocity) = fix.velocity.filter(|_| velocity_usable) {
-            let m = measurement::gnss_velocity(
-                &self.state.pva,
-                &self.previous_imu,
-                self.options.antenna_lever_arm,
-                velocity,
-                fix.velocity_std,
-            );
-            self.apply_inner(&m)?;
+            self.apply_gnss_velocity(&fix, velocity, dt)?;
         }
         self.seal_checkpoint();
         Ok(())
+    }
+
+    /// The position half of a fix, `dt` seconds behind the filter.
+    ///
+    /// The position and velocity halves each in their own frame, so that
+    /// neither's matrices are on the stack while the other runs its update.
+    #[inline(never)]
+    fn apply_gnss_position(&mut self, fix: &GnssFix, dt: F) -> Result<(), FilterError> {
+        let then = self.backdated(dt);
+        let lever_n = then.attitude.dcm * self.options.antenna_lever_arm;
+        let antenna = then.position.shifted_linear(Ned::from_vec3(lever_n));
+
+        // Innovation: where the INS thinks the antenna is, minus where GNSS
+        // says it is, in local NED metres.
+        let innovation = antenna.ned_from(fix.position);
+        let z = Matrix::<3, 1>::from_column([innovation.n, innovation.e, innovation.d]);
+
+        let mut h = Matrix::<3, N_STATE>::zeros();
+        h.set_block(0, P_ID, &Mat3::identity());
+        // A platform tilt swings the lever arm, moving the modelled antenna.
+        h.set_block(0, PHI_ID, &lever_n.skew());
+        let h = self.carried_forward(&h, dt);
+
+        let r = fix.position_std.squared().to_diag();
+        // Ungated, as it always was; partial shares apply to it like any other.
+        self.filter
+            .update_gated_partial(
+                &z,
+                &h,
+                &r,
+                None,
+                crate::eskf::HeldStates::NONE,
+                &self.options.partial_update,
+            )
+            .map(|_| ())
+    }
+
+    /// The velocity half of a fix, `dt` seconds behind the filter, worked
+    /// back from the state the position half has just corrected.
+    #[inline(never)]
+    fn apply_gnss_velocity(
+        &mut self,
+        fix: &GnssFix,
+        velocity: Ned,
+        dt: F,
+    ) -> Result<(), FilterError> {
+        let mut m = measurement::gnss_velocity(
+            &self.backdated(dt),
+            &self.previous_imu,
+            self.options.antenna_lever_arm,
+            velocity,
+            fix.velocity_std,
+        );
+        m.jacobian = self.carried_forward(&m.jacobian, dt);
+        self.apply_inner(&m).map(|_| ())
     }
 
     /// Apply an auxiliary measurement and feed the correction back.
@@ -895,16 +1015,20 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_fix_is_discarded_rather_than_applied_late() {
-        let mut e = GinsEngine::new(options()).unwrap();
-        e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
-        // A fix from well before the current interval.
-        let fix = GnssFix::position_only(GpsTime::from_tow(0.001), origin(), Vec3::splat(1.0));
-        e.add_gnss(fix);
-        assert_eq!(
-            e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
-            GnssPlacement::None
-        );
+    fn a_fix_behind_the_filter_is_late_within_the_limit_and_stale_past_it() {
+        // A fix 9 ms before the current interval begins: worked back to under
+        // the default half-second allowance, discarded under a 5 ms one.
+        for (limit, want) in [(0.5, GnssPlacement::Late), (0.005, GnssPlacement::None)] {
+            let mut e = GinsEngine::new(options().with_max_fix_latency(limit)).unwrap();
+            e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
+            let fix = GnssFix::position_only(GpsTime::from_tow(0.001), origin(), Vec3::splat(1.0));
+            e.add_gnss(fix);
+            assert_eq!(
+                e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
+                want,
+                "limit {limit}"
+            );
+        }
     }
 
     #[test]
@@ -1039,6 +1163,93 @@ mod tests {
             for i in 0..3 {
                 assert_relative_eq!(got[i], want[i], epsilon = 1e-15);
             }
+        }
+    }
+
+    /// Three engines on the same dead-reckoned run, north at 10 m/s,
+    /// accelerating at 2 m/s² and turning at 0.2 rad/s with the antenna a
+    /// metre ahead, so that every term of the back-working is exercised; and
+    /// a fix at t = 1.00 s 3 m east of where the antenna was. One engine gets
+    /// no fix, one gets it on time, one gets it `late` seconds after its
+    /// epoch. The states of all three at t = 1.20 s.
+    fn late_fix_runs(late: F, max_latency: F, velocity: bool) -> [NavState; 3] {
+        let options = GinsOptions::default()
+            .with_initial_state(origin(), Ned::new(10.0, 0.0, 0.0), Euler::default())
+            .with_antenna_lever_arm(Vec3::new(1.0, 0.0, -0.5))
+            .with_max_fix_latency(max_latency);
+        let step = |e: &mut GinsEngine, k: usize| {
+            let mut sample = stationary_sample(e, 0.01, k as F * 0.01);
+            sample.dvel += Vec3::new(2.0, 0.0, 0.0) * 0.01;
+            sample.dtheta += Vec3::new(0.0, 0.0, 0.2) * 0.01;
+            e.add_imu(sample).unwrap();
+        };
+        let mut none = GinsEngine::new(options).unwrap();
+        for k in 1..=100 {
+            step(&mut none, k);
+        }
+        let mut fix = GnssFix::position_only(
+            GpsTime::from_tow(1.0),
+            none.antenna_position().shifted(Ned::new(0.0, 3.0, 0.0)),
+            Vec3::splat(0.5),
+        );
+        if velocity {
+            fix.velocity = Some(Ned::new(12.0, 0.5, 0.0));
+            fix.velocity_std = Vec3::splat(0.1);
+        }
+        let mut on_time = GinsEngine::new(options).unwrap();
+        let mut delayed = GinsEngine::new(options).unwrap();
+        let arrives = 100 + (late * 100.0).round() as usize;
+        for k in 1..=120 {
+            if k == 101 {
+                on_time.add_gnss(fix);
+            }
+            if k == arrives + 1 {
+                delayed.add_gnss(fix);
+            }
+            step(&mut on_time, k);
+            step(&mut delayed, k);
+            if k > 100 {
+                step(&mut none, k);
+            }
+        }
+        [none.nav_state(), on_time.nav_state(), delayed.nav_state()]
+    }
+
+    #[test]
+    fn a_late_fix_lands_where_an_on_time_one_would() {
+        // 80 ms late at 10 m/s is 0.8 m of travel, which is what applying the
+        // fix against the current state instead would be wrong by. Worked
+        // back and carried forward, a position lands 3 µm and 12 µm/s from
+        // the on-time fix, and with its velocity 0.25 mm and 1.1 mm/s; the
+        // tolerances are about four times those.
+        for (velocity, metres, speed) in [(false, 1e-4, 1e-4), (true, 1e-3, 4e-3)] {
+            let [none, on_time, late] = late_fix_runs(0.08, 0.5, velocity);
+            let moved = on_time.position().ned_from(none.position());
+            assert!(moved.e > 1.0, "the fix should matter: {moved:?}");
+            let apart = late
+                .position()
+                .ned_from(on_time.position())
+                .to_vec3()
+                .norm();
+            let off = (late.pva.velocity.to_vec3() - on_time.pva.velocity.to_vec3()).norm();
+            assert!(
+                apart < metres && off < speed,
+                "velocity {velocity}: {apart:.2e} m and {off:.2e} m/s from the on-time fix"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fix_later_than_the_limit_is_not_applied() {
+        // 80 ms behind against a 50 ms limit, and against no allowance at all,
+        // which is what the engine did before late fixes were accepted.
+        for limit in [0.05, 0.0] {
+            let [none, _, late] = late_fix_runs(0.08, limit, true);
+            let apart = late.position().ned_from(none.position()).to_vec3().norm();
+            assert!(
+                apart < 1e-9,
+                "limit {limit}: a stale fix moved the state {apart:.2e} m"
+            );
         }
     }
 

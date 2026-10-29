@@ -84,6 +84,19 @@ pub struct GinsOptions {
     /// processes, on top of any states a measurement holds. See
     /// [`PartialUpdate`].
     pub partial_update: PartialUpdate,
+    /// How late a GNSS fix may arrive and still be applied, seconds.
+    ///
+    /// A receiver reports a fix some tens of milliseconds after its epoch —
+    /// comma2k19's u-blox about 80 — by which time the filter has propagated
+    /// past it. A fix up to this much behind the filter is compared with the
+    /// state as it was at the fix's epoch, worked back over the gap from the
+    /// last IMU sample, and its Jacobian carried forward to now through the
+    /// transition, as NASA's *Navigation Filter Best Practices* §4.1 does.
+    /// Anything later is dropped. Zero applies only fixes the filter has not
+    /// yet passed, which is what it did before this existed. The back-working
+    /// assumes the acceleration and rotation rate hold over the gap, so keep
+    /// it short: half a second by default.
+    pub max_fix_latency: F,
 }
 
 impl Default for GinsOptions {
@@ -105,6 +118,7 @@ impl Default for GinsOptions {
             max_consecutive_rejections: 10,
             rejection_inflation: 4.0,
             partial_update: PartialUpdate::FULL,
+            max_fix_latency: 0.5,
         }
     }
 }
@@ -137,6 +151,12 @@ impl GinsOptions {
     /// Replace how much of each correction each state takes.
     pub fn with_partial_update(mut self, partial_update: PartialUpdate) -> Self {
         self.partial_update = partial_update;
+        self
+    }
+
+    /// Replace how late a GNSS fix may arrive and still be applied, seconds.
+    pub fn with_max_fix_latency(mut self, seconds: F) -> Self {
+        self.max_fix_latency = seconds;
         self
     }
 
@@ -192,6 +212,9 @@ impl GinsOptions {
         if !self.partial_update.is_valid() {
             return Some(ConfigError::InvalidPartialUpdate);
         }
+        if !self.max_fix_latency.is_finite() || self.max_fix_latency < 0.0 {
+            return Some(ConfigError::InvalidFixLatency);
+        }
         None
     }
 }
@@ -221,6 +244,8 @@ pub enum ConfigError {
     /// A partial-update share is above 100 %, which would overshoot the
     /// optimal correction rather than take part of it.
     InvalidPartialUpdate,
+    /// The fix latency bound is negative or not finite.
+    InvalidFixLatency,
 }
 
 impl ConfigError {
@@ -235,6 +260,7 @@ impl ConfigError {
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
             Self::RejectionLimitTooLarge => "max consecutive rejections must be <= 255",
             Self::InvalidPartialUpdate => "partial-update shares must be at most 100 %",
+            Self::InvalidFixLatency => "max fix latency must be finite and >= 0",
         }
     }
 }
@@ -362,6 +388,24 @@ mod tests {
         let over = GinsOptions::default()
             .with_partial_update(PartialUpdate::FULL.with(BG_ID..BG_ID + 3, 101));
         assert_eq!(over.validate(), Some(ConfigError::InvalidPartialUpdate));
+    }
+
+    #[test]
+    fn a_negative_fix_latency_is_rejected() {
+        assert_eq!(
+            GinsOptions::default().with_max_fix_latency(0.0).validate(),
+            None
+        );
+        assert_eq!(
+            GinsOptions::default().with_max_fix_latency(-0.1).validate(),
+            Some(ConfigError::InvalidFixLatency)
+        );
+        assert_eq!(
+            GinsOptions::default()
+                .with_max_fix_latency(F::NAN)
+                .validate(),
+            Some(ConfigError::InvalidFixLatency)
+        );
     }
 
     #[test]

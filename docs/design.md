@@ -143,8 +143,12 @@ in [frames.md](frames.md).
        │
        ├── at an edge ───────► predict and update in the right order
        │
-       └── strictly inside ──► split the IMU sample at the fix epoch,
-                               predict, update, predict the remainder
+       ├── strictly inside ──► split the IMU sample at the fix epoch,
+       │                       predict, update, predict the remainder
+       │
+       └── already behind ───► work the state back to the fix epoch,
+                               update with the Jacobian carried forward,
+                               then predict
        │
        ▼
  measurement update (Bierman, one row at a time)
@@ -157,13 +161,24 @@ Splitting the IMU sample at the GNSS epoch is what keeps a 1 Hz GNSS fix from
 being applied up to one IMU interval late. At 100 Hz and 30 m/s that error would
 be 0.3 m — larger than the GNSS noise it is trying to correct.
 
+A real receiver makes it worse: it reports a fix tens of milliseconds after the
+epoch it describes — comma2k19's u-blox about 80 — so by the time a fix
+arrives the filter has propagated past it. One up to
+`GinsOptions::max_fix_latency` behind (half a second by default) is compared
+with the state worked back to its epoch from the last IMU interval's specific
+force and rotation rate, and its Jacobian is carried forward to now as
+`H (I − F Δt)`: NASA's treatment of a latent measurement in *Navigation Filter
+Best Practices* (NASA/TP-2018-219822, §4.1). On comma2k19, handing every fix
+over when it was logged rather than at its epoch gives the same errors to
+within millimetres; without this, every one of those fixes was dropped.
+
 ## Sans-IO
 
 `GinsEngine` has no dependency on how samples arrive. It exposes:
 
 ```rust
 engine.add_imu(sample)?;   // processes immediately
-engine.add_gnss(fix);      // queued for the interval that contains it
+engine.add_gnss(fix);      // queued for its interval, or worked back to if late
 engine.nav_state();        // current solution
 engine.covariance();       // current uncertainty
 ```
@@ -182,7 +197,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<9, 6>` (the noise mapping's navigation block) | 432 | 432 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 264 | **2 344** |
+| `GinsEngine` total | 3 272 | **2 352** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -251,10 +266,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 264 B | 2 320 B |
+| `GinsEngine` | 3 272 B | 2 328 B |
 | peak stack | 16 480 B | **9 504 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 840 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 848 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
 covariance was factored, and again after the held-state update was, built with
@@ -277,6 +292,17 @@ again:
 | 21-state, `f64` | **9 820** *(was 16 156)* | 7 676 | **9 820** |
 | 21-state, `f32-covariance` | **9 676** *(was 12 420)* | 6 476 | **9 676** |
 | 15-state (`reduced-state`) | **6 172** *(was 9 684)* | 5 340 | **6 268** |
+
+Accepting late GNSS fixes then added a path, and finding room for it took the
+peak down again. The transition matrix had been built inside one caller;
+called from a second, it went out of line and was returned by value, 3.5 KiB
+in both frames, so it is now written into the caller's buffer. Now:
+
+| | `add_imu` | a GNSS fix | a late GNSS fix | peak |
+|---|---|---|---|---|
+| 21-state, `f64` | **8 080** | 8 412 | 8 708 | **8 708** |
+| 21-state, `f32-covariance` | **7 368** | 7 368 | 8 256 | **8 256** |
+| 15-state (`reduced-state`) | **6 048** | 6 084 | 6 332 | **6 332** |
 
 Every IMU error state is a Gauss-Markov process that depends on nothing but
 itself, so the transition is block triangular and Thornton's Gram-Schmidt only
@@ -304,12 +330,14 @@ rows: the optimal posterior, which Bierman computes, plus a positive
 semi-definite term with one rank-one piece per measurement row, which the
 Agee–Turner update adds to the factors. Nothing is formed, and nothing is
 refactored. CI re-measures the peak on every run, against ceilings that the
-full sweep would exceed: 11 KiB at `f64` and with `f32-covariance`, 7 KiB at
-15 states.
+full sweep would exceed: 10 KiB at `f64`, 9.5 KiB with `f32-covariance`, 7 KiB
+at 15 states.
 
 On M8's figures that was the difference between needing a 32 KiB task stack
-and fitting in 16 KiB. Now every configuration fits in 10 KiB: the 21-state
-filter peaks at 9.6 KiB at either precision, and at 6.1 KiB with 15 states.
+and fitting in 16 KiB. Now every configuration fits in 9 KiB: the 21-state
+filter peaks at 8.5 KiB, 8.1 KiB with `f32-covariance`, and at 6.2 KiB with
+15 states — each the late-fix path, which carries a transition matrix on top of
+the update.
 Fifteen states still buy the most headroom, and they change no numerics at all —
 they simply estimate fewer things.
 
@@ -342,7 +370,8 @@ turned out to be the same piece of work.
 What is left on the `add_imu` frame is the transition matrix itself, 3 528
 bytes of `f64` in either configuration, which the smoother records whole. The
 partitioned update reads only its navigation rows and its diagonal, so a
-filter that never smooths could build less of it.
+filter that never smooths could build less of it. A late fix builds one as well,
+to carry its Jacobian forward, and needs only the rows that Jacobian touches.
 
 ## Auxiliary sensors ("+ other")
 

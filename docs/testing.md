@@ -321,9 +321,10 @@ cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if the peak exceeds 11 KiB, at either
-precision or on the Cortex-M7, or 7 KiB with 15 states — ceilings the full
-Gram-Schmidt time update, retired since, does not fit under.
+CI runs it on every push and fails if the peak exceeds 10 KiB at `f64` and on
+the Cortex-M7, 9.5 KiB with `f32-covariance`, or 7 KiB with 15 states —
+ceilings the full Gram-Schmidt time update, retired since, does not fit under,
+and nor does returning the transition matrix by value.
 
 ### How the measurement works
 
@@ -569,6 +570,14 @@ the soft-float build appeared to get *slower*, and it was wrong — a software
 `f64` divide measures about one and a half multiplies in the same ticks. What
 had happened was the counter wrapping, below.
 
+Accepting late GNSS fixes then added a path that carries a transition matrix on
+top of an update, and making room for it took the plain `add_imu` frame down
+again, to 8 080 bytes at `f64`: the matrix is now written into its caller's
+buffer instead of returned by value, which had put it in two frames once it had
+two callers. The peak is now a late fix's — 8 708 bytes, 8 256 with
+`f32-covariance`, 6 332 at 15 states and 8 388 on the M7 — and `add_imu` does
+up to 4 % less work than in the table above.
+
 ### Why this layer exists
 
 The `docs/design.md` budget previously carried an estimate of ~11 KiB, reasoned
@@ -636,6 +645,13 @@ Figures from commits that are not re-run here are corrected by adding back two
 counter periods, 2 × 33 554. The fixed harness confirms that on `main`: the
 published 21 398 corrects to 88 507, and it measures 88 492 there now. The
 `f32-covariance`, Cortex-M7 and held-update figures stand as published.
+
+The scenario has to hold still as well. The count is a soft-float sum over the
+covariance, and a soft-float operation on an exact zero is cheap, so it depends
+on how dense the covariance is when the timing starts. A late-fix stack
+measurement added ahead of the timing loop, with a velocity update in it, read
+25 % more work for `add_imu` with no change to the code. It now runs on a copy
+of the engine, and the timing loop starts from the state it always did.
 
 ## Layer 10 — the data path links no panic machinery
 

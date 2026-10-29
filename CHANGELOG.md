@@ -87,6 +87,24 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Late GNSS fixes are applied, not dropped.** A receiver reports a fix after
+  its epoch — comma2k19's u-blox 80 ms after — and the engine dropped any fix
+  whose epoch it had already propagated past, so a real-time integration had
+  to delay its whole IMU stream or lose every fix. A fix up to
+  `GinsOptions::max_fix_latency` behind (0.5 s by default; zero restores the
+  old behaviour) is now compared with the state worked back to its epoch from
+  the last IMU interval, and its Jacobian carried forward as `H (I − F Δt)`,
+  as NASA's *Navigation Filter Best Practices* §4.1 treats a latent
+  measurement. Delivered 80 ms late, a fix lands within 3 µm of where it
+  would on time, half a millimetre with its velocity. On the comma2k19
+  holdout, handing every fix over at its log time (`drifters comma
+  --fixes-at-arrival`) gives the same errors as epoch order to within
+  millimetres, where dropping them gave 98 m. Making room for the new path
+  — the transition matrix is now written into its caller's buffer, which
+  `eskf::transition_matrix_into` exposes — took the peak stack to 8 708
+  bytes (8 256 with `f32-covariance`, 6 332 at 15 states), and CI's ceilings
+  to 10, 9.5 and 7 KiB. `drifters.v1.GinsOptions` carries the bound as
+  `max_fix_latency_s`, absent meaning the default.
 - **`WheelSpeedScale`**, an estimator of a wheel-speed sensor's scale factor
   against GNSS ground speed. Car wheel-speed sensors assume a tyre radius, and
   comma2k19's CAN speed reads 1.0 % low on all 21 drives — 0.28 m/s at highway

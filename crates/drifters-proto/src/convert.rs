@@ -513,6 +513,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
         msg.set_imu_noise((&o.imu_noise).into());
         msg.set_antenna_lever_arm_m((&o.antenna_lever_arm).into());
         msg.set_zupt_holds_attitude(o.zupt_holds_attitude);
+        msg.set_max_fix_latency_s(o.max_fix_latency);
         // Left empty for the ordinary filter, which is what an empty field
         // decodes to. Otherwise one byte per state; the capacity is 21 and no
         // build has more states, so this cannot overflow.
@@ -588,6 +589,12 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
             // the setting that lets the accel-bias/tilt pair diverge.
             zupt_holds_attitude: msg.r#zupt_holds_attitude().copied().unwrap_or(true),
             partial_update: partial_update(msg.r#partial_update_percent())?,
+            // Absent means the recommended default, not zero: zero would drop
+            // every late fix a message from before this field meant to keep.
+            max_fix_latency: msg
+                .r#max_fix_latency_s()
+                .copied()
+                .unwrap_or(GinsOptions::default().max_fix_latency),
         };
         if options.validate().is_some() {
             return Err(ConvertError::Invalid("gins_options"));
@@ -1157,6 +1164,20 @@ mod option_defaults {
             .unwrap()
             .partial_update
             .is_full());
+    }
+
+    #[test]
+    fn an_absent_fix_latency_decodes_to_the_default_and_a_set_one_survives() {
+        let mut msg = pb::GinsOptions::from(&GinsOptions::default());
+        msg.clear_max_fix_latency_s();
+        let decoded = GinsOptions::try_from(&msg).expect("valid");
+        assert_eq!(
+            decoded.max_fix_latency,
+            GinsOptions::default().max_fix_latency
+        );
+        let set = GinsOptions::default().with_max_fix_latency(0.2);
+        let back = GinsOptions::try_from(&pb::GinsOptions::from(&set)).expect("valid");
+        assert_eq!(back.max_fix_latency, 0.2);
     }
 
     #[test]

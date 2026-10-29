@@ -199,17 +199,17 @@ mod size_tests {
         // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
         // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
         // largest single saving the engine has had. 24 more for the options'
-        // per-state partial-update shares.
+        // per-state partial-update shares, and 8 for the fix latency bound.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (
                 cfg!(feature = "smoothing"),
                 cfg!(feature = "f32-covariance")
             ) {
-                (true, false) => 21_512,
-                (true, true) => 20_592,
-                (false, false) => 3_264,
-                (false, true) => 2_344,
+                (true, false) => 21_520,
+                (true, true) => 20_600,
+                (false, false) => 3_272,
+                (false, true) => 2_352,
             },
             "whole engine"
         );
@@ -239,10 +239,10 @@ mod size_tests {
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (cfg!(feature = "smoothing"), f32_covariance) {
-                (true, false) => 11_832,
-                (true, true) => 11_352,
-                (false, false) => 2_320,
-                (false, true) => 1_840,
+                (true, false) => 11_840,
+                (true, true) => 11_360,
+                (false, false) => 2_328,
+                (false, true) => 1_848,
             },
             "whole engine"
         );

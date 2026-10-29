@@ -29,6 +29,19 @@ use crate::ud::{Ud, Whitened};
 /// respect to radians.
 pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> StateMatrix {
     let mut f = StateMatrix::zeros();
+    transition_matrix_into(state, imu, noise, &mut f);
+    f
+}
+
+/// [`transition_matrix`], written into the caller's matrix.
+///
+/// The filter's own callers use this. Returned by value from a function the
+/// optimiser keeps out of line, as it does once two callers share it, the
+/// 3.5 KiB matrix sat in both frames: built in this one, copied into the
+/// caller's. That was 1.8 KiB on the peak stack the moment a second caller
+/// appeared.
+pub fn transition_matrix_into(state: &Pva, imu: &ImuSample, noise: &ImuNoise, f: &mut StateMatrix) {
+    *f = StateMatrix::zeros();
 
     let lat = state.position.lat;
     let h = state.position.height;
@@ -131,8 +144,6 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
         f.set_block(SG_ID, SG_ID, &decay_block);
         f.set_block(SA_ID, SA_ID, &decay_block);
     }
-
-    f
 }
 
 /// Maps the 18 driving-noise channels onto the 21 error states.
@@ -622,7 +633,8 @@ impl Eskf {
         // expression-chained version held about a dozen 21x21 matrices live,
         // which measured at 35.3 KiB of stack on Cortex-M4 — see
         // docs/design.md.
-        let mut phi = transition_matrix(state, imu, noise);
+        let mut phi = StateMatrix::zeros();
+        transition_matrix_into(state, imu, noise, &mut phi);
         for i in 0..N_STATE {
             for j in 0..N_STATE {
                 phi.data[i][j] *= dt;

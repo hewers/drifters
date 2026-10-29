@@ -424,6 +424,13 @@ pub struct ReplayOptions {
     /// divide it out of every wheel-speed update. Each segment starts from a
     /// scale of one. See [`drifters_filter::WheelSpeedScale`].
     pub wheel_scale: Option<drifters_filter::WheelScaleConfig>,
+    /// Hand each fix to the engine this many seconds after its epoch, as a
+    /// receiver would, instead of in epoch order. With the latency the reader
+    /// removed, that is when the fix was logged, and every fix then arrives
+    /// behind the filter. See [`GinsOptions::max_fix_latency`].
+    pub arrival_delay: Option<F>,
+    /// Override [`GinsOptions::max_fix_latency`].
+    pub max_fix_latency: Option<F>,
 }
 
 impl Default for ReplayOptions {
@@ -437,6 +444,8 @@ impl Default for ReplayOptions {
             settle: 10.0,
             partial: drifters_filter::PartialUpdate::FULL,
             wheel_scale: None,
+            arrival_delay: None,
+            max_fix_latency: None,
         }
     }
 }
@@ -531,6 +540,9 @@ pub fn replay(
         initial_velocity_std: Vec3::splat(0.5),
         initial_attitude_std: Vec3::new(2.0 * DEG_TO_RAD, 2.0 * DEG_TO_RAD, 5.0 * DEG_TO_RAD),
         partial_update: options.partial,
+        max_fix_latency: options
+            .max_fix_latency
+            .unwrap_or(GinsOptions::default().max_fix_latency),
         ..GinsOptions::default()
     }
     .with_initial_state(first.position, first.velocity.unwrap_or(Ned::ZERO), euler);
@@ -562,7 +574,8 @@ pub fn replay(
         // sample instead weighs a 5 Hz segment twice as heavily in its column
         // as in the fixes', and the two medians then disagree about nothing.
         let mut scored = false;
-        while next < segment.fixes.len() && segment.fixes[next].time.tow() <= t {
+        let delay = options.arrival_delay.unwrap_or(0.0);
+        while next < segment.fixes.len() && segment.fixes[next].time.tow() + delay <= t {
             let fix = segment.fixes[next];
             next += 1;
             let tf = fix.time.tow();

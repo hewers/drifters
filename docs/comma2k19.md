@@ -41,7 +41,13 @@ tuning could recover.
   0.82 m. The fix's own UTC stamp, mapped onto the boot clock through the
   frames' GPS times, lands 202 ms early instead — so one of those two clocks is
   off by ~120 ms, and this dataset cannot say which. The replay uses the log
-  time less 80 ms, which is what lines up with the reference.
+  time less 80 ms, which is what lines up with the reference. By default it
+  hands each fix to the engine in epoch order; `--fixes-at-arrival` hands it
+  over at its log time instead, as a receiver would, 80 ms behind the filter,
+  and the engine works back to it. Across the holdout that gives the same
+  errors to within a few millimetres — 1.397 m against 1.395 m RMS, a
+  thirty-second outage at 7.02 m against 6.95 m median. Before the engine
+  accepted late fixes, every one of them was dropped: 98 m RMS.
 - **The IMU's axes are the camera's**, forward-right-down: the specific force
   predicted from the reference trajectory in the camera frame matches the
   accelerometer to 0.5 m/s² RMS. The camera is pitched 3.33° and yawed 0.68°

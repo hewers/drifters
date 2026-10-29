@@ -74,6 +74,11 @@ fn main() -> ! {
             );
             fix.velocity = Some(Ned::new(10.0, 0.0, 0.0));
             fix.velocity_std = Vec3::splat(0.2);
+            // Every other second, the fix arrives 50 ms after its epoch and
+            // takes the late path instead.
+            if k % 400 == 0 {
+                fix.time = GpsTime::from_tow(t - 0.05);
+            }
             engine.add_gnss(fix);
             wheel.observe(fix.time, 9.9, 10.0, 0.2);
             let _ = engine.apply_wheel_speed(wheel.correct(9.9), wheel.sigma_for(9.9, 0.3));

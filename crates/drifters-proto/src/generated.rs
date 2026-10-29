@@ -5879,6 +5879,16 @@ pub mod drifters_ {
             /// state of the build reading it — 21, or 15 under `reduced-state` — and the
             /// wire capacity is fixed at 21 for the reason `Covariance` gives.
             pub r#partial_update_percent: ::heapless::Vec<u8, 21>,
+            /// How late a GNSS fix may arrive and still be applied, seconds. A fix behind
+            /// the filter by up to this much is compared with the state worked back to
+            /// its epoch; anything later is dropped.
+            ///
+            /// `optional` so that absence decodes to the recommended default rather than
+            /// to zero, which would silently drop every late fix a message predating
+            /// this field meant to keep.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#max_fix_latency_s: f64,
             /// Tracks presence of optional and message fields
             pub _has: GinsOptions_::_Hazzer,
         }
@@ -5918,6 +5928,7 @@ pub mod drifters_ {
                 ret &= (self.r#rejection_inflation == other.r#rejection_inflation);
                 ret &= (self.r#zupt_holds_attitude() == other.r#zupt_holds_attitude());
                 ret &= (self.r#partial_update_percent == other.r#partial_update_percent);
+                ret &= (self.r#max_fix_latency_s() == other.r#max_fix_latency_s());
                 ret
             }
         }
@@ -6620,6 +6631,45 @@ pub mod drifters_ {
                 self.r#partial_update_percent = value.into();
                 self
             }
+            /// Return a reference to `max_fix_latency_s` as an `Option`
+            #[inline]
+            pub fn r#max_fix_latency_s(&self) -> ::core::option::Option<&f64> {
+                self._has.r#max_fix_latency_s().then_some(&self.r#max_fix_latency_s)
+            }
+            /// Set the value and presence of `max_fix_latency_s`
+            #[inline]
+            pub fn set_max_fix_latency_s(&mut self, value: f64) -> &mut Self {
+                self._has.set_max_fix_latency_s();
+                self.r#max_fix_latency_s = value.into();
+                self
+            }
+            /// Return a mutable reference to `max_fix_latency_s` as an `Option`
+            #[inline]
+            pub fn mut_max_fix_latency_s(&mut self) -> ::core::option::Option<&mut f64> {
+                self._has.r#max_fix_latency_s().then_some(&mut self.r#max_fix_latency_s)
+            }
+            /// Clear the presence of `max_fix_latency_s`
+            #[inline]
+            pub fn clear_max_fix_latency_s(&mut self) -> &mut Self {
+                self._has.clear_max_fix_latency_s();
+                self
+            }
+            /// Take the value of `max_fix_latency_s` and clear its presence
+            #[inline]
+            pub fn take_max_fix_latency_s(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#max_fix_latency_s()
+                    .then(|| ::core::mem::take(&mut self.r#max_fix_latency_s));
+                self._has.clear_max_fix_latency_s();
+                val
+            }
+            /// Builder method that sets the value of `max_fix_latency_s`. Useful for initializing the message.
+            #[inline]
+            pub fn init_max_fix_latency_s(mut self, value: f64) -> Self {
+                self.set_max_fix_latency_s(value);
+                self
+            }
         }
         impl ::micropb::MessageDecode for GinsOptions {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
@@ -6758,6 +6808,14 @@ pub mod drifters_ {
                                 decoder
                                     .decode_bytes(mut_ref, ::micropb::Presence::Implicit)?;
                             };
+                        }
+                        18u32 => {
+                            let mut_ref = &mut self.r#max_fix_latency_s;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_max_fix_latency_s();
                         }
                         _ => {
                             decoder.skip_wire_value(tag.wire_type())?;
@@ -6966,6 +7024,16 @@ pub mod drifters_ {
                         break 'msg (::core::result::Result::<usize, _>::Err(err));
                     }
                 }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
                 ::core::result::Result::Ok(max_size)
             };
             fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
@@ -7102,6 +7170,14 @@ pub mod drifters_ {
                     if !val_ref.is_empty() {
                         encoder.encode_varint32(138u32)?;
                         encoder.encode_bytes(val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#max_fix_latency_s()
+                    {
+                        encoder.encode_varint32(145u32)?;
+                        encoder.encode_double(*val_ref)?;
                     }
                 }
                 Ok(())
@@ -7275,6 +7351,13 @@ pub mod drifters_ {
                         size
                             += 2usize
                                 + ::micropb::size::sizeof_len_record(val_ref.len());
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#max_fix_latency_s()
+                    {
+                        size += 2usize + 8;
                     }
                 }
                 size
@@ -7639,6 +7722,31 @@ pub mod drifters_ {
                 #[inline]
                 pub const fn init_zupt_holds_attitude(mut self) -> Self {
                     self.set_zupt_holds_attitude();
+                    self
+                }
+                /// Query presence of `max_fix_latency_s`
+                #[inline]
+                pub const fn r#max_fix_latency_s(&self) -> bool {
+                    (self.0[1] & 64) != 0
+                }
+                /// Set presence of `max_fix_latency_s`
+                #[inline]
+                pub const fn set_max_fix_latency_s(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 64;
+                    self
+                }
+                /// Clear presence of `max_fix_latency_s`
+                #[inline]
+                pub const fn clear_max_fix_latency_s(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !64;
+                    self
+                }
+                /// Builder method that sets the presence of `max_fix_latency_s`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_max_fix_latency_s(mut self) -> Self {
+                    self.set_max_fix_latency_s();
                     self
                 }
             }

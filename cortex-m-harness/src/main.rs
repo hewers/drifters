@@ -212,7 +212,27 @@ fn main() -> ! {
     let (_, gnss_step) = measure(bottom, || engine.add_imu(sample(0.015)));
     hprintln!("add_imu with GNSS fix          {}", gnss_step);
 
-    let peak = imu_step.max(zupt).max(height).max(gnss_step);
+    // A late fix, with velocity: its epoch is already behind the filter, so
+    // it is compared with the state worked back to it and both Jacobians are
+    // carried forward through the transition matrix.
+    //
+    // On a copy of the engine. Run on the engine itself, its velocity update
+    // left a denser covariance behind, and the instruction count below — a
+    // soft-float sum over that covariance, cheaper the more of it is exactly
+    // zero — read 25 % more for no change to the code.
+    let mut late_engine = engine;
+    let mut late = drifters_core::types::GnssFix::position_only(
+        GpsTime::from_tow(0.0125),
+        late_engine.nav_state().position(),
+        Vec3::splat(0.5),
+    );
+    late.velocity = Some(Ned::ZERO);
+    late.velocity_std = Vec3::splat(0.1);
+    late_engine.add_gnss(late);
+    let (_, late_step) = measure(bottom, || late_engine.add_imu(sample(0.020)));
+    hprintln!("add_imu with a late GNSS fix   {}", late_step);
+
+    let peak = imu_step.max(zupt).max(height).max(gnss_step).max(late_step);
     hprintln!("");
     // Instructions retired per `add_imu`, under `qemu -icount shift=0`.
     //
