@@ -49,6 +49,20 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The time update is partitioned.** Every IMU error state is a Gauss-Markov
+  process that depends on nothing but itself, so `Ud::predict_partitioned`
+  runs Thornton's Gram-Schmidt over the nine navigation states alone and gives
+  each IMU error a rescaling and one Agee–Turner update for its noise: the
+  partitioned UDU time update in NASA's *Navigation Filter Best Practices*
+  (NASA/TP-2018-219822, §8.3.2). The same factors as the full sweep to 5e-16,
+  and KF-GINS reports the same 0.0330 m and 1.459 NIS. On Cortex-M4 a 21-state
+  `add_imu` does 66 % less work with `f64` in software, 33 % less with
+  `f32-covariance`, and 64 % less on a Cortex-M7; the peak stack falls from
+  16 156 to 9 820 bytes, from 12 420 to 9 676 with `f32-covariance`, and
+  from 9 684 to 6 268 at 15 states, because the working array shrinks from
+  21×40 to 9×16 and the filter stops forming the full 21×18 noise mapping
+  (`eskf::nav_noise_mapping` builds the 9×6 that is read). CI's stack
+  ceilings come down to 11 KiB, and 7 KiB at 15 states.
 - **Held-state updates stay factored.** A measurement with `HeldStates` — the
   default zero-velocity update holds attitude — used to multiply `P` out, apply
   the Joseph form and factor the result back. It now runs Bierman and then

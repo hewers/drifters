@@ -321,9 +321,9 @@ cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if the peak exceeds 18 KiB, or 16 KiB with
-`f32-covariance` — ceilings the dense held-state update, retired since, did not
-fit under.
+CI runs it on every push and fails if the peak exceeds 11 KiB, at either
+precision or on the Cortex-M7, or 7 KiB with 15 states — ceilings the full
+Gram-Schmidt time update, retired since, does not fit under.
 
 ### How the measurement works
 
@@ -522,6 +522,52 @@ on the M4 is a wash, 1.1 % better at `f64` and 5.4 % worse with
 As everywhere in this layer, this measures work and not cycles. A
 double-precision operation can take more cycles than a single-precision one on
 the M7, which this measurement cannot see; the cycle counts stay with M9.
+
+### The time update, partitioned
+
+Every figure above is Thornton's full sweep: Gram-Schmidt over all twenty-one
+rows of `[Φ U, G]`, forty columns wide, once per IMU sample. Most of that is
+wasted on states whose dynamics are trivial. Every IMU error is a Gauss-Markov
+process that depends on nothing but itself, so `Φ` is block triangular, and the
+update splits in two (NASA/TP-2018-219822, §8.3.2): Gram-Schmidt over the nine
+navigation rows of `[Φxx Uxx, Gxx]`, fifteen columns wide, then for each IMU
+error a rescaling for its decay and one Agee–Turner update for its noise.
+[`Ud::predict_partitioned`](../crates/drifters-filter/src/ud.rs) matches the
+full sweep to 5e-16 per step at `f64` and to 8e-14 over a thousand steps, eight
+mutations of it each fail a test, and KF-GINS reports the same 0.0330 m and the
+same 1.459 NIS to every printed digit.
+
+Per `add_imu`, ticks, with the per-call timing below, built with rustc 1.99:
+
+| | full sweep | partitioned | |
+|---|---|---|---|
+| Cortex-M4, `f64` | 87 425 | **29 716** | −66 % |
+| Cortex-M4, `f32-covariance` | 9 933 | **6 616** | −33 % |
+| Cortex-M4, 15-state | 38 995 | **18 924** | −51 % |
+| Cortex-M7, `f64` | 5 087 | **1 809** | −64 % |
+| Cortex-M7, `f32-covariance` | 5 248 | **1 755** | −67 % |
+| Cortex-M7, 15-state | 2 365 | **1 198** | −49 % |
+
+And the peak stack, which is `add_imu` in every 21-state build:
+
+| | full sweep | partitioned |
+|---|---|---|
+| Cortex-M4, `f64` | 16 156 | **9 820** |
+| Cortex-M4, `f32-covariance` | 12 420 | **9 676** |
+| Cortex-M4, 15-state | 9 684 | **6 268** |
+| Cortex-M7, `f64` | 15 576 | **9 228** |
+
+The working array goes from 21×40 to 9×16, and because the update reads only
+the navigation block of the noise mapping, the filter stops building the full
+21×18 one — 3 KiB of `f64` on the frame at either precision, which is why
+`f32-covariance` gains here too and the two precisions now peak within 150
+bytes of each other.
+
+The new update does more divisions: two per row of each Agee–Turner sweep,
+nearly 400 in all against the full sweep's 21. That was the first suspect when
+the soft-float build appeared to get *slower*, and it was wrong — a software
+`f64` divide measures about one and a half multiplies in the same ticks. What
+had happened was the counter wrapping, below.
 
 ### Why this layer exists
 

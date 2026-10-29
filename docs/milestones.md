@@ -369,6 +369,16 @@ single-precision is most of the soft-float question. Per `add_imu` on
       a seventeenth of the M4's work, not a quarter, and `f32-covariance`
       removed 85 % of it, not 41 %. Calls are now timed one at a time. See
       [testing.md](testing.md), Layer 9.
+- [x] **The time update, partitioned.** Every IMU error state depends on
+      nothing but itself, so Gram-Schmidt need only run over the nine
+      navigation states, with one rank-one update per IMU error for its noise —
+      the partitioned UDU update in NASA's *Navigation Filter Best Practices*.
+      Same factors to 5e-16, and KF-GINS unchanged to every printed digit.
+      `add_imu` does 66 % less work with `f64` in software, 33 % with
+      `f32-covariance` and 64 % on the M7, and the peak stack falls from
+      16 156 to 9 820 bytes, 9 676 with `f32-covariance` and 6 268 at 15
+      states. See [design.md](design.md) and [testing.md](testing.md),
+      Layer 9.
 
 ### Still needs a board
 

@@ -256,17 +256,18 @@ jobs:
           cargo run --release | tee report.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
-          # Ceiling, not a target. 18 KiB leaves headroom over the measured
-          # 15.8 KiB while failing if a change reintroduces the dense
-          # held-state update, which peaked at 18.5 KiB, or the
-          # expression-chained form that cost 35.3 KiB.
+          # Ceiling, not a target. 11 KiB leaves headroom over the measured
+          # 9 820 B while failing if a change reintroduces the full
+          # Gram-Schmidt time update (15.8 KiB), the full noise mapping on
+          # the predict frame (12.1 KiB), the dense held-state update
+          # (18.5 KiB) or the expression-chained form that cost 35.3 KiB.
           #
           # This job could not build for three weeks — `cargo run` went
           # ambiguous when a second binary was added — and in that window the
           # peak grew 63 % unnoticed. A job that fails to build is a job that
           # measures nothing, so the build is now a separate step above.
-          test "$peak" -lt 18432 || { echo "stack budget exceeded"; exit 1; }
-      - name: the 15-state configuration must fit a 16 KiB stack
+          test "$peak" -lt 11264 || { echo "stack budget exceeded"; exit 1; }
+      - name: the 15-state configuration must fit a 7 KiB stack
         working-directory: cortex-m-harness
         run: |
           set -o pipefail
@@ -274,8 +275,9 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 9 684 B.
-          test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
+          # not. Measured at 6 268 B; the full Gram-Schmidt time update peaked
+          # at 9 684 B.
+          test "$peak" -lt 7168 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
         run: |
@@ -283,10 +285,12 @@ jobs:
           cargo run --release --features f32-covariance | tee f32.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
-          # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 12 420 B; the dense
-          # held-state update this ceiling would catch peaked at 18 048 B.
-          test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
+          # Halving the covariance cannot make the stack grow. With the
+          # partitioned time update the predict frame is mostly the f64
+          # transition matrix, so the two precisions peak within 150 bytes of
+          # each other. Measured at 9 676 B; the full sweep peaked at
+          # 12 420 B and the dense held-state update at 18 048 B.
+          test "$peak" -lt 11264 || { echo "f32-covariance budget exceeded"; exit 1; }
       # Many Cortex-M7 parts have a double-precision FPU, and this is the build
       # that uses it: every `f64` operation in hardware, a seventeenth of the
       # work per `add_imu`, bit-identical results. docs/testing.md recommends
@@ -306,8 +310,9 @@ jobs:
           grep -q 'Cortex-M7, f64 in hardware' m7.txt || { echo "not running f64 in hardware"; exit 1; }
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' m7.txt)
           echo "Cortex-M7 peak stack: $peak bytes"
-          # Measured at 15 576 B.
-          test "$peak" -lt 16384 || { echo "Cortex-M7 budget exceeded"; exit 1; }
+          # Measured at 9 228 B; the full Gram-Schmidt time update peaked at
+          # 15 576 B.
+          test "$peak" -lt 11264 || { echo "Cortex-M7 budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |

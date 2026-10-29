@@ -15,9 +15,9 @@ Sans-IO: push samples in, pull state out. It never allocates, blocks, reads a
 clock or touches a file, so the same code runs inside an interrupt handler and
 inside a replay harness.
 
-Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 9.5 KiB peak
-stack on Cortex-M4 in the 15-state configuration; the data path links no panic
-machinery.
+Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 6.1 KiB peak
+stack on Cortex-M4 in the 15-state configuration and 9.6 KiB with 21 states;
+the data path links no panic machinery.
 
 Features:
 

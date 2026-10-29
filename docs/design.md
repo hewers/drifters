@@ -180,14 +180,18 @@ Sizes for the 21-state configuration:
 |---|---|---|
 | `Ud` (the covariance, factored) | 1 848 | **924** |
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
-| `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
+| `Matrix<9, 6>` (the noise mapping's navigation block) | 432 | 432 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
 | `GinsEngine` total | 3 240 | **2 320** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
-both columns. The engine was 4 944 bytes before `GpsTime` became a single `u64`
-and before the covariance was factored.
+both columns. The time update builds only the 9×6 corner of the mapping that
+drives the navigation states; the rest is the identity from each IMU error's
+noise channel to that error, which it assumes rather than reads, so the full
+21×18 `Matrix` (3 024 bytes) is no longer formed per sample. The engine was
+4 944 bytes before `GpsTime` became a single `u64` and before the covariance
+was factored.
 
 Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
 table and the code cannot drift apart silently.
@@ -265,6 +269,30 @@ rustc 1.99:
 `f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
 the largest single object on that frame and it halves.
 
+Then the time update was partitioned, and the peak fell by more than a third
+again:
+
+| | `add_imu` | `apply_zupt` | peak |
+|---|---|---|---|
+| 21-state, `f64` | **9 820** *(was 16 156)* | 7 676 | **9 820** |
+| 21-state, `f32-covariance` | **9 676** *(was 12 420)* | 6 476 | **9 676** |
+| 15-state (`reduced-state`) | **6 172** *(was 9 684)* | 5 340 | **6 268** |
+
+Every IMU error state is a Gauss-Markov process that depends on nothing but
+itself, so the transition is block triangular and Thornton's Gram-Schmidt only
+has to run over the nine navigation states. Each IMU error then takes a
+rescaling for its decay and one Agee–Turner update for its noise. That is
+NASA's partitioned UDU time update (*Navigation Filter Best Practices*,
+NASA/TP-2018-219822, §8.3.2), and
+[`Ud::predict_partitioned`](../crates/drifters-filter/src/ud.rs) gives the same
+factors as the full sweep to 5e-16. The working array goes from 21×40 to 9×16,
+and the full noise mapping goes with it. At 15 states the peak is now
+`add_imu` with a GNSS fix, by 96 bytes.
+
+It also takes 66 % of the work off a 21-state `add_imu` with `f64` in software,
+33 % with `f32-covariance` and 64 % on a Cortex-M7 — see
+[testing.md](testing.md), Layer 9.
+
 The peak is `predict` again. For one milestone it was the **held-state
 update**, which materialised `P` from the factors, applied the Joseph form and
 factored the result back, carrying three `StateMatrix` temporaries where the
@@ -275,12 +303,13 @@ zeroed expands to `(P − K S Kᵀ) + G S Gᵀ`, where `G` is the optimal gain's
 rows: the optimal posterior, which Bierman computes, plus a positive
 semi-definite term with one rank-one piece per measurement row, which the
 Agee–Turner update adds to the factors. Nothing is formed, and nothing is
-refactored. CI re-measures the peak on every run against an 18 KiB ceiling at
-`f64` and 16 KiB at `f32`, both of which the dense held-state path exceeded.
+refactored. CI re-measures the peak on every run, against ceilings that the
+full sweep would exceed: 11 KiB at `f64` and with `f32-covariance`, 7 KiB at
+15 states.
 
 On M8's figures that was the difference between needing a 32 KiB task stack
-and fitting in 16 KiB. The gap is narrower now: the 21-state filter peaks just
-under 16 KiB, with 228 bytes to spare, and at 12.1 KiB with `f32-covariance`.
+and fitting in 16 KiB. Now every configuration fits in 10 KiB: the 21-state
+filter peaks at 9.6 KiB at either precision, and at 6.1 KiB with 15 states.
 Fifteen states still buy the most headroom, and they change no numerics at all —
 they simply estimate fewer things.
 
@@ -309,6 +338,11 @@ different algorithm rather than tidier code, and that is what
 [`ud`](../crates/drifters-filter/src/ud.rs) is — sequential scalar measurement
 updates and a factored covariance, which were the two candidates named here and
 turned out to be the same piece of work.
+
+What is left on the `add_imu` frame is the transition matrix itself, 3 528
+bytes of `f64` in either configuration, which the smoother records whole. The
+partitioned update reads only its navigation rows and its diagonal, so a
+filter that never smooths could build less of it.
 
 ## Auxiliary sensors ("+ other")
 
@@ -400,6 +434,10 @@ at the ingest boundary rather than allowed to poison the state.
   Neither recursion takes a square root. This replaced a Joseph-form update
   and was both smaller and faster than it, which is unusual for a numerical
   improvement and is why the timings are recorded in `ud`'s tests.
+- **The time update is partitioned.** Gram-Schmidt runs over the nine
+  navigation states only; each IMU error state, which depends on nothing but
+  itself, takes a rescaling and one rank-one update. Same factors as the full
+  sweep to rounding, under a fifth of the working memory.
 - **Held states stay factored.** A measurement that must not correct some
   states is Bierman's update followed by one Agee–Turner rank-one update per
   row, restoring exactly the uncertainty the held states would otherwise have
@@ -411,8 +449,10 @@ at the ingest boundary rather than allowed to poison the state.
   not merely inexact, and there is a test that shows it.
 - **Cholesky solve instead of an explicit inverse** wherever a gain still needs
   a matrix solve.
-- **Zero-skipping matrix multiply.** The transition matrix is extremely sparse;
-  skipping zero elements is the single largest win in `predict`.
+- **Zero-skipping matrix multiply.** The transition matrix is extremely sparse,
+  and the products that still take it whole — the smoother's recorded
+  transitions, and a non-zero error state carried across an interval — skip its
+  zeros. It was the single largest win in the dense `predict` this replaced.
 - **`libm` for all transcendentals**, so a shipped build uses one implementation
   on every target. See [adr/0004](adr/0004-linear-algebra.md) for the one place
   this does not hold (host test binaries).
