@@ -191,7 +191,8 @@ segments, scored against comma's own post-processed pose:
 |---|---|---|---|
 | u-blox fixes | 1.40 m | | |
 | ESKF, IMU + GNSS | 1.40 m | 5.2° | 71 m / 313 m |
-| ESKF, + wheel speed, non-holonomic, zero-rate | 1.40 m | **1.15°** | **11.1 m / 34 m** |
+| ESKF, + wheel speed, non-holonomic, zero-rate | 1.40 m | **1.15°** | 11.1 m / 34 m |
+| … and the wheel speed's scale estimated | 1.40 m | **1.15°** | **6.9 m / 34 m** |
 
 The receiver's error is a slowly varying metre that no IMU can see, so the
 fused fix is no better than the receiver's own. What the library buys on a car
@@ -199,7 +200,9 @@ is the outage. Getting there meant measuring an 80 ms fix latency and a camera
 pitched 3.3° off the direction of travel, and it changed the library twice: the
 lockout recovery counted rejections across all sensors, so an accepted wheel
 speed kept a refused constraint locked out through a whole outage, and there
-was no zero-angular-rate update to read a gyro bias at a stop. Details in
+was no zero-angular-rate update to read a gyro bias at a stop. The CAN speed
+reads 1 % low on every drive, and estimating that against GNSS speed cuts the
+median outage drift by more than a third. Details in
 [docs/comma2k19.md](docs/comma2k19.md).
 
 ## Status

@@ -691,17 +691,29 @@ divide-by-zero panic survived for a divisor that is the literal `8`. Written
 with indices under `base + LANES <= W` instead, which the optimiser proves
 without help and which measures the same 3.87 µs propagation.
 
+**`panic_bounds_check`, from `measurement::nonholonomic`.** The same lesson as
+the Gauss-Markov blocks, and it sat outside the audit until the audit was
+widened. The non-holonomic Jacobian copied the lateral and vertical rows of the
+body-velocity Jacobians by iterating `[1, 2]`, and an index drawn from an array
+is not a constant to the optimiser, so every `Matrix` index in the loop kept
+its check. The two rows are now written out. Nothing in the audit called
+`apply_nonholonomic`, `apply_wheel_speed` or a GNSS fix before, so nothing had
+looked.
+
 The general lesson matches Layer 8's: what the optimiser can prove is not
 visible in the source. All of these read as obviously-fine code, and every one
 of them linked a panic. It is also why the audit has to actually run — three of
-the five were introduced while it could not.
+the six were introduced while it could not — and why it has to call everything
+a target runs: the sixth had always been there.
 
 ### Scope
 
 This covers the steady-state data path — `add_imu`, `apply_zupt`,
-`apply_height`. Construction and configuration validation are *not* in scope and
-may legitimately panic on programmer error; they run once, at startup, where a
-panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.
+`apply_height`, and once a second a GNSS fix with velocity, `apply_wheel_speed`,
+`apply_nonholonomic` and the `WheelSpeedScale` beside them. Construction and
+configuration validation are *not* in scope and may legitimately panic on
+programmer error; they run once, at startup, where a panic is diagnosable.
+Decoding is covered separately by Layer 5's fuzzing.
 
 ## Layer 11 — error against ground truth
 

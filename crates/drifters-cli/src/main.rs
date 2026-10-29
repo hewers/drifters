@@ -167,6 +167,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 ///   --outage <start,len>   withhold fixes, seconds after the filter starts
 ///   --settle <s>           unscored seconds after the start (default 10)
 ///   --partial <spec>       partial-update shares, e.g. sg=30,sa=30 (percent)
+///   --wheel-scale          estimate the CAN speed's scale against GNSS speed
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
 ///   --per-segment          a line per segment
 /// ```
@@ -222,6 +223,10 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 Some(spec) => drifters_cli::partial_update_from_spec(spec)?,
                 None => defaults.replay.partial,
             },
+            wheel_scale: args
+                .iter()
+                .any(|a| a == "--wheel-scale")
+                .then(drifters_filter::WheelScaleConfig::default),
         },
     };
     let report = drifters_cli::run_comma(&dir, &options)?;
@@ -290,6 +295,22 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         rms(&heading).to_degrees(),
         percentile(&heading, 0.95).to_degrees()
     );
+    let scales: Vec<f64> = report
+        .segments
+        .iter()
+        .filter_map(|s| s.wheel_scale)
+        .filter(|(_, n)| *n > 0)
+        .map(|(scale, _)| scale)
+        .collect();
+    if !scales.is_empty() {
+        println!(
+            "wheel-speed scale: median {:.4}, p5 {:.4}, p95 {:.4}, over {} segments",
+            percentile(&scales, 0.5),
+            percentile(&scales, 0.05),
+            percentile(&scales, 0.95),
+            scales.len()
+        );
+    }
     let nis: Vec<f64> = report
         .segments
         .iter()

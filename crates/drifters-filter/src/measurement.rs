@@ -271,11 +271,15 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
 
     let mut jacobian = Matrix::<2, N_STATE>::zeros();
     // Rows 1 and 2 of the body-velocity Jacobians: lateral and vertical.
-    for (row, axis) in [1usize, 2usize].into_iter().enumerate() {
-        for c in 0..3 {
-            jacobian[(row, V_ID + c)] = wrt_velocity[(axis, c)];
-            jacobian[(row, PHI_ID + c)] = wrt_attitude[(axis, c)];
-        }
+    // Written out rather than looped over `[1, 2]`: an index drawn from an
+    // array is not a constant as far as the optimiser can see, and the loop
+    // linked a bounds check into the data path, found when the panic audit
+    // first called this. See docs/testing.md, Layer 10.
+    for c in 0..3 {
+        jacobian[(0, V_ID + c)] = wrt_velocity[(1, c)];
+        jacobian[(0, PHI_ID + c)] = wrt_attitude[(1, c)];
+        jacobian[(1, V_ID + c)] = wrt_velocity[(2, c)];
+        jacobian[(1, PHI_ID + c)] = wrt_attitude[(2, c)];
     }
 
     Measurement {
@@ -296,8 +300,9 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
 ///
 /// A real odometer has a scale-factor error (tyre wear, pressure, load) that
 /// this model does not estimate — the 21-state vector has no odometer scale
-/// state. Absorb it into `sigma`, or add a 22nd state if the odometer is
-/// load-bearing over long outages.
+/// state. [`WheelSpeedScale`] estimates it against GNSS ground speed; divide
+/// it out before calling this, and widen `sigma` by what is still unknown
+/// about it. On comma2k19 that halves the median drift through a GNSS outage.
 pub fn wheel_speed(pva: &Pva, speed: F, sigma: F) -> Measurement<1> {
     let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(pva);
     let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
@@ -571,6 +576,262 @@ impl<const N: usize> StationarityDetector<N> {
 #[inline]
 pub fn height_reference_looks_plausible(pva: &Pva, height: F) -> bool {
     Real::abs(height - pva.position.height) < 200.0
+}
+
+/// Settings for [`WheelSpeedScale`].
+#[derive(Clone, Copy, Debug)]
+pub struct WheelScaleConfig {
+    /// One-sigma prior on the scale factor, as a fraction: 0.02 is ±2 %.
+    ///
+    /// Also the ceiling the uncertainty grows back to without observations, so
+    /// a long GNSS outage cannot leave it claiming less than it started with.
+    pub initial_std: F,
+    /// How fast the scale factor may wander, one sigma per √second: tyre
+    /// pressure and temperature change it over minutes.
+    pub drift: F,
+    /// Below this GNSS speed nothing is compared, m/s. A wheel-speed sensor's
+    /// quantisation and the GNSS speed's own noise are too large a fraction of
+    /// a slow reading to say anything about a percent of scale.
+    pub min_speed: F,
+    /// One-sigma disagreement between the wheel speed and the true speed that
+    /// is not scale, m/s: quantisation, and the timing between the two.
+    pub wheel_std: F,
+}
+
+impl Default for WheelScaleConfig {
+    fn default() -> Self {
+        Self {
+            initial_std: 0.02,
+            drift: 3.0e-5,
+            min_speed: 5.0,
+            wheel_std: 0.1,
+        }
+    }
+}
+
+/// Estimates a wheel-speed sensor's scale factor against GNSS ground speed.
+///
+/// Car wheel-speed sensors read a percent or two off: they count wheel
+/// revolutions and assume a tyre radius, which wear, pressure and load all
+/// change. comma2k19's CAN speed reads 1.0 % low on every one of its 21
+/// drives. At 28 m/s that is 0.28 m/s, about the sigma a filter has to give
+/// the wheel speed to survive it, and over a thirty-second outage it is 8 m of
+/// along-track error on its own.
+///
+/// The model is `wheel = scale × speed`, with the speed from GNSS, and this is
+/// a one-state Kalman filter on `scale`. It compares against GNSS rather than
+/// against the navigation filter's own velocity on purpose: the filter's
+/// velocity is pulled toward the wheel speed by the very updates this
+/// corrects, and estimating a scale from it would confirm whatever scale it
+/// already had. NASA's navigation-filter handbook warns against exactly that
+/// kind of cascade. GNSS ground speed has no such loop. It is horizontal, so
+/// on a 5 % grade it reads 0.1 % below the speed along the road; below the
+/// resolution this estimates to.
+///
+/// A separate estimator rather than a 22nd state in the filter because the
+/// filter's state is sized at compile time and carried on the wire at 21; see
+/// `docs/milestones.md` for the trade. Caller-owned, like
+/// [`StationarityDetector`]: feed it a GNSS speed and the wheel speed at the
+/// same instant, then [`correct`](Self::correct) each wheel speed and widen its
+/// sigma with [`sigma_for`](Self::sigma_for) before
+/// [`GinsEngine::apply_wheel_speed`](crate::GinsEngine::apply_wheel_speed).
+#[derive(Clone, Copy, Debug)]
+pub struct WheelSpeedScale {
+    config: WheelScaleConfig,
+    scale: F,
+    variance: F,
+    last: Option<drifters_core::time::GpsTime>,
+    observations: u32,
+}
+
+impl WheelSpeedScale {
+    /// A scale of one, as uncertain as `config` says.
+    pub fn new(config: WheelScaleConfig) -> Self {
+        Self {
+            config,
+            scale: 1.0,
+            variance: config.initial_std * config.initial_std,
+            last: None,
+            observations: 0,
+        }
+    }
+
+    /// Compare a wheel speed with a GNSS ground speed taken at the same
+    /// instant, both m/s. Returns whether it was used.
+    ///
+    /// Refused below [`WheelScaleConfig::min_speed`], for non-finite input,
+    /// and when the disagreement fails a chi-squared gate at 99.9 %: a wheel
+    /// slipping or a GNSS speed glitch is not a scale factor.
+    pub fn observe(
+        &mut self,
+        time: drifters_core::time::GpsTime,
+        wheel: F,
+        gnss_speed: F,
+        gnss_speed_std: F,
+    ) -> bool {
+        // The scale wanders between looks; its uncertainty grows with the
+        // time since the last one, up to the prior and no further.
+        let ceiling = self.config.initial_std * self.config.initial_std;
+        if let Some(last) = self.last {
+            let dt = time.seconds_since(last);
+            if dt > 0.0 {
+                let grown = self.variance + self.config.drift * self.config.drift * dt;
+                self.variance = if grown < ceiling { grown } else { ceiling };
+            }
+        }
+        self.last = Some(time);
+
+        let usable = wheel.is_finite()
+            && gnss_speed.is_finite()
+            && gnss_speed_std.is_finite()
+            && gnss_speed_std > 0.0
+            && gnss_speed >= self.config.min_speed
+            && wheel > 0.0;
+        if !usable {
+            return false;
+        }
+        let innovation = wheel - self.scale * gnss_speed;
+        let noise = self.config.wheel_std * self.config.wheel_std
+            + self.scale * self.scale * gnss_speed_std * gnss_speed_std;
+        let s = gnss_speed * gnss_speed * self.variance + noise;
+        if innovation * innovation > crate::eskf::chi_squared::P999[1] * s {
+            return false;
+        }
+        let gain = self.variance * gnss_speed / s;
+        self.scale += gain * innovation;
+        self.variance *= noise / s;
+        self.observations = self.observations.saturating_add(1);
+        true
+    }
+
+    /// The scale factor: what the sensor reads per unit of true speed.
+    #[inline]
+    pub fn scale(&self) -> F {
+        self.scale
+    }
+
+    /// One-sigma uncertainty of the scale factor.
+    #[inline]
+    pub fn std(&self) -> F {
+        Real::sqrt(self.variance)
+    }
+
+    /// How many comparisons have been used.
+    #[inline]
+    pub fn observations(&self) -> u32 {
+        self.observations
+    }
+
+    /// The wheel speed with the scale divided out.
+    #[inline]
+    pub fn correct(&self, wheel: F) -> F {
+        wheel / self.scale
+    }
+
+    /// `sigma` widened by what is still unknown about the scale, at this
+    /// wheel speed: `√(σ² + (v σₛ / s)²)`.
+    pub fn sigma_for(&self, wheel: F, sigma: F) -> F {
+        let unknown = self.correct(wheel) * self.std() / self.scale;
+        Real::sqrt(sigma * sigma + unknown * unknown)
+    }
+}
+
+#[cfg(test)]
+mod wheel_scale_tests {
+    use super::*;
+    use drifters_core::time::GpsTime;
+
+    /// A deterministic generator, so a failure is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn gaussian(&mut self) -> F {
+            // Sum of twelve uniforms, less six: mean zero, variance one, and
+            // no transcendental in a no_std test.
+            let mut acc = 0.0;
+            for _ in 0..12 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                acc += (self.0 >> 11) as F / (1u64 << 53) as F;
+            }
+            acc - 6.0
+        }
+    }
+
+    fn drive(estimator: &mut WheelSpeedScale, scale: F, seconds: usize, rng: &mut Rng) {
+        for k in 0..seconds * 10 {
+            let t = GpsTime::from_tow(100.0 + k as F * 0.1);
+            let speed = 20.0 + 8.0 * ((k as F) * 0.01).sin();
+            let wheel = scale * speed + 0.05 * rng.gaussian();
+            let gnss = speed + 0.1 * rng.gaussian();
+            estimator.observe(t, wheel, gnss, 0.1);
+        }
+    }
+
+    #[test]
+    fn a_wheel_reading_one_percent_low_is_found() {
+        let mut rng = Rng(7);
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        drive(&mut e, 0.99, 30, &mut rng);
+        assert!((e.scale() - 0.99).abs() < 1.0e-3, "scale {}", e.scale());
+        assert!(e.std() < 1.0e-3, "std {}", e.std());
+        // The claim is honest: the error sits inside a few sigma of it.
+        assert!((e.scale() - 0.99).abs() < 4.0 * e.std());
+        let corrected = e.correct(0.99 * 25.0);
+        assert!((corrected - 25.0).abs() < 0.03, "{corrected}");
+    }
+
+    #[test]
+    fn nothing_slow_or_broken_is_compared() {
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        let t = GpsTime::from_tow(1.0);
+        assert!(!e.observe(t, 3.0, 3.0, 0.1), "below the minimum speed");
+        assert!(!e.observe(t, F::NAN, 20.0, 0.1));
+        assert!(!e.observe(t, 20.0, 20.0, 0.0));
+        assert!(!e.observe(t, -20.0, 20.0, 0.1), "reversing");
+        assert_eq!(e.observations(), 0);
+        assert_eq!(e.scale(), 1.0);
+    }
+
+    #[test]
+    fn a_glitch_is_gated_rather_than_believed() {
+        let mut rng = Rng(11);
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        drive(&mut e, 0.99, 20, &mut rng);
+        let before = e.scale();
+        // A wheel spinning on ice reads a third high.
+        assert!(!e.observe(GpsTime::from_tow(500.0), 26.6, 20.0, 0.1));
+        assert_eq!(e.scale(), before);
+    }
+
+    #[test]
+    fn the_uncertainty_grows_back_without_observations_but_not_past_the_prior() {
+        let mut rng = Rng(13);
+        let config = WheelScaleConfig::default();
+        let mut e = WheelSpeedScale::new(config);
+        drive(&mut e, 1.01, 20, &mut rng);
+        let settled = e.std();
+        // An hour later, a reading too slow to compare: only the drift acts.
+        e.observe(GpsTime::from_tow(100.0 + 3_600.0), 2.0, 2.0, 0.1);
+        assert!(e.std() > settled, "{} after {}", e.std(), settled);
+        assert!(e.std() <= config.initial_std * (1.0 + 1e-12));
+        // A week: the drift alone would be 2.3 %, past the 2 % prior, so it
+        // is back at the prior and no wider.
+        e.observe(GpsTime::from_tow(100.0 + 604_800.0), 2.0, 2.0, 0.1);
+        assert!((e.std() - config.initial_std).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_sigma_widens_with_what_is_unknown() {
+        let fresh = WheelSpeedScale::new(WheelScaleConfig::default());
+        // ±2 % at 25 m/s is 0.5 m/s, which dominates a 0.1 m/s sensor sigma.
+        let widened = fresh.sigma_for(25.0, 0.1);
+        assert!(
+            (widened - (0.1_f64 * 0.1 + 0.5 * 0.5).sqrt()).abs() < 1e-12,
+            "{widened}"
+        );
+    }
 }
 
 #[cfg(test)]

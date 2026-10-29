@@ -370,6 +370,13 @@ implemented, in `drifters-filter::measurement`:
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
 | Magnetometer heading | 1 | φ_d | coarse yaw when stationary |
 
+A wheel-speed sensor's scale factor is not a filter state — the state is
+fixed at 21 and carried on the wire at that size — so
+[`WheelSpeedScale`](../crates/drifters-filter/src/measurement.rs) estimates
+it beside the filter against GNSS ground speed, and the caller divides it out
+before `apply_wheel_speed`. comma2k19's CAN speed reads 1 % low, and dividing
+that out halves the median drift through an outage.
+
 ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
 low-cost MEMS system usable through a GNSS outage. Measured on a stationary
 30 s outage with a 0.02 m/s² accelerometer bias, ZUPT holds drift to 0.012 m

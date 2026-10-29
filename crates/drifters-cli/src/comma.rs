@@ -420,6 +420,10 @@ pub struct ReplayOptions {
     /// How much of each correction each state takes. See
     /// [`drifters_filter::PartialUpdate`].
     pub partial: drifters_filter::PartialUpdate,
+    /// Estimate the CAN speed's scale factor against the u-blox speed and
+    /// divide it out of every wheel-speed update. Each segment starts from a
+    /// scale of one. See [`drifters_filter::WheelSpeedScale`].
+    pub wheel_scale: Option<drifters_filter::WheelScaleConfig>,
 }
 
 impl Default for ReplayOptions {
@@ -432,6 +436,7 @@ impl Default for ReplayOptions {
             outage: None,
             settle: 10.0,
             partial: drifters_filter::PartialUpdate::FULL,
+            wheel_scale: None,
         }
     }
 }
@@ -457,6 +462,9 @@ pub struct SegmentReport {
     pub nis: Running,
     /// Fixes the gate rejected.
     pub rejected: u64,
+    /// The CAN speed's scale factor as estimated at the end, and how many
+    /// comparisons it rested on, when it was estimated.
+    pub wheel_scale: Option<(F, u32)>,
 }
 
 /// The phone-class noise model, scaled. The same figures as the GSDC replay.
@@ -539,6 +547,9 @@ pub fn replay(
     let mut last_aid = F::NEG_INFINITY;
     let mut outage_max: F = 0.0;
     let mut outage_end = None;
+    let mut wheel_scale = options
+        .wheel_scale
+        .map(drifters_filter::WheelSpeedScale::new);
 
     for sample in &segment.imu {
         let t = sample.time.tow();
@@ -566,6 +577,16 @@ pub fn replay(
                     scored = true;
                 }
             }
+            // The CAN speed's scale from the fix's own speed, at the fix's
+            // epoch: GNSS rather than the filter, whose velocity the wheel
+            // updates are pulling on.
+            if let (Some(est), Some(v), Some(wheel)) = (
+                wheel_scale.as_mut(),
+                fix.velocity,
+                interpolate(&segment.speed, tf),
+            ) {
+                est.observe(fix.time, wheel, v.horizontal_norm(), fix.velocity_std.x);
+            }
             engine.add_gnss(fix);
             offered = true;
         }
@@ -584,7 +605,12 @@ pub fn replay(
         if t - last_aid >= 0.1 {
             last_aid = t;
             if let (Some(sigma), Some(v)) = (options.wheel_sigma, interpolate(&segment.speed, t)) {
-                engine.apply_wheel_speed(v, sigma)?;
+                match wheel_scale.as_ref() {
+                    Some(est) => {
+                        engine.apply_wheel_speed(est.correct(v), est.sigma_for(v, sigma))?
+                    }
+                    None => engine.apply_wheel_speed(v, sigma)?,
+                };
             }
             if let Some(sigma) = options.nhc_sigma {
                 engine.apply_nonholonomic(sigma, 3.0)?;
@@ -617,6 +643,7 @@ pub fn replay(
         }
     }
     report.outage = outage_end.map(|end| (end, outage_max));
+    report.wheel_scale = wheel_scale.map(|e| (e.scale(), e.observations()));
     Ok(report)
 }
 

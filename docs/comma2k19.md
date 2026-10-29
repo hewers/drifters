@@ -13,7 +13,7 @@ split, 21 drives of one RAV4. Fetching them, and the single segment comma ships
 in its repository, is in [datasets.md](datasets.md#comma2k19).
 
 ```bash
-cargo run --release -p drifters-cli -- comma --dir datasets/comma2k19-holdout --mount 3.33,0.68 --wheel 0.3 --nhc 0.1,0.5 --zaru 0.002 --outage 20,30
+cargo run --release -p drifters-cli -- comma --dir datasets/comma2k19-holdout --mount 3.33,0.68 --wheel 0.3 --wheel-scale --nhc 0.1,0.5 --zaru 0.002 --outage 20,30
 ```
 
 **The reference is an estimate.** comma's poses are far better than the u-blox
@@ -63,17 +63,18 @@ starts, against the reference:
 | | RMS | p50 | p95 | heading RMS |
 |---|---|---|---|---|
 | u-blox fixes | 1.404 | 1.174 | 2.456 | |
-| ESKF, GNSS only | **1.397** | 1.161 | 2.503 | 5.22° |
-| ESKF, with wheel speed, NHC and zero-rate updates | 1.398 | **1.136** | 2.490 | **1.15°** |
+| ESKF, GNSS only | 1.397 | 1.161 | 2.503 | 5.22° |
+| ESKF, with wheel speed, NHC and zero-rate updates | 1.398 | **1.136** | **2.490** | **1.15°** |
+| … and the wheel-speed scale estimated | **1.395** | 1.162 | 2.575 | **1.15°** |
 
 Horizontal error at the end of a GNSS outage beginning twenty seconds after the
 filter starts, over 44 segments — the 45th does not pass 3 m/s until 43 s in,
 so the window runs past its data:
 
-| outage | IMU alone, median / p95 | aided, median / p95 / max |
-|---|---|---|
-| 10 s | 6.6 / 18.7 m | **3.5 / 6.6 / 8.1 m** |
-| 30 s | 70.7 / 313 m | **11.1 / 33.8 / 45.0 m** |
+| outage | IMU alone, median / p95 | aided, median / p95 / max | aided, scale estimated |
+|---|---|---|---|
+| 10 s | 6.6 / 18.7 m | 3.5 / 6.6 / 8.1 m | **2.1 / 5.6 / 7.7 m** |
+| 30 s | 70.7 / 313 m | 11.1 / **33.8 / 45.0** m | **6.9** / 34.3 / 46.1 m |
 
 ## What it says
 
@@ -91,8 +92,9 @@ and there is nothing for it to buy.
 **What the IMU buys is time without GNSS.** Alone, a phone IMU is at 7 m after
 ten seconds and 71 m after thirty, with a tail into the hundreds. With CAN
 wheel speed and non-holonomic constraints the same outage ends at 3.5 m and
-11.1 m, and the worst of 44 segments at 45 m. That is the case for this library
-on a car: not a better fix, but a fix that survives a tunnel.
+11.1 m, and the worst of 44 segments at 45 m; with the wheel speed's scale
+estimated, below, at 2.1 m and 6.9 m. That is the case for this library on a
+car: not a better fix, but a fix that survives a tunnel.
 
 **Non-holonomic constraints are what make the heading.** On a highway the
 vehicle rarely accelerates hard enough for GNSS to observe yaw, and GNSS-only
@@ -138,6 +140,28 @@ median fix error, ten-second p95 and thirty-second worst case, and is within
 2 % of the best elsewhere except the fixes' p95, where looser is better. It is
 what the tables above use.
 
+**The wheel speed reads 1 % low, and dividing that out halves the drift.**
+Against comma's reference velocity, the CAN speed reads 0.990 of it on every
+one of the 21 drives, between 0.9885 and 0.9923 — a tyre radius the car's
+computer has slightly wrong. At 28 m/s that is 0.28 m/s, about the sigma the
+fit gave the wheel speed, which was absorbing it, and over thirty seconds it is
+8 m of along-track error on its own. The 21-state filter has no state for it, so
+[`WheelSpeedScale`](../crates/drifters-filter/src/measurement.rs) estimates it
+beside the filter, against the u-blox's own speed rather than the filter's
+velocity, which the wheel updates pull on; each wheel speed is then divided by
+it and its sigma widened by what is still unknown. Starting every segment from a
+scale of one, it reads 0.9913 on the fit drives and 0.9901 on the holdout, and
+the median thirty-second outage falls from 11.1 m to 6.9 m and the ten-second
+one from 3.5 m to 2.1 m. The tails are not scale and do not move. The price is
+2–3 cm on the median and p95 while fixes are coming in, where the receiver's
+offsets dominate anyway. On comma's example segment, where the scale was most of
+the error, the thirty-second outage goes from 4.0 m to 0.5 m.
+
+A scale fitted once on the July drives and applied to the August ones does a
+little better, 6.3 m and 1.9 m, because it does not spend each one-minute
+segment learning: on a vehicle that keeps running, the online estimate gets
+there and stays.
+
 **The mount is a modest gain.** Rotating the IMU into the vehicle frame takes
 the fit set's heading from 0.98° to 0.53° RMS and the median thirty-second
 outage from 10.0 m to 8.4, and the worst one from 24 m to 27. It is kept
@@ -164,6 +188,7 @@ On the 19 fit segments, one knob at a time from the GNSS-only optimum:
 | fix horizontal sigma | 0.5, 1, 2 m | 0.5 | lowest RMS and p95, GNSS only |
 | IMU noise scale | 1, 3, 10 aided; to 100 GNSS only | 3 | 1 worsens the median fix; 10 the outages |
 | wheel-speed sigma | 0.2, 0.3, 0.5 m/s | 0.3 | 0.2 more than doubles the 30 s p95; 0.5 no better |
+| wheel-speed scale | fixed at one, estimated | estimated | fit 30 s median 8.4 m to 6.0, 10 s 3.4 to 2.4; sigma 0.3 still best with it, against 0.1 and 0.2 |
 | NHC sigma, lateral | 0.1, 0.15, 0.2, 0.3, 0.5 m/s | 0.1 | best heading and median once the lockout counts per kind; 0.2 before |
 | NHC sigma, vertical | 0.2, 0.3, 0.5, 1 m/s | 0.5 | no difference from 0.2 to 1 |
 | zero-rate sigma | 2, 5, 10, 20 mrad/s | 2 | no effect on the fit routes; set from their standstill gyro noise, 0.5–3.2 mrad/s per sample |

@@ -35,6 +35,11 @@ breaking wire change becomes `v2` rather than a crate version bump.
   row, which matches `K H δx` only to first order. It now runs the recursion
   from `δx`, which is `K (ν − H δx)` exactly. The engine feeds back after every
   update, so `δx` is always zero there and nothing it produces changes.
+- **`apply_nonholonomic` linked a bounds-check panic on the target.** Its
+  Jacobian copied two rows by iterating `[1, 2]`, which the optimiser cannot
+  see is constant; the rows are now written out. The panic audit had never
+  called it, and now also calls GNSS fixes, `apply_wheel_speed` and the new
+  `WheelSpeedScale`, all clean in every configuration.
 - **The bare-metal harness's instruction count could wrap, and did.** It timed
   500 `add_imu` calls as one batch against SysTick, a 24-bit counter that
   wraps above 33 554 ticks per call, and every soft-float build costs more than
@@ -82,6 +87,18 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`WheelSpeedScale`**, an estimator of a wheel-speed sensor's scale factor
+  against GNSS ground speed. Car wheel-speed sensors assume a tyre radius, and
+  comma2k19's CAN speed reads 1.0 % low on all 21 drives — 0.28 m/s at highway
+  speed, and 8 m of along-track error over a thirty-second outage on its own.
+  A one-state Kalman filter beside the main one, gated and drift-bounded, and
+  fed GNSS speed rather than the filter's velocity, which the wheel updates
+  pull on; divide its scale out of each wheel speed and widen the sigma with
+  `sigma_for`. A separate estimator rather than a 22nd state because the
+  state is carried on the wire at 21. `drifters comma --wheel-scale` uses it:
+  starting each one-minute segment from a scale of one, the holdout's median
+  thirty-second outage falls from 11.1 m to 6.9 m and its ten-second one from
+  3.5 m to 2.1 m, for 2–3 cm on the median fix while GNSS is up.
 - **Partial updates**, `PartialUpdate` and `GinsOptions::partial_update`: a
   state can take a percentage of each correction rather than all of it, the
   partial-update Schmidt-Kalman filter of Brink in the factored form of

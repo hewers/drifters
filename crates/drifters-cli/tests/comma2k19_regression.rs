@@ -33,6 +33,9 @@ const MAX_HORIZONTAL_RMS_M: f64 = 0.6;
 /// Observed 4.0 m with wheel speed, NHC and zero-rate updates, against 40.9 m
 /// on the IMU alone.
 const MAX_AIDED_OUTAGE_M: f64 = 10.0;
+/// Observed 0.49 m once the CAN speed's 0.99 scale is estimated and divided
+/// out: on this segment the scale was most of what was left.
+const MAX_SCALED_OUTAGE_M: f64 = 1.5;
 
 fn segment() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -76,7 +79,7 @@ fn the_example_segment_lands_on_the_fixes_and_bridges_an_outage() {
         "the filter should land on the fixes' accuracy: {eskf:.3} m against {fix:.3} m"
     );
 
-    let outage = |aided: bool| -> f64 {
+    let outage = |aided: bool, scaled: bool| -> (f64, Option<(f64, u32)>) {
         let mut options = fitted();
         options.replay.outage = Some((20.0, 30.0));
         if aided {
@@ -84,15 +87,35 @@ fn the_example_segment_lands_on_the_fixes_and_bridges_an_outage() {
             options.replay.nhc_sigma = Some((0.1, 0.5));
             options.replay.zaru_sigma = Some(0.002);
         }
+        if scaled {
+            options.replay.wheel_scale = Some(drifters_filter::WheelScaleConfig::default());
+        }
         let report = run_comma(&dir, &options).expect("the segment replays");
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);
-        report.segments[0]
-            .outage
-            .expect("the outage fits in the segment")
-            .0
+        let s = &report.segments[0];
+        (
+            s.outage.expect("the outage fits in the segment").0,
+            s.wheel_scale,
+        )
     };
-    let (alone, aided) = (outage(false), outage(true));
-    eprintln!("30 s outage: IMU alone {alone:.2} m, with wheel speed and NHC {aided:.2} m");
+    let ((alone, _), (aided, _)) = (outage(false, false), outage(true, false));
+    let (scaled, scale) = outage(true, true);
+    eprintln!(
+        "30 s outage: IMU alone {alone:.2} m, with wheel speed and NHC {aided:.2} m, \
+         and with its scale estimated {scaled:.2} m ({scale:?})"
+    );
+    // comma's CAN speed reads 0.99 of the reference on every drive, so the
+    // estimate has to land near it from the twenty seconds before the outage.
+    let (scale, used) = scale.expect("estimated");
+    assert!(used > 50, "only {used} comparisons");
+    assert!(
+        (0.985..0.995).contains(&scale),
+        "wheel-speed scale {scale:.4}"
+    );
+    assert!(
+        scaled < MAX_SCALED_OUTAGE_M,
+        "scale-corrected outage drift {scaled:.2} m"
+    );
     assert!(
         aided < MAX_AIDED_OUTAGE_M,
         "aided outage drift {aided:.2} m"
