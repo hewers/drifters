@@ -682,7 +682,9 @@ mod tests {
 
     #[test]
     fn a_segment_reads_onto_gps_time_with_the_fix_latency_removed() {
-        let dir = std::env::temp_dir().join("drifters-comma-segment/dongle|route/7");
+        // No `|` in the route name, unlike comma's: Windows refuses it in a
+        // path, and the reader does not care what the directories are called.
+        let dir = std::env::temp_dir().join("drifters-comma-segment/dongle_route/7");
         let _ = std::fs::remove_dir_all(&dir);
         // Boot time 100 s is GPS week 2012, 404 000 s.
         let boot = [100.0, 100.05, 100.1];
@@ -745,7 +747,7 @@ mod tests {
         npy(&dir, "processed_log/CAN/speed/value", 1, 1, &[9.9]);
 
         let s = read_segment(&dir, &ReadOptions::default()).unwrap();
-        assert_eq!(s.name, "dongle|route/7");
+        assert_eq!(s.name, "dongle_route/7");
         assert_eq!(s.imu.len(), 2);
         assert_eq!(s.imu[0].time.week(), 2012);
         assert_relative_eq!(s.imu[0].time.tow(), 404_000.05, epsilon = 1e-9);

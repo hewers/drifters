@@ -111,8 +111,10 @@ pub fn parse(bytes: &[u8]) -> Result<Array, String> {
         ));
     }
     let stored: Vec<f64> = body
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     let data = if fortran && cols > 1 {
         let mut data = vec![0.0; count];
