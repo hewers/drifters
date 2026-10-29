@@ -204,10 +204,20 @@ premultiplied by the inverse Cholesky factor of `R` first, which whitens it;
 `z' = L⁻¹z`, `H' = L⁻¹H`, `R' = I`. Skipping that step does not merely lose
 accuracy, it applies the wrong update.
 
-Joseph form is retained for the **held-state** path, where a measurement must be
-prevented from touching some states. That constraint is expressed by zeroing
-rows and columns of a gain, which the scalar-sequential form has no place to
-put.
+The **held-state** path, where a measurement must be prevented from touching
+some states, stays factored as well. Zeroing the held rows of the gain and
+putting it through the Joseph line above gives, with `G` the optimal gain's
+held rows and zeros elsewhere,
+
+```
+P ← (P − K·S·Kᵀ) + G·S·Gᵀ
+```
+
+The first term is the optimal posterior, which Bierman produces. The second
+puts back the held states' share of what it removed, and since that is a sum of
+one outer product per row it goes into the factors as rank-one updates. It has
+to go in after the last row: restoring between rows would hand the next row a
+covariance the batch update never saw.
 
 ### GNSS position
 

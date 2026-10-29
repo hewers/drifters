@@ -44,7 +44,7 @@
 //!
 //! - [`mechanization`] — the strapdown INS integration.
 //! - [`measurement`] — auxiliary sensor models (ZUPT, NHC, odometer, …).
-//! - [`eskf`] — transition matrix, predict and Joseph-form update.
+//! - [`eskf`] — transition matrix, predict and the factored update.
 //! - [`engine`] — the orchestration, including GNSS epoch alignment.
 //! - [`state`] — the error-state index map.
 //! - [`config`] — configuration and its validation.
@@ -70,6 +70,8 @@ pub mod ud;
 
 pub use config::{ConfigError, GinsOptions};
 pub use engine::GinsEngine;
-pub use eskf::{Eskf, FilterError};
-pub use measurement::{Measurement, StationarityConfig, StationarityDetector};
+pub use eskf::{Eskf, FilterError, PartialUpdate};
+pub use measurement::{
+    Measurement, StationarityConfig, StationarityDetector, WheelScaleConfig, WheelSpeedScale,
+};
 pub use mechanization::mechanize;

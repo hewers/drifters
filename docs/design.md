@@ -143,8 +143,12 @@ in [frames.md](frames.md).
        │
        ├── at an edge ───────► predict and update in the right order
        │
-       └── strictly inside ──► split the IMU sample at the fix epoch,
-                               predict, update, predict the remainder
+       ├── strictly inside ──► split the IMU sample at the fix epoch,
+       │                       predict, update, predict the remainder
+       │
+       └── already behind ───► work the state back to the fix epoch,
+                               update with the Jacobian carried forward,
+                               then predict
        │
        ▼
  measurement update (Bierman, one row at a time)
@@ -157,13 +161,24 @@ Splitting the IMU sample at the GNSS epoch is what keeps a 1 Hz GNSS fix from
 being applied up to one IMU interval late. At 100 Hz and 30 m/s that error would
 be 0.3 m — larger than the GNSS noise it is trying to correct.
 
+A real receiver makes it worse: it reports a fix tens of milliseconds after the
+epoch it describes — comma2k19's u-blox about 80 — so by the time a fix
+arrives the filter has propagated past it. One up to
+`GinsOptions::max_fix_latency` behind (half a second by default) is compared
+with the state worked back to its epoch from the last IMU interval's specific
+force and rotation rate, and its Jacobian is carried forward to now as
+`H (I − F Δt)`: NASA's treatment of a latent measurement in *Navigation Filter
+Best Practices* (NASA/TP-2018-219822, §4.1). On comma2k19, handing every fix
+over when it was logged rather than at its epoch gives the same errors to
+within millimetres; without this, every one of those fixes was dropped.
+
 ## Sans-IO
 
 `GinsEngine` has no dependency on how samples arrive. It exposes:
 
 ```rust
 engine.add_imu(sample)?;   // processes immediately
-engine.add_gnss(fix);      // queued for the interval that contains it
+engine.add_gnss(fix);      // queued for its interval, or worked back to if late
 engine.nav_state();        // current solution
 engine.covariance();       // current uncertainty
 ```
@@ -180,14 +195,18 @@ Sizes for the 21-state configuration:
 |---|---|---|
 | `Ud` (the covariance, factored) | 1 848 | **924** |
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
-| `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
+| `Matrix<9, 6>` (the noise mapping's navigation block) | 432 | 432 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 240 | **2 320** |
+| `GinsEngine` total | 3 272 | **2 352** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
-both columns. The engine was 4 944 bytes before `GpsTime` became a single `u64`
-and before the covariance was factored.
+both columns. The time update builds only the 9×6 corner of the mapping that
+drives the navigation states; the rest is the identity from each IMU error's
+noise channel to that error, which it assumes rather than reads, so the full
+21×18 `Matrix` (3 024 bytes) is no longer formed per sample. The engine was
+4 944 bytes before `GpsTime` became a single `u64` and before the covariance
+was factored.
 
 Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
 table and the code cannot drift apart silently.
@@ -228,9 +247,9 @@ Three changes brought it to 16 480:
    `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
 2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
    into a caller-supplied buffer, so `predict` and the Joseph update hold four
-   and three live 21×21 matrices respectively instead of a dozen. Both paths
-   were later replaced for the ordinary case — see the factored covariance
-   below — but Joseph remains for held states and still needs this.
+   and three live 21×21 matrices respectively instead of a dozen. Both were
+   later replaced by the factored recursions below, which form no 21×21
+   matrix at all.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
    copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
    on the hot path alone was worth 2.2 KiB.
@@ -247,35 +266,80 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 240 B | 2 304 B |
+| `GinsEngine` | 3 272 B | 2 328 B |
 | peak stack | 16 480 B | **9 504 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 848 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
-covariance was factored:
+covariance was factored, and again after the held-state update was, built with
+rustc 1.99:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 528 | 18 904 | **18 904** |
-| 21-state, `f32-covariance` | 12 840 | 17 976 | **17 976** |
-| 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
+| 21-state, `f64` | 16 156 | 7 676 *(was 18 968)* | **16 156** |
+| 21-state, `f32-covariance` | 12 420 | 6 476 *(was 18 048)* | **12 420** |
+| 15-state (`reduced-state`) | 9 684 | 5 340 *(was 10 536)* | **9 684** |
 
-`f32-covariance` takes 22 % off `add_imu`, because Thornton's working array is
-the largest single object on that frame and it halves. It barely moves
-`apply_zupt`, because the held-state path works densely in `f64` regardless.
+`f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
+the largest single object on that frame and it halves.
 
-The peak is now the **held-state update**, not `predict`. That path materialises
-`P` from the factors, applies the Joseph form to it and factors it back, so it
-carries three `StateMatrix` temporaries where the ordinary update carries none.
-A factored held-state update would remove it; Bierman's covariance update
-assumes an optimal gain and a held state is precisely a non-optimal one, so it
-cannot express this. CI re-measures the peak on every run against a 20 KiB
-ceiling, at both precisions.
+Then the time update was partitioned, and the peak fell by more than a third
+again:
 
-That is the difference between needing a 32 KiB task stack and fitting in
-16 KiB, which is what makes it the most useful lever available on a small part —
-it changes no numerics at all, it simply estimates fewer things.
+| | `add_imu` | `apply_zupt` | peak |
+|---|---|---|---|
+| 21-state, `f64` | **9 820** *(was 16 156)* | 7 676 | **9 820** |
+| 21-state, `f32-covariance` | **9 676** *(was 12 420)* | 6 476 | **9 676** |
+| 15-state (`reduced-state`) | **6 172** *(was 9 684)* | 5 340 | **6 268** |
+
+Accepting late GNSS fixes then added a path, and finding room for it took the
+peak down again. The transition matrix had been built inside one caller;
+called from a second, it went out of line and was returned by value, 3.5 KiB
+in both frames, so it is now written into the caller's buffer. Now:
+
+| | `add_imu` | a GNSS fix | a late GNSS fix | peak |
+|---|---|---|---|---|
+| 21-state, `f64` | **8 080** | 8 412 | 8 708 | **8 708** |
+| 21-state, `f32-covariance` | **7 368** | 7 368 | 8 256 | **8 256** |
+| 15-state (`reduced-state`) | **6 048** | 6 084 | 6 332 | **6 332** |
+
+Every IMU error state is a Gauss-Markov process that depends on nothing but
+itself, so the transition is block triangular and Thornton's Gram-Schmidt only
+has to run over the nine navigation states. Each IMU error then takes a
+rescaling for its decay and one Agee–Turner update for its noise. That is
+NASA's partitioned UDU time update (*Navigation Filter Best Practices*,
+NASA/TP-2018-219822, §8.3.2), and
+[`Ud::predict_partitioned`](../crates/drifters-filter/src/ud.rs) gives the same
+factors as the full sweep to 5e-16. The working array goes from 21×40 to 9×16,
+and the full noise mapping goes with it. At 15 states the peak is now
+`add_imu` with a GNSS fix, by 96 bytes.
+
+It also takes 66 % of the work off a 21-state `add_imu` with `f64` in software,
+33 % with `f32-covariance` and 64 % on a Cortex-M7 — see
+[testing.md](testing.md), Layer 9.
+
+The peak is `predict` again. For one milestone it was the **held-state
+update**, which materialised `P` from the factors, applied the Joseph form and
+factored the result back, carrying three `StateMatrix` temporaries where the
+ordinary update carries none. The reason given for that path was that
+Bierman's recursion assumes an optimal gain and a held state is a non-optimal
+one. The conclusion did not follow. Joseph with the held rows of the gain
+zeroed expands to `(P − K S Kᵀ) + G S Gᵀ`, where `G` is the optimal gain's held
+rows: the optimal posterior, which Bierman computes, plus a positive
+semi-definite term with one rank-one piece per measurement row, which the
+Agee–Turner update adds to the factors. Nothing is formed, and nothing is
+refactored. CI re-measures the peak on every run, against ceilings that the
+full sweep would exceed: 10 KiB at `f64`, 9.5 KiB with `f32-covariance`, 7 KiB
+at 15 states.
+
+On M8's figures that was the difference between needing a 32 KiB task stack
+and fitting in 16 KiB. Now every configuration fits in 9 KiB: the 21-state
+filter peaks at 8.5 KiB, 8.1 KiB with `f32-covariance`, and at 6.2 KiB with
+15 states — each the late-fix path, which carries a transition matrix on top of
+the update.
+Fifteen states still buy the most headroom, and they change no numerics at all —
+they simply estimate fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 
@@ -303,6 +367,12 @@ different algorithm rather than tidier code, and that is what
 updates and a factored covariance, which were the two candidates named here and
 turned out to be the same piece of work.
 
+What is left on the `add_imu` frame is the transition matrix itself, 3 528
+bytes of `f64` in either configuration, which the smoother records whole. The
+partitioned update reads only its navigation rows and its diagonal, so a
+filter that never smooths could build less of it. A late fix builds one as well,
+to carry its Jacobian forward, and needs only the rows that Jacobian touches.
+
 ## Auxiliary sensors ("+ other")
 
 The measurement update is generic over the measurement dimension `M`:
@@ -328,6 +398,13 @@ implemented, in `drifters-filter::measurement`:
 | Odometer / wheel speed | 1 | δv, φ | bounds drift through GNSS outages |
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
 | Magnetometer heading | 1 | φ_d | coarse yaw when stationary |
+
+A wheel-speed sensor's scale factor is not a filter state — the state is
+fixed at 21 and carried on the wire at that size — so
+[`WheelSpeedScale`](../crates/drifters-filter/src/measurement.rs) estimates
+it beside the filter against GNSS ground speed, and the caller divides it out
+before `apply_wheel_speed`. comma2k19's CAN speed reads 1 % low, and dividing
+that out halves the median drift through an outage.
 
 ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
 low-cost MEMS system usable through a GNSS outage. Measured on a stationary
@@ -393,17 +470,29 @@ at the ingest boundary rather than allowed to poison the state.
   Neither recursion takes a square root. This replaced a Joseph-form update
   and was both smaller and faster than it, which is unusual for a numerical
   improvement and is why the timings are recorded in `ud`'s tests.
-- **Joseph form is retained** for the held-state path, where a measurement must
-  not be allowed to touch every state, and Bierman's scalar-sequential form
-  does not express that constraint.
+- **The time update is partitioned.** Gram-Schmidt runs over the nine
+  navigation states only; each IMU error state, which depends on nothing but
+  itself, takes a rescaling and one rank-one update. Same factors as the full
+  sweep to rounding, under a fifth of the working memory.
+- **Partial updates stay factored too.** A state can take a share of each
+  correction rather than all or none of it; the covariance is the Joseph
+  form's for that gain and goes back into the factors the same way, one
+  rank-one update per row. Held states are the share-zero case.
+- **Held states stay factored.** A measurement that must not correct some
+  states is Bierman's update followed by one Agee–Turner rank-one update per
+  row, restoring exactly the uncertainty the held states would otherwise have
+  lost. The restoring waits until every row is in, because restoring between
+  rows runs a different filter from the one the Joseph form defines.
 - **Whitening before Bierman.** The scalar-sequential update requires
   independent rows, so a measurement with a dense `R` is premultiplied by its
   inverse Cholesky factor first. Applying correlated rows without it is wrong,
   not merely inexact, and there is a test that shows it.
 - **Cholesky solve instead of an explicit inverse** wherever a gain still needs
   a matrix solve.
-- **Zero-skipping matrix multiply.** The transition matrix is extremely sparse;
-  skipping zero elements is the single largest win in `predict`.
+- **Zero-skipping matrix multiply.** The transition matrix is extremely sparse,
+  and the products that still take it whole — the smoother's recorded
+  transitions, and a non-zero error state carried across an interval — skip its
+  zeros. It was the single largest win in the dense `predict` this replaced.
 - **`libm` for all transcendentals**, so a shipped build uses one implementation
   on every target. See [adr/0004](adr/0004-linear-algebra.md) for the one place
   this does not hold (host test binaries).
@@ -415,4 +504,11 @@ at the ingest boundary rather than allowed to poison the state.
   Navigation Systems*, 2nd ed. — the reference for the error-state dynamics.
 - P. Savage, "Strapdown Inertial Navigation Integration Algorithm Design" —
   coning and sculling.
+- J. R. Carpenter and C. N. D'Souza (eds.), *Navigation Filter Best Practices*,
+  NASA/TP-2018-219822 — the partitioned UDU time update (§8.3.2) and latent
+  measurements (§4.1).
+- J. H. Ramos, K. M. Brink, P. Ganesh and J. E. Hurtado, "Factorized
+  Partial-Update Schmidt–Kalman Filter", *JGCD* 45(9), 2022 — partial updates.
+- The rest of the literature this was read against, and what it suggests next:
+  [milestones.md, M17](milestones.md#m17--from-the-literature-survey).
 - NIMA TR8350.2 — WGS-84 defining and derived constants.

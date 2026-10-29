@@ -42,6 +42,7 @@ fn usage() {
          \x20 plot    the same, and write an SVG figure\n\
          \x20 eqf     run the equivariant filter on the same data\n\
          \x20 gsdc    replay a GSDC phone trace against ground truth\n\
+         \x20 comma   replay comma2k19 segments against comma's reference pose\n\
          \x20 tune    sweep the IMU process noise and score every point"
     );
 }
@@ -54,6 +55,9 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.first().map(String::as_str) == Some("gsdc") {
         return run_gsdc_command(args);
+    }
+    if args.first().map(String::as_str) == Some("comma") {
+        return run_comma_command(args);
     }
     if args.first().map(String::as_str) == Some("eqf") {
         return run_eqf_command(args);
@@ -145,6 +149,210 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
         std::fs::write(figure, svg)?;
         println!("\nwrote {figure}");
+    }
+    Ok(())
+}
+
+/// `drifters comma --dir <path>`: every comma2k19 segment below `path`.
+///
+/// ```text
+///   --imu-scale <x>        IMU process noise multiplier (default 3)
+///   --sigma-h <m>          assumed u-blox horizontal sigma (default 0.5)
+///   --sigma-v <m>          assumed u-blox vertical sigma (default 2)
+///   --latency <s>          u-blox fix latency (default 0.08)
+///   --mount <up,right>     direction of travel in the IMU frame, degrees
+///   --wheel <sigma>        CAN speed as wheel-speed aiding, m/s
+///   --nhc <lat[,vert]>     non-holonomic constraints, m/s
+///   --zaru <sigma>         zero-angular-rate updates while CAN speed reads zero, rad/s
+///   --outage <start,len>   withhold fixes, seconds after the filter starts
+///   --settle <s>           unscored seconds after the start (default 10)
+///   --partial <spec>       partial-update shares, e.g. sg=30,sa=30 (percent)
+///   --wheel-scale          estimate the CAN speed's scale against GNSS speed
+///   --fixes-at-arrival     hand each fix over when it was logged, not at its epoch
+///   --max-fix-latency <s>  how late a fix may arrive and still be used (default 0.5)
+///   --uncalibrated-gyro    the gyro without Android's bias correction
+///   --per-segment          a line per segment
+/// ```
+fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use drifters_cli::comma;
+    use drifters_cli::stats::percentile;
+    let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
+    let pair = |name: &str| -> Result<Option<(f64, f64)>, Box<dyn std::error::Error>> {
+        let Some(v) = flag(args, name) else {
+            return Ok(None);
+        };
+        let (a, b) = v
+            .split_once(',')
+            .ok_or_else(|| format!("{name} takes two comma-separated numbers"))?;
+        Ok(Some((a.trim().parse()?, b.trim().parse()?)))
+    };
+    let defaults = drifters_cli::CommaOptions::default();
+    let sigma_h: f64 = flag(args, "--sigma-h").unwrap_or("0.5").parse()?;
+    let sigma_v: f64 = flag(args, "--sigma-v").unwrap_or("2").parse()?;
+    let mount = pair("--mount")?.unwrap_or((0.0, 0.0));
+    let latency = flag(args, "--latency")
+        .map(str::parse)
+        .transpose()?
+        .unwrap_or(defaults.read.latency);
+    let options = drifters_cli::CommaOptions {
+        read: comma::ReadOptions {
+            sigma: drifters_cli::vec3(sigma_h, sigma_h, sigma_v),
+            latency,
+            mount: (mount.0.to_radians(), mount.1.to_radians()),
+            uncalibrated_gyro: args.iter().any(|a| a == "--uncalibrated-gyro"),
+            ..defaults.read
+        },
+        replay: comma::ReplayOptions {
+            imu_scale: flag(args, "--imu-scale")
+                .map(str::parse)
+                .transpose()?
+                .unwrap_or(defaults.replay.imu_scale),
+            wheel_sigma: flag(args, "--wheel").map(str::parse).transpose()?,
+            nhc_sigma: match flag(args, "--nhc") {
+                None => None,
+                Some(v) if v.contains(',') => pair("--nhc")?,
+                Some(v) => {
+                    let s: f64 = v.parse()?;
+                    Some((s, s))
+                }
+            },
+            zaru_sigma: flag(args, "--zaru").map(str::parse).transpose()?,
+            outage: pair("--outage")?,
+            settle: flag(args, "--settle")
+                .map(str::parse)
+                .transpose()?
+                .unwrap_or(defaults.replay.settle),
+            partial: match flag(args, "--partial") {
+                Some(spec) => drifters_cli::partial_update_from_spec(spec)?,
+                None => defaults.replay.partial,
+            },
+            wheel_scale: args
+                .iter()
+                .any(|a| a == "--wheel-scale")
+                .then(drifters_filter::WheelScaleConfig::default),
+            arrival_delay: args
+                .iter()
+                .any(|a| a == "--fixes-at-arrival")
+                .then_some(latency),
+            max_fix_latency: flag(args, "--max-fix-latency")
+                .map(str::parse)
+                .transpose()?,
+        },
+    };
+    let report = drifters_cli::run_comma(&dir, &options)?;
+
+    let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len().max(1) as f64).sqrt();
+    if args.iter().any(|a| a == "--per-segment") {
+        println!(
+            "{:<48} {:>9} {:>9} {:>9} {:>9}",
+            "segment", "fix RMS", "ESKF RMS", "heading", "outage"
+        );
+        for s in &report.segments {
+            println!(
+                "{:<48} {:>9.3} {:>9.3} {:>8.2}° {:>9}",
+                s.name,
+                rms(&s.fix_horizontal),
+                rms(&s.filter_horizontal),
+                rms(&s.heading).to_degrees(),
+                s.outage
+                    .map(|(end, _)| format!("{end:.2}"))
+                    .unwrap_or_else(|| "-".into())
+            );
+        }
+    }
+    let gather = |pick: fn(&comma::SegmentReport) -> &Vec<f64>| -> Vec<f64> {
+        report
+            .segments
+            .iter()
+            .flat_map(|s| pick(s).iter().copied())
+            .collect()
+    };
+    let (fix_h, fix_v) = (gather(|s| &s.fix_horizontal), gather(|s| &s.fix_vertical));
+    let (eskf_h, eskf_v) = (
+        gather(|s| &s.filter_horizontal),
+        gather(|s| &s.filter_vertical),
+    );
+    let heading = gather(|s| &s.heading);
+
+    println!(
+        "\n--- comma2k19: {} segments replayed, {} skipped ---",
+        report.segments.len(),
+        report.skipped.len()
+    );
+    for (name, why) in &report.skipped {
+        println!("skipped {name}: {why}");
+    }
+    println!(
+        "errors against comma's reference pose, metres, after the first {} s",
+        options.replay.settle
+    );
+    println!(
+        "{:<14} {:>9} {:>7} {:>7} {:>9}",
+        "", "horiz RMS", "p50", "p95", "vert RMS"
+    );
+    for (name, h, v) in [("u-blox fixes", &fix_h, &fix_v), ("ESKF", &eskf_h, &eskf_v)] {
+        println!(
+            "{:<14} {:>9.3} {:>7.3} {:>7.3} {:>9.3}",
+            name,
+            rms(h),
+            percentile(h, 0.5),
+            percentile(h, 0.95),
+            rms(v)
+        );
+    }
+    println!(
+        "heading error: RMS {:.2}°, p95 {:.2}°",
+        rms(&heading).to_degrees(),
+        percentile(&heading, 0.95).to_degrees()
+    );
+    let scales: Vec<f64> = report
+        .segments
+        .iter()
+        .filter_map(|s| s.wheel_scale)
+        .filter(|(_, n)| *n > 0)
+        .map(|(scale, _)| scale)
+        .collect();
+    if !scales.is_empty() {
+        println!(
+            "wheel-speed scale: median {:.4}, p5 {:.4}, p95 {:.4}, over {} segments",
+            percentile(&scales, 0.5),
+            percentile(&scales, 0.05),
+            percentile(&scales, 0.95),
+            scales.len()
+        );
+    }
+    let nis: Vec<f64> = report
+        .segments
+        .iter()
+        .map(|s| s.nis.mean())
+        .filter(|v| v.is_finite())
+        .collect();
+    let rejected: u64 = report.segments.iter().map(|s| s.rejected).sum();
+    println!(
+        "fix NIS: median of segment means {:.2} (expected 3), {} fixes rejected by the gate",
+        percentile(&nis, 0.5),
+        rejected
+    );
+    if let Some((start, len)) = options.replay.outage {
+        let end: Vec<f64> = report
+            .segments
+            .iter()
+            .filter_map(|s| s.outage.map(|o| o.0))
+            .collect();
+        let worst: Vec<f64> = report
+            .segments
+            .iter()
+            .filter_map(|s| s.outage.map(|o| o.1))
+            .collect();
+        println!(
+            "outage of {len} s from {start} s, over {} segments: horizontal error at its end \
+             median {:.2} m, p95 {:.2} m; largest during it, median {:.2} m, max {:.2} m",
+            end.len(),
+            percentile(&end, 0.5),
+            percentile(&end, 0.95),
+            percentile(&worst, 0.5),
+            worst.iter().copied().fold(0.0, f64::max)
+        );
     }
     Ok(())
 }

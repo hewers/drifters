@@ -70,6 +70,22 @@ pub const SG_ID: usize = 15;
 #[cfg(not(feature = "reduced-state"))]
 pub const SA_ID: usize = 18;
 
+/// How many states have general dynamics: position, velocity and attitude.
+///
+/// Every state from here up is an IMU error parameter, a first-order
+/// Gauss-Markov process that depends on nothing but itself and is driven by its
+/// own noise channel alone. [`crate::ud::Ud::predict_partitioned`] relies on
+/// that to run Gram-Schmidt over these nine and nothing else, and
+/// `the_parameter_states_are_self_contained` in `eskf` pins the structure.
+pub const N_NAV: usize = BG_ID;
+
+/// How many noise channels drive the navigation states: velocity and angle
+/// random walk.
+///
+/// Every channel from here up drives exactly one parameter state, in state
+/// order: channel `N_NAV_NOISE + k` drives state `N_NAV + k`.
+pub const N_NAV_NOISE: usize = BGSTD_ID;
+
 /// Index of the velocity random walk noise channel.
 pub const VRW_ID: usize = 0;
 /// Index of the angle random walk noise channel.
@@ -97,6 +113,12 @@ pub type StateVector = Matrix<N_STATE, 1>;
 pub type NoiseMatrix = Matrix<N_STATE, N_NOISE>;
 /// The `18 × 18` process-noise spectral-density shape.
 pub type NoiseCovariance = Matrix<N_NOISE, N_NOISE>;
+/// The `9 × 6` block of the noise mapping that drives the navigation states.
+///
+/// All [`crate::ud::Ud::predict_partitioned`] needs of `G`: the rest is the
+/// identity that drives each parameter state from its own channel. 432 bytes
+/// against the full mapping's 3 024.
+pub type NavNoiseMatrix = Matrix<N_NAV, N_NAV_NOISE>;
 
 #[cfg(test)]
 mod tests {
@@ -176,17 +198,18 @@ mod size_tests {
         //
         // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
         // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
-        // largest single saving the engine has had.
+        // largest single saving the engine has had. 24 more for the options'
+        // per-state partial-update shares, and 8 for the fix latency bound.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (
                 cfg!(feature = "smoothing"),
                 cfg!(feature = "f32-covariance")
             ) {
-                (true, false) => 21_488,
-                (true, true) => 20_568,
-                (false, false) => 3_240,
-                (false, true) => 2_320,
+                (true, false) => 21_520,
+                (true, true) => 20_600,
+                (false, false) => 3_272,
+                (false, true) => 2_352,
             },
             "whole engine"
         );
@@ -216,10 +239,10 @@ mod size_tests {
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (cfg!(feature = "smoothing"), f32_covariance) {
-                (true, false) => 11_816,
-                (true, true) => 11_336,
-                (false, false) => 2_304,
-                (false, true) => 1_824,
+                (true, false) => 11_840,
+                (true, true) => 11_360,
+                (false, false) => 2_328,
+                (false, true) => 1_848,
             },
             "whole engine"
         );

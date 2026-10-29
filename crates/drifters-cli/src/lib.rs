@@ -13,10 +13,12 @@
 /// place for one.
 pub use drifters_gnss::{differential, rinex, robust, smooth, tdcp, wls};
 
+pub mod comma;
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
 pub mod nees;
+pub mod npy;
 pub mod plot;
 pub mod stats;
 pub mod truth;
@@ -948,7 +950,90 @@ pub fn tune_gsdc(
     Ok(rows)
 }
 
+/// Knobs for a comma2k19 replay: how each segment is read, and how it is run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CommaOptions {
+    /// See [`comma::ReadOptions`].
+    pub read: comma::ReadOptions,
+    /// See [`comma::ReplayOptions`].
+    pub replay: comma::ReplayOptions,
+}
+
+/// Every segment under a directory, replayed.
+#[derive(Debug, Default)]
+pub struct CommaReport {
+    /// One per segment that ran.
+    pub segments: Vec<comma::SegmentReport>,
+    /// Segments that could not be read or started, and why. Listed rather than
+    /// failing the run: one segment that never moves should not cost the other
+    /// sixty-three.
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Replay every comma2k19 segment at or below `root`.
+pub fn run_comma(
+    root: &Path,
+    options: &CommaOptions,
+) -> Result<CommaReport, Box<dyn std::error::Error>> {
+    let dirs = comma::find_segments(root)?;
+    if dirs.is_empty() {
+        return Err(format!("no comma2k19 segments under {}", root.display()).into());
+    }
+    let mut report = CommaReport::default();
+    for dir in dirs {
+        let outcome = comma::read_segment(&dir, &options.read)
+            .map_err(|e| e.to_string())
+            .and_then(|segment| {
+                comma::replay(&segment, &options.replay).map_err(|e| e.to_string())
+            });
+        match outcome {
+            Ok(r) => report.segments.push(r),
+            Err(e) => report.skipped.push((dir.display().to_string(), e)),
+        }
+    }
+    Ok(report)
+}
+
 /// Convenience for callers that do not depend on `drifters-core` directly.
+/// Parse a `--partial` specification into per-state shares.
+///
+/// A comma-separated list of `block=percent`, where a block is one of `pos`,
+/// `vel`, `att`, `bg`, `ba`, and with scale factors estimated `sg` and `sa`:
+/// `sg=30,sa=30` updates both scale-factor blocks at 30 %. Unlisted blocks keep
+/// 100. See [`drifters_filter::PartialUpdate`].
+pub fn partial_update_from_spec(spec: &str) -> Result<drifters_filter::PartialUpdate, String> {
+    use drifters_filter::state::{BA_ID, BG_ID, PHI_ID, P_ID, V_ID};
+    let mut partial = drifters_filter::PartialUpdate::FULL;
+    for item in spec.split(',').filter(|s| !s.is_empty()) {
+        let (name, percent) = item
+            .split_once('=')
+            .ok_or_else(|| format!("expected block=percent, got {item:?}"))?;
+        let percent: u8 = percent
+            .trim()
+            .parse()
+            .map_err(|_| format!("{percent:?} is not a percentage"))?;
+        if percent > 100 {
+            return Err(format!(
+                "{item:?}: a share above 100 % overshoots the correction"
+            ));
+        }
+        let start = match name.trim() {
+            "pos" => P_ID,
+            "vel" => V_ID,
+            "att" => PHI_ID,
+            "bg" => BG_ID,
+            "ba" => BA_ID,
+            #[cfg(not(feature = "reduced-state"))]
+            "sg" => drifters_filter::state::SG_ID,
+            #[cfg(not(feature = "reduced-state"))]
+            "sa" => drifters_filter::state::SA_ID,
+            other => return Err(format!("unknown state block {other:?}")),
+        };
+        partial = partial.with(start..start + 3, percent);
+    }
+    Ok(partial)
+}
+
 pub fn vec3_splat(v: f64) -> drifters_core::math::Vec3 {
     drifters_core::math::Vec3::splat(v)
 }
@@ -956,4 +1041,38 @@ pub fn vec3_splat(v: f64) -> drifters_core::math::Vec3 {
 /// Convenience for callers that do not depend on `drifters-core` directly.
 pub fn vec3(x: f64, y: f64, z: f64) -> drifters_core::math::Vec3 {
     drifters_core::math::Vec3::new(x, y, z)
+}
+
+#[cfg(test)]
+mod partial_spec_tests {
+    use super::partial_update_from_spec;
+    use drifters_filter::state::{BA_ID, BG_ID, N_STATE, PHI_ID};
+
+    #[test]
+    fn a_spec_sets_the_named_blocks_and_leaves_the_rest() {
+        let p = partial_update_from_spec("bg=30,ba=0").unwrap();
+        for i in 0..N_STATE {
+            let want = match i {
+                i if (BG_ID..BG_ID + 3).contains(&i) => 30,
+                i if (BA_ID..BA_ID + 3).contains(&i) => 0,
+                _ => 100,
+            };
+            assert_eq!(p.percent(i), want, "state {i}");
+        }
+        assert_eq!(
+            partial_update_from_spec("att=50")
+                .unwrap()
+                .percent(PHI_ID + 2),
+            50
+        );
+        assert!(partial_update_from_spec("").unwrap().is_full());
+    }
+
+    #[test]
+    fn a_bad_spec_is_refused() {
+        assert!(partial_update_from_spec("bg").is_err());
+        assert!(partial_update_from_spec("bg=101").is_err());
+        assert!(partial_update_from_spec("bg=half").is_err());
+        assert!(partial_update_from_spec("wheel=50").is_err());
+    }
 }

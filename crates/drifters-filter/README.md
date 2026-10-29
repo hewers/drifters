@@ -7,16 +7,17 @@ inertial navigation library.
 
 Strapdown mechanization with two-sample coning and sculling compensation, a
 21-state error-state EKF over a `U D Uᵀ`-factored covariance, loosely- and
-tightly-coupled GNSS, RTS smoothing, and auxiliary sensors: ZUPT, non-holonomic
-constraints, odometer, barometric height and magnetometer heading.
+tightly-coupled GNSS, RTS smoothing, and auxiliary sensors: ZUPT, zero angular
+rate, non-holonomic constraints, odometer, barometric height and magnetometer
+heading.
 
 Sans-IO: push samples in, pull state out. It never allocates, blocks, reads a
 clock or touches a file, so the same code runs inside an interrupt handler and
 inside a replay harness.
 
-Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 10.2 KiB peak
-stack on Cortex-M4 in the 15-state configuration; the data path links no panic
-machinery.
+Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 6.2 KiB peak
+stack on Cortex-M4 in the 15-state configuration and 8.5 KiB with 21 states;
+the data path links no panic machinery.
 
 Features:
 

@@ -35,6 +35,10 @@ enum GnssPlacement {
     AtEnd,
     /// The fix falls strictly inside: split the IMU sample at the fix.
     Inside,
+    /// The fix's epoch is already behind the filter, by no more than
+    /// [`GinsOptions::max_fix_latency`]: apply it against the state worked
+    /// back to that epoch, then propagate.
+    Late,
 }
 
 /// A loosely-coupled GNSS/INS engine over the 21-state error model.
@@ -50,7 +54,11 @@ pub struct GinsEngine {
     /// Half the IMU interval; a fix closer than this to a boundary is treated
     /// as coincident with it rather than split.
     epoch_tolerance: F,
-    consecutive_rejections: u32,
+    /// Gate rejections since the last acceptance, per [`measurement::Kind`].
+    /// Bytes, because they fit in padding the engine already has: a `u32`
+    /// each would add 32 bytes for counts that `GinsOptions::validate` caps
+    /// at 255.
+    consecutive_rejections: [u8; measurement::Kind::COUNT],
     inflations: u32,
     /// Smoothing state, present only while recording.
     ///
@@ -115,7 +123,7 @@ impl GinsEngine {
             pending_gnss: None,
             initialised: false,
             epoch_tolerance: 1.0e-4,
-            consecutive_rejections: 0,
+            consecutive_rejections: [0; measurement::Kind::COUNT],
             inflations: 0,
             #[cfg(feature = "smoothing")]
             recorder: None,
@@ -157,7 +165,11 @@ impl GinsEngine {
     /// Queue a GNSS fix.
     ///
     /// It is consumed by the next [`GinsEngine::add_imu`] whose interval
-    /// contains it. Invalid fixes are dropped rather than queued — a fix with a
+    /// contains it — or, if its epoch is already behind the filter, as a
+    /// receiver's latency makes it, by the very next one, against the state
+    /// worked back to that epoch, provided it is no more than
+    /// [`GinsOptions::max_fix_latency`] behind. Later than that it is never
+    /// applied. Invalid fixes are dropped rather than queued — a fix with a
     /// zero sigma would make the innovation covariance singular.
     pub fn add_gnss(&mut self, fix: GnssFix) -> bool {
         if !fix.is_valid() {
@@ -206,6 +218,10 @@ impl GinsEngine {
                 self.apply_pending_gnss()?;
                 self.propagate(&after);
             }
+            GnssPlacement::Late => {
+                self.apply_pending_gnss()?;
+                self.propagate(&imu);
+            }
         }
 
         self.state.time = raw.time;
@@ -227,15 +243,23 @@ impl GinsEngine {
             GnssPlacement::AtEnd
         } else if from_start > 0.0 && from_end < 0.0 {
             GnssPlacement::Inside
+        } else if from_start < 0.0 && -from_start <= self.options.max_fix_latency {
+            // Behind the filter, but recently enough to work back to.
+            GnssPlacement::Late
         } else {
-            // The fix is outside this interval. If it is in the past it is
-            // stale and will never be usable, so drop it; if it is in the
-            // future, hold it for a later sample.
+            // The fix is outside this interval. In the future, it is held for
+            // a later sample; too far in the past, it never becomes usable and
+            // waits only to be replaced.
             GnssPlacement::None
         }
     }
 
     /// Mechanize one interval and propagate the covariance across it.
+    ///
+    /// Out of line because [`Self::add_imu`] calls it from four placements,
+    /// and inlined into each the copies' locals did not share stack: adding
+    /// the fourth, for late fixes, took the peak from 9 820 bytes to 11 608.
+    #[inline(never)]
     fn propagate(&mut self, imu: &ImuSample) {
         let previous = self.state.pva;
         self.state.pva = mechanize(&previous, &self.previous_imu, imu);
@@ -327,25 +351,85 @@ impl GinsEngine {
         (antenna, lever_n)
     }
 
+    /// The navigation state as it was `dt` seconds ago, worked back from now.
+    ///
+    /// Over a gap of a fix's latency — tens of milliseconds — the last IMU
+    /// interval's specific force and rotation rate are taken to hold: the
+    /// position goes back by `v dt − ½ a dt²`, the velocity by `a dt`, and the
+    /// attitude by the body rotation `ω dt`. Coriolis and the navigation
+    /// frame's own rotation are left out; over 0.1 s they are below a
+    /// millimetre and ten microradians. `dt = 0` is the state itself, exactly.
+    fn backdated(&self, dt: F) -> Pva {
+        let pva = self.state.pva;
+        if dt <= 0.0 {
+            return pva;
+        }
+        let imu = &self.previous_imu;
+        let gravity = drifters_core::earth::Wgs84::gravity_n(pva.position.lat, pva.position.height);
+        let accel = pva.attitude.dcm * imu.accel() + gravity;
+        let velocity = pva.velocity.to_vec3();
+        let back = velocity * -dt + accel * (0.5 * dt * dt);
+        Pva {
+            position: pva.position.shifted_linear(Ned::from_vec3(back)),
+            velocity: Ned::from_vec3(velocity - accel * dt),
+            attitude: drifters_core::types::Attitude::from_quat(
+                pva.attitude.quat
+                    * drifters_core::math::Quat::from_rotation_vector(imu.gyro() * -dt),
+            ),
+        }
+    }
+
+    /// A Jacobian taken at an epoch `dt` seconds ago, carried to the error
+    /// state as it stands now.
+    ///
+    /// `δx(then) = Φ(then, now) δx(now)`, and over a short gap
+    /// `Φ(then, now) = Φ(now, then)⁻¹ ≈ I − F dt`, so the measurement sees
+    /// `H (I − F dt)`. That is NASA's treatment of a latent measurement
+    /// (NASA/TP-2018-219822, §4.1), with the process noise over the gap
+    /// neglected as it is there: over a tenth of a second it is far below a
+    /// fix's own noise. Its own frame so that `F`'s 3.5 KiB is gone before the
+    /// update runs.
+    #[inline(never)]
+    fn carried_forward<const M: usize>(&self, h: &Matrix<M, N_STATE>, dt: F) -> Matrix<M, N_STATE> {
+        if dt <= 0.0 {
+            return *h;
+        }
+        let mut f = crate::state::StateMatrix::zeros();
+        crate::eskf::transition_matrix_into(
+            &self.state.pva,
+            &self.previous_imu,
+            &self.options.imu_noise,
+            &mut f,
+        );
+        let hf = h.matmul(&f);
+        let mut out = *h;
+        for i in 0..M {
+            for j in 0..N_STATE {
+                out[(i, j)] -= hf[(i, j)] * dt;
+            }
+        }
+        out
+    }
+
+    /// Out of line: inlined into [`Self::add_imu`], its matrices sat on that
+    /// frame for every sample, fix or no fix, and took the peak stack from
+    /// 9 820 bytes to 11 608.
+    #[inline(never)]
     fn apply_pending_gnss(&mut self) -> Result<(), FilterError> {
         let Some(fix) = self.pending_gnss.take() else {
             return Ok(());
         };
-        let (antenna, lever_n) = self.antenna_position_and_lever();
-
-        // Innovation: where the INS thinks the antenna is, minus where GNSS
-        // says it is, in local NED metres.
-        let innovation = antenna.ned_from(fix.position);
-        let z = Matrix::<3, 1>::from_column([innovation.n, innovation.e, innovation.d]);
-
-        let mut h = Matrix::<3, N_STATE>::zeros();
-        h.set_block(0, P_ID, &Mat3::identity());
-        // A platform tilt swings the lever arm, moving the modelled antenna.
-        h.set_block(0, PHI_ID, &lever_n.skew());
-
-        let r = fix.position_std.squared().to_diag();
+        // How far behind the filter the fix's epoch is: zero for a fix on
+        // time, positive for a late one. Within the epoch tolerance it is on
+        // time, and everything below is then exactly what it always was.
+        let behind = self.state.time.seconds_since(fix.time);
+        let dt = if behind > self.epoch_tolerance {
+            behind
+        } else {
+            0.0
+        };
         self.note_prior();
-        self.filter.update(&z, &h, &r)?;
+        self.apply_gnss_position(&fix, dt)?;
         self.feedback();
 
         // A fix carrying velocity gives a second, independent measurement.
@@ -359,17 +443,65 @@ impl GinsEngine {
             && fix.velocity_std.y > 0.0
             && fix.velocity_std.z > 0.0;
         if let Some(velocity) = fix.velocity.filter(|_| velocity_usable) {
-            let m = measurement::gnss_velocity(
-                &self.state.pva,
-                &self.previous_imu,
-                self.options.antenna_lever_arm,
-                velocity,
-                fix.velocity_std,
-            );
-            self.apply_inner(&m)?;
+            self.apply_gnss_velocity(&fix, velocity, dt)?;
         }
         self.seal_checkpoint();
         Ok(())
+    }
+
+    /// The position half of a fix, `dt` seconds behind the filter.
+    ///
+    /// The position and velocity halves each in their own frame, so that
+    /// neither's matrices are on the stack while the other runs its update.
+    #[inline(never)]
+    fn apply_gnss_position(&mut self, fix: &GnssFix, dt: F) -> Result<(), FilterError> {
+        let then = self.backdated(dt);
+        let lever_n = then.attitude.dcm * self.options.antenna_lever_arm;
+        let antenna = then.position.shifted_linear(Ned::from_vec3(lever_n));
+
+        // Innovation: where the INS thinks the antenna is, minus where GNSS
+        // says it is, in local NED metres.
+        let innovation = antenna.ned_from(fix.position);
+        let z = Matrix::<3, 1>::from_column([innovation.n, innovation.e, innovation.d]);
+
+        let mut h = Matrix::<3, N_STATE>::zeros();
+        h.set_block(0, P_ID, &Mat3::identity());
+        // A platform tilt swings the lever arm, moving the modelled antenna.
+        h.set_block(0, PHI_ID, &lever_n.skew());
+        let h = self.carried_forward(&h, dt);
+
+        let r = fix.position_std.squared().to_diag();
+        // Ungated, as it always was; partial shares apply to it like any other.
+        self.filter
+            .update_gated_partial(
+                &z,
+                &h,
+                &r,
+                None,
+                crate::eskf::HeldStates::NONE,
+                &self.options.partial_update,
+            )
+            .map(|_| ())
+    }
+
+    /// The velocity half of a fix, `dt` seconds behind the filter, worked
+    /// back from the state the position half has just corrected.
+    #[inline(never)]
+    fn apply_gnss_velocity(
+        &mut self,
+        fix: &GnssFix,
+        velocity: Ned,
+        dt: F,
+    ) -> Result<(), FilterError> {
+        let mut m = measurement::gnss_velocity(
+            &self.backdated(dt),
+            &self.previous_imu,
+            self.options.antenna_lever_arm,
+            velocity,
+            fix.velocity_std,
+        );
+        m.jacobian = self.carried_forward(&m.jacobian, dt);
+        self.apply_inner(&m).map(|_| ())
     }
 
     /// Apply an auxiliary measurement and feed the correction back.
@@ -388,23 +520,29 @@ impl GinsEngine {
     /// rather than one per measurement.
     fn apply_inner<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
         self.note_prior();
-        let accepted = self.filter.update_gated_holding(
+        let accepted = self.filter.update_gated_partial(
             &m.innovation,
             &m.jacobian,
             &m.noise,
             m.gate,
             m.held,
+            &self.options.partial_update,
         )?;
+        // Per kind: an accepted wheel speed says nothing about why the
+        // non-holonomic constraint keeps failing, and must not reset its count.
+        let count = &mut self.consecutive_rejections[m.kind.index()];
         if accepted {
-            self.consecutive_rejections = 0;
+            *count = 0;
             self.feedback();
         } else {
-            self.consecutive_rejections += 1;
+            *count = count.saturating_add(1);
             let limit = self.options.max_consecutive_rejections;
-            if limit > 0 && self.consecutive_rejections >= limit {
+            if limit > 0 && u32::from(*count) >= limit {
                 // The measurements are not the problem; the covariance is.
+                // Inflating it changes what every kind would see, so every
+                // count starts again.
                 self.filter.inflate(self.options.rejection_inflation);
-                self.consecutive_rejections = 0;
+                self.consecutive_rejections = [0; measurement::Kind::COUNT];
                 self.inflations = self.inflations.saturating_add(1);
             }
         }
@@ -420,11 +558,28 @@ impl GinsEngine {
         self.filter.last_nis()
     }
 
-    /// How many gated measurements have been rejected since the last accepted
-    /// one.
+    /// The longest current run of gate rejections of any one measurement kind.
+    ///
+    /// Runs are counted per kind — see [`Self::consecutive_rejections_of`] —
+    /// and this is the one closest to triggering the lockout recovery.
     #[inline]
     pub fn consecutive_rejections(&self) -> u32 {
         self.consecutive_rejections
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, u32::from)
+    }
+
+    /// How many measurements of `kind` the gate has rejected since the last
+    /// one it accepted.
+    ///
+    /// Counted per kind so that one sensor being accepted cannot hide another
+    /// being refused: when the count for any kind reaches
+    /// [`GinsOptions::max_consecutive_rejections`], the covariance is inflated.
+    #[inline]
+    pub fn consecutive_rejections_of(&self, kind: measurement::Kind) -> u32 {
+        u32::from(self.consecutive_rejections[kind.index()])
     }
 
     /// How many times the covariance has been inflated to recover from
@@ -448,6 +603,31 @@ impl GinsEngine {
         if self.options.zupt_holds_attitude {
             m = m.holding(crate::eskf::HeldStates::ATTITUDE);
         }
+        self.apply(&m)
+    }
+
+    /// Apply a zero-angular-rate update, from the raw IMU sample just passed to
+    /// [`Self::add_imu`].
+    ///
+    /// See [`measurement::zero_angular_rate`]; the caller decides *when* the
+    /// vehicle is still. The raw sample rather than the one the engine kept,
+    /// because that one was compensated with the bias estimate of the moment
+    /// it arrived, and any update since — this one's own ZUPT, say — would
+    /// leave the innovation carrying a correction already made.
+    ///
+    /// `sigma` is the one-sigma rate noise per axis, rad/s. An invalid sample
+    /// is refused, and returns `Ok(false)` as a gate rejection would.
+    pub fn apply_zero_rate(&mut self, raw: &ImuSample, sigma: Vec3) -> Result<bool, FilterError> {
+        if !raw.is_valid() {
+            return Ok(false);
+        }
+        let rate = self.state.imu_error.compensate(raw).gyro();
+        let m = measurement::zero_angular_rate(
+            &self.state.pva,
+            rate,
+            self.state.imu_error.gyro_scale,
+            sigma,
+        );
         self.apply(&m)
     }
 
@@ -835,16 +1015,20 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_fix_is_discarded_rather_than_applied_late() {
-        let mut e = GinsEngine::new(options()).unwrap();
-        e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
-        // A fix from well before the current interval.
-        let fix = GnssFix::position_only(GpsTime::from_tow(0.001), origin(), Vec3::splat(1.0));
-        e.add_gnss(fix);
-        assert_eq!(
-            e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
-            GnssPlacement::None
-        );
+    fn a_fix_behind_the_filter_is_late_within_the_limit_and_stale_past_it() {
+        // A fix 9 ms before the current interval begins: worked back to under
+        // the default half-second allowance, discarded under a 5 ms one.
+        for (limit, want) in [(0.5, GnssPlacement::Late), (0.005, GnssPlacement::None)] {
+            let mut e = GinsEngine::new(options().with_max_fix_latency(limit)).unwrap();
+            e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
+            let fix = GnssFix::position_only(GpsTime::from_tow(0.001), origin(), Vec3::splat(1.0));
+            e.add_gnss(fix);
+            assert_eq!(
+                e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
+                want,
+                "limit {limit}"
+            );
+        }
     }
 
     #[test]
@@ -980,6 +1164,147 @@ mod tests {
                 assert_relative_eq!(got[i], want[i], epsilon = 1e-15);
             }
         }
+    }
+
+    /// Three engines on the same dead-reckoned run, north at 10 m/s,
+    /// accelerating at 2 m/s² and turning at 0.2 rad/s with the antenna a
+    /// metre ahead, so that every term of the back-working is exercised; and
+    /// a fix at t = 1.00 s 3 m east of where the antenna was. One engine gets
+    /// no fix, one gets it on time, one gets it `late` seconds after its
+    /// epoch. The states of all three at t = 1.20 s.
+    fn late_fix_runs(late: F, max_latency: F, velocity: bool) -> [NavState; 3] {
+        let options = GinsOptions::default()
+            .with_initial_state(origin(), Ned::new(10.0, 0.0, 0.0), Euler::default())
+            .with_antenna_lever_arm(Vec3::new(1.0, 0.0, -0.5))
+            .with_max_fix_latency(max_latency);
+        let step = |e: &mut GinsEngine, k: usize| {
+            let mut sample = stationary_sample(e, 0.01, k as F * 0.01);
+            sample.dvel += Vec3::new(2.0, 0.0, 0.0) * 0.01;
+            sample.dtheta += Vec3::new(0.0, 0.0, 0.2) * 0.01;
+            e.add_imu(sample).unwrap();
+        };
+        let mut none = GinsEngine::new(options).unwrap();
+        for k in 1..=100 {
+            step(&mut none, k);
+        }
+        let mut fix = GnssFix::position_only(
+            GpsTime::from_tow(1.0),
+            none.antenna_position().shifted(Ned::new(0.0, 3.0, 0.0)),
+            Vec3::splat(0.5),
+        );
+        if velocity {
+            fix.velocity = Some(Ned::new(12.0, 0.5, 0.0));
+            fix.velocity_std = Vec3::splat(0.1);
+        }
+        let mut on_time = GinsEngine::new(options).unwrap();
+        let mut delayed = GinsEngine::new(options).unwrap();
+        let arrives = 100 + (late * 100.0).round() as usize;
+        for k in 1..=120 {
+            if k == 101 {
+                on_time.add_gnss(fix);
+            }
+            if k == arrives + 1 {
+                delayed.add_gnss(fix);
+            }
+            step(&mut on_time, k);
+            step(&mut delayed, k);
+            if k > 100 {
+                step(&mut none, k);
+            }
+        }
+        [none.nav_state(), on_time.nav_state(), delayed.nav_state()]
+    }
+
+    #[test]
+    fn a_late_fix_lands_where_an_on_time_one_would() {
+        // 80 ms late at 10 m/s is 0.8 m of travel, which is what applying the
+        // fix against the current state instead would be wrong by. Worked
+        // back and carried forward, a position lands 3 µm and 12 µm/s from
+        // the on-time fix, and with its velocity 0.25 mm and 1.1 mm/s; the
+        // tolerances are about four times those.
+        for (velocity, metres, speed) in [(false, 1e-4, 1e-4), (true, 1e-3, 4e-3)] {
+            let [none, on_time, late] = late_fix_runs(0.08, 0.5, velocity);
+            let moved = on_time.position().ned_from(none.position());
+            assert!(moved.e > 1.0, "the fix should matter: {moved:?}");
+            let apart = late
+                .position()
+                .ned_from(on_time.position())
+                .to_vec3()
+                .norm();
+            let off = (late.pva.velocity.to_vec3() - on_time.pva.velocity.to_vec3()).norm();
+            assert!(
+                apart < metres && off < speed,
+                "velocity {velocity}: {apart:.2e} m and {off:.2e} m/s from the on-time fix"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fix_later_than_the_limit_is_not_applied() {
+        // 80 ms behind against a 50 ms limit, and against no allowance at all,
+        // which is what the engine did before late fixes were accepted.
+        for limit in [0.05, 0.0] {
+            let [none, _, late] = late_fix_runs(0.08, limit, true);
+            let apart = late.position().ned_from(none.position()).to_vec3().norm();
+            assert!(
+                apart < 1e-9,
+                "limit {limit}: a stale fix moved the state {apart:.2e} m"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_shares_reach_both_update_paths() {
+        // The GNSS position fix and everything through `apply` go through
+        // different calls into the filter; both have to honour the options.
+        // A still IMU, then a fix 3 m north, with or without a 1 m/s north
+        // velocity: the position update runs on the first path and the
+        // velocity update on the second. The fix falls at the end of an IMU
+        // interval, so nothing propagates after it and the state read back is
+        // the update's alone.
+        use crate::eskf::PartialUpdate;
+        let run = |partial: PartialUpdate, with_velocity: bool| {
+            let mut e = GinsEngine::new(options().with_partial_update(partial)).unwrap();
+            for i in 1..=100 {
+                e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                    .unwrap();
+            }
+            let mut fix = GnssFix::position_only(
+                GpsTime::from_tow(1.01),
+                origin().shifted(Ned::new(3.0, 0.0, 0.0)),
+                Vec3::splat(0.1),
+            );
+            if with_velocity {
+                fix.velocity = Some(Ned::new(1.0, 0.0, 0.0));
+                fix.velocity_std = Vec3::splat(0.1);
+            }
+            e.add_gnss(fix);
+            e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
+            let state = e.nav_state();
+            (state.position().ned_from(origin()).n, state.pva.velocity.n)
+        };
+
+        // Position at half share takes exactly half the correction the full
+        // filter made: everything up to the fix is the same filter, and the
+        // still IMU leaves the position where it started to well under the
+        // tolerance.
+        let (north_full, _) = run(PartialUpdate::FULL, false);
+        let (north_half, _) = run(PartialUpdate::FULL.with(P_ID..P_ID + 3, 50), false);
+        assert!(north_full > 2.0, "{north_full}");
+        assert!(
+            (north_half - 0.5 * north_full).abs() < 1e-6,
+            "half share moved {north_half} m against {north_full}"
+        );
+
+        // Velocity at zero share: neither the position update, through the
+        // correlation, nor the velocity update may move it.
+        let (_, speed_full) = run(PartialUpdate::FULL, true);
+        let (_, speed_held) = run(PartialUpdate::FULL.with(V_ID..V_ID + 3, 0), true);
+        assert!(speed_full > 0.5, "{speed_full}");
+        assert!(
+            speed_held.abs() < 1e-9,
+            "a zero share moved velocity to {speed_held}"
+        );
     }
 
     #[test]
@@ -1388,8 +1713,10 @@ mod tests {
 
     #[test]
     fn holding_keeps_the_covariance_positive_definite() {
-        // Joseph form is valid for any gain, not only the optimal one, which
-        // is what makes zeroing gain rows safe. Verified over many updates.
+        // A held update takes uncertainty out by Bierman and puts the held
+        // rows' share back by rank-one updates, 400 times over here. Neither
+        // step can make `D` negative, and this checks that the round trip
+        // does not drift either.
         let mut e = GinsEngine::new(options()).unwrap();
         for i in 1..=20_000 {
             let t = i as F * 0.01;
@@ -1547,5 +1874,233 @@ mod tests {
             "bias estimate {estimated} did not track the injected {bias}"
         );
         assert!(e.filter.is_healthy());
+    }
+
+    // --- rejection counting, per kind ---------------------------------------
+
+    #[test]
+    fn an_accepted_measurement_of_another_kind_does_not_hide_a_lockout() {
+        // The comma2k19 failure in miniature. A wheel speed the gate accepts
+        // every time, between height updates it rejects every time. Counted
+        // together, each acceptance reset the count and the recovery never
+        // fired; counted per kind, the tenth height rejection inflates.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 0..9 {
+            assert!(e.apply_wheel_speed(0.0, 0.1).unwrap(), "wheel speed {i}");
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap(), "height {i}");
+        }
+        assert_eq!(e.consecutive_rejections_of(measurement::Kind::Height), 9);
+        assert_eq!(e.inflation_count(), 0);
+        assert!(e.apply_wheel_speed(0.0, 0.1).unwrap());
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_eq!(
+            e.inflation_count(),
+            1,
+            "the tenth height rejection must inflate"
+        );
+        assert_eq!(
+            e.consecutive_rejections(),
+            0,
+            "inflating restarts every count"
+        );
+    }
+
+    #[test]
+    fn rejections_are_counted_by_kind() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        assert!(e.apply_wheel_speed(0.0, 0.1).unwrap());
+        assert_eq!(e.consecutive_rejections_of(measurement::Kind::Height), 2);
+        assert_eq!(e.consecutive_rejections_of(measurement::Kind::Heading), 1);
+        assert_eq!(
+            e.consecutive_rejections_of(measurement::Kind::WheelSpeed),
+            0
+        );
+        assert_eq!(e.consecutive_rejections(), 2, "the longest run of any kind");
+        // An acceptance clears its own kind only.
+        assert!(e.apply_height(25.0, 0.5).unwrap());
+        assert_eq!(e.consecutive_rejections_of(measurement::Kind::Height), 0);
+        assert_eq!(e.consecutive_rejections_of(measurement::Kind::Heading), 1);
+    }
+
+    #[test]
+    fn a_rejection_limit_the_counters_cannot_reach_is_refused() {
+        let mut o = options();
+        o.max_consecutive_rejections = 255;
+        assert!(GinsEngine::new(o).is_ok());
+        o.max_consecutive_rejections = 256;
+        assert_eq!(
+            GinsEngine::new(o).err(),
+            Some(ConfigError::RejectionLimitTooLarge)
+        );
+    }
+
+    #[test]
+    fn every_kind_has_its_own_counter() {
+        use measurement::Kind;
+        let kinds = [
+            Kind::GnssVelocity,
+            Kind::Pseudoranges,
+            Kind::ZeroVelocity,
+            Kind::ZeroRate,
+            Kind::Nonholonomic,
+            Kind::WheelSpeed,
+            Kind::Height,
+            Kind::Heading,
+            Kind::Other,
+        ];
+        assert_eq!(kinds.len(), Kind::COUNT);
+        let mut seen = [false; Kind::COUNT];
+        for k in kinds {
+            assert!(!seen[k.index()], "{k:?} shares a counter");
+            seen[k.index()] = true;
+        }
+    }
+
+    // --- zero-angular-rate update -------------------------------------------
+
+    /// The raw IMU output of a unit held still at `origin()` with a fixed true
+    /// attitude, carrying a gyro bias. Built from the truth rather than from
+    /// the engine's own estimate, so that a heading the engine gets wrong
+    /// stays wrong rather than being followed.
+    fn still(t: F, dt: F, truth: &Attitude, gyro_bias: Vec3) -> ImuSample {
+        let p = origin();
+        let g = Wgs84::gravity_n(p.lat, p.height);
+        let w_ie = Wgs84::omega_ie_n(p.lat);
+        ImuSample {
+            time: GpsTime::from_tow(t),
+            dt,
+            dtheta: (truth.quat.rotate_inverse(w_ie) + gyro_bias) * dt,
+            dvel: truth.quat.rotate_inverse(-g) * dt,
+        }
+    }
+
+    #[test]
+    fn the_zero_rate_jacobian_matches_the_error_state_convention() {
+        // The innovation of an estimate that is wrong by `δx` must be `H·δx`
+        // to first order, with `δx` from `error_between` — the definition of
+        // the convention rather than a restatement of it. Each block is
+        // checked on its own, so a sign flip in one cannot hide behind
+        // another.
+        let truth_attitude = Attitude::from_euler(0.02, -0.03, 1.2);
+        let truth = NavState {
+            time: GpsTime::from_tow(100.0),
+            pva: Pva {
+                position: origin(),
+                velocity: Ned::ZERO,
+                attitude: truth_attitude,
+            },
+            imu_error: drifters_core::types::ImuError {
+                gyro_bias: Vec3::new(2.0e-4, -1.0e-4, 3.0e-4),
+                ..Default::default()
+            },
+        };
+        let raw = still(100.0, 0.01, &truth_attitude, truth.imu_error.gyro_bias);
+        let check = |estimate: NavState, what: &str| {
+            let rate = estimate.imu_error.compensate(&raw).gyro();
+            let m = measurement::zero_angular_rate(
+                &estimate.pva,
+                rate,
+                estimate.imu_error.gyro_scale,
+                Vec3::splat(1.0e-3),
+            );
+            let predicted = m.jacobian.matmul(&error_between(&truth, &estimate));
+            for i in 0..3 {
+                let (got, want) = (m.innovation[(i, 0)], predicted[(i, 0)]);
+                assert!(
+                    (got - want).abs() < 0.02 * want.abs() + 1.0e-9,
+                    "{what}, axis {i}: innovation {got:e} against H·δx {want:e}"
+                );
+            }
+        };
+        let mut biased = truth;
+        biased.imu_error.gyro_bias += Vec3::new(-1.5e-4, 2.5e-4, -2.0e-4);
+        check(biased, "gyro bias");
+        // Five milliradians: earth rate times that is ~4e-7 rad/s, and the
+        // second-order remainder a hundred times smaller. At thirty it was 3 %.
+        let mut tilted = truth;
+        tilted.pva.attitude = Attitude::from_euler(0.025, -0.035, 1.195);
+        check(tilted, "attitude");
+    }
+
+    #[test]
+    fn a_zero_rate_update_finds_a_gyro_bias_and_keeps_the_heading() {
+        // A yaw-rate bias of 0.11°/s, the comma2k19 case: stationary, nothing
+        // else observes heading, and a ZUPT holds attitude by design. Without
+        // the zero-rate update the heading walks the bias times the time.
+        let bias = Vec3::new(0.0, 0.0, 2.0e-3);
+        let truth = Attitude::from_euler(0.0, 0.0, 0.0);
+        // A phone-class bias prior. The default options are a tactical unit's,
+        // which would take a bias this size for something else entirely.
+        let mut o = options();
+        o.initial_gyro_bias_std = Vec3::splat(5.0e-3);
+        let run = |zaru: bool| -> (F, F) {
+            let mut e = GinsEngine::new(o).unwrap();
+            for i in 1..=6_000 {
+                let s = still(i as F * 0.01, 0.01, &truth, bias);
+                e.add_imu(s).unwrap();
+                if i % 10 == 0 {
+                    e.apply_zupt(Vec3::splat(0.02)).unwrap();
+                    if zaru {
+                        e.apply_zero_rate(&s, Vec3::splat(5.0e-3)).unwrap();
+                    }
+                }
+            }
+            (
+                e.nav_state().imu_error.gyro_bias.z,
+                e.nav_state().euler().yaw.abs(),
+            )
+        };
+        let (_, drifted) = run(false);
+        assert!(
+            drifted > 0.1,
+            "without it the heading should walk ~0.12 rad, got {drifted}"
+        );
+        let (estimate, heading) = run(true);
+        assert!(
+            (estimate - bias.z).abs() < 0.05 * bias.z,
+            "bias estimate {estimate:e} against {:e}",
+            bias.z
+        );
+        assert!(
+            heading < 0.05 * drifted,
+            "heading error {heading} with the update against {drifted} without"
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_update_expects_the_earth_to_turn() {
+        // No bias at all. A still gyro reads the earth's rotation, 15°/h, and
+        // an update that expected zero would estimate that as a bias. The
+        // tolerance is a twentieth of earth rate.
+        let truth = Attitude::from_euler(0.0, 0.0, 0.0);
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=3_000 {
+            let s = still(i as F * 0.01, 0.01, &truth, Vec3::ZERO);
+            e.add_imu(s).unwrap();
+            if i % 10 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+                e.apply_zero_rate(&s, Vec3::splat(1.0e-5)).unwrap();
+            }
+        }
+        let b = e.nav_state().imu_error.gyro_bias;
+        let earth = Wgs84::OMEGA;
+        assert!(
+            b.norm() < 0.05 * earth,
+            "bias estimate {b:?} on a bias-free gyro; earth rate is {earth:e}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_sample_is_refused_by_the_zero_rate_update() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let bad = ImuSample {
+            dt: 0.0,
+            ..Default::default()
+        };
+        assert!(!e.apply_zero_rate(&bad, Vec3::splat(1.0e-3)).unwrap());
+        assert_eq!(e.last_nis(), None, "nothing was applied");
     }
 }

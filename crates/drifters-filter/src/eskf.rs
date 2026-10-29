@@ -14,8 +14,8 @@ use drifters_core::types::{ImuNoise, ImuSample, Pva};
 use drifters_core::F;
 
 use crate::state::{
-    NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID, BA_ID, BGSTD_ID,
-    BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
+    NavNoiseMatrix, NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID,
+    BA_ID, BGSTD_ID, BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
 };
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SASTD_ID, SA_ID, SGSTD_ID, SG_ID};
@@ -29,6 +29,19 @@ use crate::ud::{Ud, Whitened};
 /// respect to radians.
 pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> StateMatrix {
     let mut f = StateMatrix::zeros();
+    transition_matrix_into(state, imu, noise, &mut f);
+    f
+}
+
+/// [`transition_matrix`], written into the caller's matrix.
+///
+/// The filter's own callers use this. Returned by value from a function the
+/// optimiser keeps out of line, as it does once two callers share it, the
+/// 3.5 KiB matrix sat in both frames: built in this one, copied into the
+/// caller's. That was 1.8 KiB on the peak stack the moment a second caller
+/// appeared.
+pub fn transition_matrix_into(state: &Pva, imu: &ImuSample, noise: &ImuNoise, f: &mut StateMatrix) {
+    *f = StateMatrix::zeros();
 
     let lat = state.position.lat;
     let h = state.position.height;
@@ -131,8 +144,6 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
         f.set_block(SG_ID, SG_ID, &decay_block);
         f.set_block(SA_ID, SA_ID, &decay_block);
     }
-
-    f
 }
 
 /// Maps the 18 driving-noise channels onto the 21 error states.
@@ -147,6 +158,21 @@ pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
         g.set_block(SG_ID, SGSTD_ID, &Mat3::identity());
         g.set_block(SA_ID, SASTD_ID, &Mat3::identity());
     }
+    g
+}
+
+/// The block of [`noise_mapping`] that drives the navigation states.
+///
+/// Velocity and angle random walk, sensed in the body frame and rotated into
+/// NED. The rest of the mapping is the identity from each parameter's channel
+/// to that parameter, which [`crate::ud::Ud::predict_partitioned`] assumes
+/// rather than reads, so the filter builds this 9×6 block per sample instead
+/// of the whole 21×18. `the_navigation_block_is_the_mappings_corner` pins the
+/// two together.
+pub fn nav_noise_mapping(state: &Pva) -> NavNoiseMatrix {
+    let mut g = NavNoiseMatrix::zeros();
+    g.set_block(V_ID, VRW_ID, &state.attitude.dcm);
+    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm);
     g
 }
 
@@ -202,9 +228,10 @@ pub(crate) mod tests_support {
 ///
 /// Zeroing a state's row of the Kalman gain stops a measurement from correcting
 /// it, while still letting that state's uncertainty contribute to the
-/// innovation covariance. This is the Schmidt-Kalman "consider" treatment, and
-/// Joseph form remains valid because it holds for *any* gain, not only the
-/// optimal one — so the covariance stays symmetric and positive definite.
+/// innovation covariance. This is the Schmidt-Kalman "consider" treatment. Its
+/// covariance is the Joseph form's for that gain, which is the optimal
+/// posterior plus a positive semi-definite term, so the factors carry it
+/// without being formed into `P`. See [`Eskf::update_gated_holding`].
 ///
 /// The motivating case is in `docs/state-model.md`: stationary, accelerometer
 /// bias and tilt are mutually unobservable, and letting a zero-velocity update
@@ -242,6 +269,128 @@ impl HeldStates {
     #[inline]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+}
+
+/// How much of each measurement's correction each error state takes, in
+/// percent.
+///
+/// The partial-update Schmidt-Kalman filter of Brink, in the factored form of
+/// Ramos, Brink, Ganesh and Hurtado (JGCD 45(9), 2022). A state at `p` %
+/// takes `p/100` of the optimal correction: 100 is the ordinary Kalman update,
+/// 0 is a Schmidt "consider" state — what [`HeldStates`] does for one
+/// measurement — and in between slows a state that the measurements see only
+/// weakly, or through a model that is not quite right, without discarding what
+/// they say about it. Scale factors on a phone-class IMU are the usual
+/// candidates.
+///
+/// The covariance is the Joseph form's for the gain actually applied, `Γ K`
+/// with `Γ` the shares on the diagonal, which expands to
+/// `P_opt + (I − Γ) K S Kᵀ (I − Γ)`. That is exact for any shares, never
+/// optimistic, and factored the same way held states are: Bierman, then one
+/// rank-one update per measurement row. See [`Eskf::update_gated_partial`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartialUpdate([u8; N_STATE]);
+
+impl PartialUpdate {
+    /// Every state takes all of every correction: the ordinary filter.
+    pub const FULL: Self = Self([100; N_STATE]);
+
+    /// The same shares with `percent` for the states in `states`.
+    ///
+    /// Indices past the last state are ignored. A percentage above 100 is
+    /// stored as given and refused by [`GinsOptions::validate`], since a share
+    /// above one would overshoot the optimal correction.
+    ///
+    /// [`GinsOptions::validate`]: crate::config::GinsOptions::validate
+    pub const fn with(mut self, states: core::ops::Range<usize>, percent: u8) -> Self {
+        let mut i = states.start;
+        while i < states.end && i < N_STATE {
+            self.0[i] = percent;
+            i += 1;
+        }
+        self
+    }
+
+    /// Shares given as one percentage per state, in state order.
+    pub const fn from_percents(percents: [u8; N_STATE]) -> Self {
+        Self(percents)
+    }
+
+    /// One percentage per state, in state order.
+    pub const fn percents(&self) -> [u8; N_STATE] {
+        self.0
+    }
+
+    /// The percentage state `index` takes, or 100 past the last state.
+    #[inline]
+    pub const fn percent(&self, index: usize) -> u8 {
+        if index < N_STATE {
+            self.0[index]
+        } else {
+            100
+        }
+    }
+
+    /// True when every state takes its whole correction.
+    pub const fn is_full(&self) -> bool {
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] != 100 {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// The states short of a whole share, as bits, with `held`'s added: the
+    /// states whose correction is scaled and whose uncertainty is partly
+    /// restored. Zero is the ordinary update.
+    fn short(&self, held: HeldStates) -> u32 {
+        let mut bits = held.0;
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] < 100 {
+                bits |= 1 << i;
+            }
+            i += 1;
+        }
+        bits
+    }
+
+    /// True when every share is a percentage, at most 100.
+    pub const fn is_valid(&self) -> bool {
+        let mut i = 0;
+        while i < N_STATE {
+            if self.0[i] > 100 {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// State `index`'s share of a correction, `Γᵢᵢ`, after `held` takes its
+    /// states to zero for this measurement.
+    ///
+    /// The whole and empty shares are written out rather than divided: on a
+    /// part with `f64` in software a divide is a library call.
+    fn share(&self, index: usize, held: HeldStates) -> F {
+        if held.contains(index) {
+            return 0.0;
+        }
+        match self.percent(index) {
+            100 => 1.0,
+            0 => 0.0,
+            percent => F::from(percent) / 100.0,
+        }
+    }
+}
+
+impl Default for PartialUpdate {
+    fn default() -> Self {
+        Self::FULL
     }
 }
 
@@ -484,7 +633,8 @@ impl Eskf {
         // expression-chained version held about a dozen 21x21 matrices live,
         // which measured at 35.3 KiB of stack on Cortex-M4 — see
         // docs/design.md.
-        let mut phi = transition_matrix(state, imu, noise);
+        let mut phi = StateMatrix::zeros();
+        transition_matrix_into(state, imu, noise, &mut phi);
         for i in 0..N_STATE {
             for j in 0..N_STATE {
                 phi.data[i][j] *= dt;
@@ -505,17 +655,29 @@ impl Eskf {
         // 1.459 NIS to four figures, and the NEES campaign moves from 14.569
         // to 14.565, which is inside its own Monte Carlo noise. The difference
         // is second order in `dt`, and at 200 Hz that is nothing to keep.
-        let mapping = noise_mapping(state);
+        // Only the navigation block: the partitioned update assumes the
+        // identity that drives each parameter, and the full 21×18 `G` would be
+        // 3 KiB of stack for 54 entries that are read.
+        let mapping = nav_noise_mapping(state);
         let mut density = Self::noise_density(noise);
         for d in density.iter_mut() {
             *d *= dt;
         }
-        // A degenerate transition is the only way this fails, and leaving the
-        // covariance untouched is what the dense form did when its
-        // symmetrisation had nothing to fix.
-        let _ = self.covariance.predict(&phi, &mapping, &density);
+        // Partitioned: Gram-Schmidt over the nine navigation states, then one
+        // rank-one update per IMU error parameter, which is the same
+        // factorisation as `Ud::predict`'s full sweep at about a quarter of the
+        // work. A degenerate transition is the only way this fails, and
+        // leaving the covariance as it stands is what the dense form did when
+        // its symmetrisation had nothing to fix.
+        let _ = self
+            .covariance
+            .predict_partitioned(&phi, &mapping, &density);
 
-        self.dx = phi.matmul(&self.dx);
+        // The engine feeds back after every update, so this is almost always
+        // zero, and `Φ · 0` is a 21×21 product that changes nothing.
+        if self.dx.data.iter().any(|row| row[0] != 0.0) {
+            self.dx = phi.matmul(&self.dx);
+        }
 
         if let Some(accumulated) = accumulated {
             let mut product = StateMatrix::zeros();
@@ -524,20 +686,27 @@ impl Eskf {
         }
     }
 
-    /// Apply a measurement update in Joseph form.
+    /// Apply a measurement update.
     ///
     /// `innovation` is `z − h(x)`, `h` its Jacobian, `r` the measurement noise
-    /// covariance. Joseph form costs one extra `21 × 21` product over the short
-    /// `P ← (I − KH)P` form but keeps `P` symmetric and positive definite under
-    /// round-off, which matters over the millions of updates a long run makes.
+    /// covariance. The posterior is the Kalman update's, computed on the
+    /// factors by Bierman's recursion rather than by forming `P`; see
+    /// [`crate::ud`].
     pub fn update<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
     ) -> Result<(), FilterError> {
-        self.update_inner(innovation, h, r, None, HeldStates::NONE)
-            .map(|_| ())
+        self.update_inner(
+            innovation,
+            h,
+            r,
+            None,
+            HeldStates::NONE,
+            &PartialUpdate::FULL,
+        )
+        .map(|_| ())
     }
 
     /// Apply a measurement update, rejecting it if it fails a chi-squared gate.
@@ -559,7 +728,14 @@ impl Eskf {
         r: &Matrix<M, M>,
         threshold: F,
     ) -> Result<bool, FilterError> {
-        self.update_inner(innovation, h, r, Some(threshold), HeldStates::NONE)
+        self.update_inner(
+            innovation,
+            h,
+            r,
+            Some(threshold),
+            HeldStates::NONE,
+            &PartialUpdate::FULL,
+        )
     }
 
     /// Apply a gated update, holding the states in `held` fixed.
@@ -567,6 +743,12 @@ impl Eskf {
     /// See [`HeldStates`]. The held states still shape the innovation
     /// covariance — their uncertainty is *considered* — they are simply not
     /// corrected.
+    ///
+    /// The covariance is the Joseph form's for the gain with the held rows
+    /// zeroed. That equals the optimal posterior plus the held block of the
+    /// `K S Kᵀ` the optimal update removes, so it is computed as Bierman's
+    /// update followed by one positive rank-one update per row, and never
+    /// leaves the factored form.
     pub fn update_gated_holding<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -575,7 +757,26 @@ impl Eskf {
         threshold: Option<F>,
         held: HeldStates,
     ) -> Result<bool, FilterError> {
-        self.update_inner(innovation, h, r, threshold, held)
+        self.update_inner(innovation, h, r, threshold, held, &PartialUpdate::FULL)
+    }
+
+    /// Apply a gated update in which each state takes only its share of the
+    /// correction, and the states in `held` none of it.
+    ///
+    /// See [`PartialUpdate`]. The gate, the NIS and the innovation covariance
+    /// are the optimal update's: partial shares change what the filter does
+    /// with a measurement, not whether it believes it. With every share at
+    /// 100 % and nothing held this is [`Self::update_gated`], bit for bit.
+    pub fn update_gated_partial<const M: usize>(
+        &mut self,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        threshold: Option<F>,
+        held: HeldStates,
+        partial: &PartialUpdate,
+    ) -> Result<bool, FilterError> {
+        self.update_inner(innovation, h, r, threshold, held, partial)
     }
 
     /// The normalised innovation squared `νᵀ S⁻¹ ν` a measurement would
@@ -598,6 +799,38 @@ impl Eskf {
         Ok(nis(&chol, innovation))
     }
 
+    /// The measurement update, for every measurement whether it holds states
+    /// or not: Bierman over whitened rows, on a copy of the factors so the gate
+    /// can decide before anything moves.
+    ///
+    /// # Held states
+    ///
+    /// Joseph with the held rows of the gain zeroed is the definition. Writing
+    /// `K` for the optimal gain, `G` for its held rows with zeros elsewhere and
+    /// `K̃ = K − G` for the gain actually applied, it expands to
+    ///
+    /// ```text
+    /// (I − K̃H) P (I − K̃H)ᵀ + K̃ R K̃ᵀ  =  (P − K S Kᵀ) + G S Gᵀ
+    /// ```
+    ///
+    /// The first term is the optimal update, which is what Bierman computes.
+    /// The second is the held block of the `K S Kᵀ` it removed, and that total
+    /// is `Σ αᵢ kᵢ kᵢᵀ` over the rows, so it goes back in as one positive
+    /// rank-one update per row. The held-state update never leaves the
+    /// factored form, and costs the ordinary update plus a short sweep per row.
+    ///
+    /// The restoring has to wait until every row is in. Putting a held state's
+    /// uncertainty back between rows hands the next row a covariance the batch
+    /// update never saw, and runs a different filter from the one Joseph
+    /// defines; `a_held_update_matches_the_dense_joseph_form` catches it.
+    ///
+    /// # Partial shares
+    ///
+    /// Holding is the case `Γ = 0` of a gain `K̃ = Γ K` with `Γ` diagonal. The
+    /// same expansion gives `(P − K S Kᵀ) + (I − Γ) K S Kᵀ (I − Γ)` for any
+    /// shares, so each row's restore vector is `(I − Γ) kᵢ` and the correction
+    /// is `Γ K ν`. A held state has share zero, a fully updated one share one
+    /// and a zero restore, and a [`PartialUpdate`] anything between.
     fn update_inner<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -605,31 +838,11 @@ impl Eskf {
         r: &Matrix<M, M>,
         gate: Option<F>,
         held: HeldStates,
+        partial: &PartialUpdate,
     ) -> Result<bool, FilterError> {
         if !self.covariance.is_healthy() {
             return Err(FilterError::Diverged);
         }
-        // Nothing but the dispatch lives in this frame. Both paths carry large
-        // stack temporaries and LLVM allocates a function's slots on entry, so
-        // a body here would be paid by whichever path was not taken — worth
-        // 6 KiB on the held-state path, which is the one already paying most.
-        if held.is_empty() {
-            self.update_factored(innovation, h, r, gate)
-        } else {
-            self.update_holding_dense(innovation, h, r, gate, held)
-        }
-    }
-
-    /// The Bierman update: the ordinary path, for a measurement that holds
-    /// nothing.
-    #[inline(never)]
-    fn update_factored<const M: usize>(
-        &mut self,
-        innovation: &Matrix<M, 1>,
-        h: &Matrix<M, N_STATE>,
-        r: &Matrix<M, M>,
-        gate: Option<F>,
-    ) -> Result<bool, FilterError> {
         // Bierman is scalar-sequential and assumes each row's noise is
         // independent of the others', so a dense `R` is whitened first: both
         // sides premultiplied by `L⁻¹`, which leaves rows of unit variance
@@ -644,13 +857,26 @@ impl Eskf {
         let mut trial = self.covariance;
         // The chi-squared statistic decomposes over the rows: with each row's
         // residual taken against the running estimate from the rows before it,
-        // `Σ residual²/α` is exactly `νᵀS⁻¹ν`. Accumulated from a zero start
-        // rather than from `self.dx`, matching what the dense form scored.
-        let mut running = StateVector::zeros();
+        // `Σ residual²/α` is exactly `νᵀS⁻¹ν`. Accumulated from a zero start,
+        // because the gate scores the innovation as given.
+        let mut scored = StateVector::zeros();
         let mut statistic = 0.0;
+        // The same recursion started from the error state the filter already
+        // holds, which makes it exactly `K (ν − H dx)`. With feedback `dx` is
+        // zero and the two sums are the same sum.
+        let mut correction = StateVector::zeros();
+        // Which states take less than their whole correction, as bits. The
+        // ordinary update has none and skips the restoring entirely; the
+        // loops below test the bits and work out a share only where one is
+        // short, so a held-only update costs what it did before shares
+        // existed.
+        let short = partial.short(held);
+        let restoring = short != 0;
+        // Each row's `αᵢ` and the part of its gain the states did not take,
+        // for the restoring described above.
+        let mut restore = [(0.0, StateVector::zeros()); M];
 
-        let mut gains = [StateVector::zeros(); M];
-        for (row, slot) in gains.iter_mut().enumerate() {
+        for (row, slot) in restore.iter_mut().enumerate() {
             let mut hr = StateVector::zeros();
             for j in 0..N_STATE {
                 hr[(j, 0)] = w.jacobian[(row, j)];
@@ -660,16 +886,28 @@ impl Eskf {
                 .ok_or(FilterError::SingularInnovation)?;
 
             let mut residual = w.innovation[(row, 0)];
+            let mut against_prior = residual;
             for j in 0..N_STATE {
-                residual -= hr[(j, 0)] * running[(j, 0)];
+                residual -= hr[(j, 0)] * scored[(j, 0)];
+                against_prior -= hr[(j, 0)] * (self.dx[(j, 0)] + correction[(j, 0)]);
             }
             statistic += residual * residual / alpha;
             for j in 0..N_STATE {
-                running[(j, 0)] += gain[(j, 0)] * residual;
+                scored[(j, 0)] += gain[(j, 0)] * residual;
+                correction[(j, 0)] += gain[(j, 0)] * against_prior;
             }
-            *slot = gain;
+            if restoring {
+                // A whole share keeps nothing back, and skipping it leaves a
+                // held-only update doing what it did before shares existed.
+                let mut kept = StateVector::zeros();
+                for j in 0..N_STATE {
+                    if (short >> j) & 1 == 1 {
+                        kept[(j, 0)] = (1.0 - partial.share(j, held)) * gain[(j, 0)];
+                    }
+                }
+                *slot = (alpha, kept);
+            }
         }
-        let correction = running;
 
         self.last_nis = statistic;
         if let Some(threshold) = gate {
@@ -678,89 +916,20 @@ impl Eskf {
             }
         }
 
-        // The correction the measurement implies, against the error state the
-        // filter already holds. With feedback that is zero, but the dense form
-        // subtracted it and so does this.
-        let mut prior_effect = StateVector::zeros();
-        for (row, gain) in gains.iter().enumerate() {
-            let mut projected = 0.0;
-            for j in 0..N_STATE {
-                projected += w.jacobian[(row, j)] * self.dx[(j, 0)];
+        if restoring {
+            for (alpha, kept) in restore.iter() {
+                trial
+                    .rank_one_update(*alpha, kept)
+                    .ok_or(FilterError::Diverged)?;
             }
             for j in 0..N_STATE {
-                prior_effect[(j, 0)] += gain[(j, 0)] * projected;
+                if (short >> j) & 1 == 1 {
+                    correction[(j, 0)] *= partial.share(j, held);
+                }
             }
         }
         self.covariance = trial;
         self.dx += &correction;
-        self.dx -= &prior_effect;
-        Ok(true)
-    }
-
-    /// The dense Joseph update, for a measurement that holds states.
-    ///
-    /// Zeroing a gain row keeps a state at its prior while `S` still accounts
-    /// for its uncertainty, and the Joseph form stays consistent for *any*
-    /// gain, optimal or not. Bierman's covariance update assumes the optimal
-    /// one, so it cannot express this — a held state would leave the factors
-    /// describing a filter that was not run. Refactoring afterwards costs an
-    /// `O(n³/3)` sweep, which a zero-velocity update can afford and a
-    /// per-sample propagation could not.
-    #[inline(never)]
-    fn update_holding_dense<const M: usize>(
-        &mut self,
-        innovation: &Matrix<M, 1>,
-        h: &Matrix<M, N_STATE>,
-        r: &Matrix<M, M>,
-        gate: Option<F>,
-        held: HeldStates,
-    ) -> Result<bool, FilterError> {
-        let mut covariance = self.covariance.to_covariance();
-        let hp = h.matmul(&covariance);
-        let s = hp.mul_transpose(h) + *r;
-        let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
-
-        let statistic = nis(&chol, innovation);
-        self.last_nis = statistic;
-        if let Some(threshold) = gate {
-            if statistic > threshold {
-                return Ok(false);
-            }
-        }
-
-        let mut k = chol.solve(&hp).transpose();
-        for i in 0..N_STATE {
-            if held.contains(i) {
-                k.data[i] = [0.0; M];
-            }
-        }
-
-        let residual = *innovation - h.matmul(&self.dx);
-        self.dx += k.matmul(&residual);
-
-        // Three `StateMatrix` temporaries were live here at once, which on the
-        // 21-state filter is 10 584 bytes of stack before counting `covariance`
-        // itself. `scratch` is dead after the Joseph product, so `K R Kᵀ` is
-        // computed into it afterwards rather than into a fourth buffer — the
-        // ordering is the only thing that changed.
-        let mut scratch = StateMatrix::zeros();
-        k.matmul_into(h, &mut scratch);
-        let mut i_kh = StateMatrix::identity();
-        i_kh -= &scratch;
-
-        i_kh.matmul_into(&covariance, &mut scratch);
-        scratch.mul_transpose_into(&i_kh, &mut covariance);
-
-        k.matmul(r).mul_transpose_into(&k, &mut scratch);
-        covariance += &scratch;
-        covariance.symmetrize();
-
-        // Factoring in place: `covariance` is dead afterwards either way, and
-        // the copying form would put another 3 528 bytes on a frame that is
-        // already the deepest in the filter.
-        if !self.set_covariance_in_place(&mut covariance) {
-            return Err(FilterError::Diverged);
-        }
         Ok(true)
     }
 
@@ -935,9 +1104,310 @@ mod held_states_tests {
             .update_gated_holding(&innovation, &h, &r, None, all)
             .unwrap();
         assert_eq!(filter.dx, before);
-        // The covariance still shrinks: the measurement was applied, its
-        // information simply went nowhere.
         assert!(filter.is_healthy());
+    }
+}
+
+/// The factored held-state update against the dense Joseph form it replaced.
+///
+/// The dense form is the definition — a gain with the held rows zeroed, put
+/// through `(I − KH) P (I − KH)ᵀ + K R Kᵀ` — and the reference below is that
+/// algorithm as it ran in the filter, kept here so the factored path has
+/// something independent to be wrong against.
+#[cfg(test)]
+mod factored_holding_tests {
+    use super::*;
+
+    /// How closely the factored path has to reproduce the dense one.
+    ///
+    /// Measured, not guessed: the worst disagreement across these cases is
+    /// 1.5e-15 with `f64` factors and 6.7e-7 with `f32`, and each tolerance sits
+    /// a decade or more above its floor. The mutations it has to catch are far
+    /// outside both — restoring between rows rather than after them is 5.8e-3
+    /// even at `f32`.
+    #[cfg(not(feature = "f32-covariance"))]
+    const TOLERANCE: F = 1.0e-12;
+    /// See the `f64` variant.
+    #[cfg(feature = "f32-covariance")]
+    const TOLERANCE: F = 1.0e-5;
+
+    /// A deterministic generator, so a failure is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn signed(&mut self) -> F {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (self.0 >> 11) as F / (1u64 << 53) as F * 2.0 - 1.0
+        }
+    }
+
+    /// A positive-definite covariance with correlations everywhere and a
+    /// spread of scales, so that no block is decoupled from the held ones by
+    /// accident.
+    fn covariance(rng: &mut Rng, spread: F) -> StateMatrix {
+        let mut a = StateMatrix::zeros();
+        for i in 0..N_STATE {
+            let scale = spread.powf(i as F / N_STATE as F);
+            for j in 0..N_STATE {
+                a[(i, j)] = rng.signed() * scale;
+            }
+        }
+        let mut p = a.mul_transpose(&a);
+        for i in 0..N_STATE {
+            p[(i, i)] += 1.0e-3;
+        }
+        p
+    }
+
+    /// A three-row measurement touching every state, with correlated noise so
+    /// the whitening is exercised as well.
+    fn measurement(rng: &mut Rng) -> (Matrix<3, 1>, Matrix<3, N_STATE>, Matrix<3, 3>) {
+        let mut h = Matrix::<3, N_STATE>::zeros();
+        for i in 0..3 {
+            for j in 0..N_STATE {
+                h[(i, j)] = rng.signed();
+            }
+        }
+        let innovation = Matrix::<3, 1>::from_column([rng.signed(), rng.signed(), rng.signed()]);
+        let mut l = Matrix::<3, 3>::zeros();
+        for i in 0..3 {
+            for j in 0..=i {
+                l[(i, j)] = 0.3 * rng.signed();
+            }
+            l[(i, i)] = 0.5 + 0.2 * rng.signed().abs();
+        }
+        (innovation, h, l.mul_transpose(&l))
+    }
+
+    /// The dense Joseph update with each row of the gain scaled by its
+    /// state's share: zero for a held state, one for an ordinary one.
+    fn dense<const M: usize>(
+        p: &StateMatrix,
+        dx: &StateVector,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        shares: &[F; N_STATE],
+    ) -> (StateMatrix, StateVector) {
+        let hp = h.matmul(p);
+        let s = hp.mul_transpose(h) + *r;
+        let chol = Cholesky::new(&s).unwrap();
+        let mut k = chol.solve(&hp).transpose();
+        for (row, share) in k.data.iter_mut().zip(shares.iter()) {
+            for entry in row.iter_mut() {
+                *entry *= share;
+            }
+        }
+        let residual = *innovation - h.matmul(dx);
+        let x = *dx + k.matmul(&residual);
+        let i_kh = StateMatrix::identity() - k.matmul(h);
+        let posterior = i_kh.matmul(p).mul_transpose(&i_kh) + k.matmul(r).mul_transpose(&k);
+        (posterior, x)
+    }
+
+    /// The largest disagreement between two covariances as a difference of
+    /// correlation coefficients. See `ud::tests::worst_relative` for why each
+    /// entry is not scaled by its own magnitude.
+    fn worst_relative(a: &StateMatrix, b: &StateMatrix) -> F {
+        let mut worst: F = 0.0;
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                let scale = (a[(i, i)] * a[(j, j)]).sqrt().max(1.0e-12);
+                worst = worst.max((a[(i, j)] - b[(i, j)]).abs() / scale);
+            }
+        }
+        worst
+    }
+
+    /// Run one update both ways from the same prior and compare.
+    fn agrees_with_dense(seed: u64, held: HeldStates) {
+        agrees_with_dense_partial(seed, held, &PartialUpdate::FULL);
+    }
+
+    /// The same, with partial shares on top of the held states.
+    fn agrees_with_dense_partial(seed: u64, held: HeldStates, partial: &PartialUpdate) {
+        let mut rng = Rng(seed);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        // A standing error state, which the engine never leaves behind but
+        // `Eskf` does not forbid. It is where a correction that is only right
+        // from a zero start would show.
+        let mut dx = StateVector::zeros();
+        for i in 0..N_STATE {
+            dx[(i, 0)] = 0.1 * rng.signed();
+        }
+
+        let mut filter = Eskf::new(&[1.0; N_STATE]);
+        assert!(filter.set_covariance(&p));
+        filter.dx = dx;
+        let p = filter.covariance();
+        // The shares worked out here from the percentages, not through the
+        // filter's own `share`, so a mistake there cannot cancel itself.
+        let shares: [F; N_STATE] = core::array::from_fn(|i| {
+            if held.contains(i) {
+                0.0
+            } else {
+                F::from(partial.percent(i)) / 100.0
+            }
+        });
+        let (want_p, want_x) = dense(&p, &dx, &innovation, &h, &r, &shares);
+
+        assert!(filter
+            .update_gated_partial(&innovation, &h, &r, None, held, partial)
+            .unwrap());
+
+        let worst = worst_relative(&want_p, &filter.covariance());
+        assert!(
+            worst < TOLERANCE,
+            "seed {seed}: covariance differs from Joseph by {worst:.2e}"
+        );
+        for i in 0..N_STATE {
+            let (got, want) = (filter.dx[(i, 0)], want_x[(i, 0)]);
+            assert!(
+                (got - want).abs() < TOLERANCE * want.abs().max(1.0),
+                "seed {seed}: dx[{i}] = {got} against {want}"
+            );
+            if held.contains(i) || partial.percent(i) == 0 {
+                assert_eq!(got, dx[(i, 0)], "seed {seed}: held state {i} moved");
+            }
+        }
+    }
+
+    /// Shares that exercise every case: one block taking none of its
+    /// correction, two taking part of it, and the rest all of it.
+    fn mixed_shares() -> PartialUpdate {
+        PartialUpdate::FULL
+            .with(BG_ID..BG_ID + 3, 30)
+            .with(BA_ID..BA_ID + 3, 75)
+            .with(PHI_ID + 2..PHI_ID + 3, 0)
+    }
+
+    #[test]
+    fn a_partial_update_matches_the_dense_joseph_form() {
+        // The claim behind `PartialUpdate`: Bierman, then one rank-one update
+        // per row with `(I − Γ) kᵢ`, is the Joseph form for the gain `Γ K`, at
+        // any shares and from a standing error state.
+        for seed in [11u64, 29, 1987] {
+            agrees_with_dense_partial(seed, HeldStates::NONE, &mixed_shares());
+            agrees_with_dense_partial(seed, HeldStates::ATTITUDE, &mixed_shares());
+            agrees_with_dense_partial(
+                seed,
+                HeldStates::NONE,
+                &PartialUpdate::FULL.with(0..N_STATE, 1),
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_partial_update_is_the_ordinary_update() {
+        // Not merely close: the same arithmetic. Every share at one skips the
+        // restoring and multiplies the correction by exactly one.
+        let mut rng = Rng(404);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut ordinary = Eskf::new(&[1.0; N_STATE]);
+        assert!(ordinary.set_covariance(&p));
+        let mut partial = ordinary;
+        assert!(ordinary.update_gated(&innovation, &h, &r, 1.0e9).unwrap());
+        assert!(partial
+            .update_gated_partial(
+                &innovation,
+                &h,
+                &r,
+                Some(1.0e9),
+                HeldStates::NONE,
+                &PartialUpdate::FULL
+            )
+            .unwrap());
+        assert_eq!(ordinary.covariance(), partial.covariance());
+        assert_eq!(ordinary.dx, partial.dx);
+    }
+
+    #[test]
+    fn a_zero_share_is_the_same_as_holding() {
+        let mut rng = Rng(808);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut held = Eskf::new(&[1.0; N_STATE]);
+        assert!(held.set_covariance(&p));
+        let mut zero = held;
+        assert!(held
+            .update_gated_holding(&innovation, &h, &r, None, HeldStates::GYRO_BIAS)
+            .unwrap());
+        assert!(zero
+            .update_gated_partial(
+                &innovation,
+                &h,
+                &r,
+                None,
+                HeldStates::NONE,
+                &PartialUpdate::FULL.with(BG_ID..BG_ID + 3, 0)
+            )
+            .unwrap());
+        assert_eq!(held.covariance(), zero.covariance());
+        assert_eq!(held.dx, zero.dx);
+    }
+
+    #[test]
+    fn a_partial_update_never_reports_less_uncertainty_than_the_optimal_one() {
+        // `(I − Γ) K S Kᵀ (I − Γ)` is positive semi-definite, so every variance
+        // a partial update leaves is at least the optimal update's.
+        let mut rng = Rng(1234);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut optimal = Eskf::new(&[1.0; N_STATE]);
+        assert!(optimal.set_covariance(&p));
+        let mut partial = optimal;
+        assert!(optimal.update(&innovation, &h, &r).is_ok());
+        assert!(partial
+            .update_gated_partial(&innovation, &h, &r, None, HeldStates::NONE, &mixed_shares())
+            .unwrap());
+        let (o, q) = (optimal.std_deviations(), partial.std_deviations());
+        for i in 0..N_STATE {
+            assert!(
+                q[i] >= o[i] * (1.0 - TOLERANCE),
+                "state {i}: {} below {}",
+                q[i],
+                o[i]
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_update_matches_the_dense_joseph_form() {
+        for seed in [3u64, 17, 2025] {
+            agrees_with_dense(seed, HeldStates::ATTITUDE);
+            agrees_with_dense(seed, HeldStates::ATTITUDE.union(HeldStates::ACCEL_BIAS));
+            agrees_with_dense(seed, HeldStates::GYRO_BIAS);
+        }
+    }
+
+    #[test]
+    fn an_unheld_update_from_a_standing_error_state_matches_the_dense_form() {
+        for seed in [5u64, 23, 4096] {
+            agrees_with_dense(seed, HeldStates::NONE);
+        }
+    }
+
+    #[test]
+    fn holding_every_state_leaves_the_covariance_untouched() {
+        // With every gain row zeroed, Joseph is `I P I + 0`. The factored path
+        // gets there by Bierman removing `K S Kᵀ` and the held-state
+        // correction putting all of it back, so this is the case where any
+        // mismatch between the two halves would show undiluted.
+        let mut rng = Rng(77);
+        let p = covariance(&mut rng, 1.0e3);
+        let (innovation, h, r) = measurement(&mut rng);
+        let mut filter = Eskf::new(&[1.0; N_STATE]);
+        assert!(filter.set_covariance(&p));
+        let before = filter.covariance();
+        assert!(filter
+            .update_gated_holding(&innovation, &h, &r, None, HeldStates(u32::MAX))
+            .unwrap());
+        let worst = worst_relative(&before, &filter.covariance());
+        assert!(worst < TOLERANCE, "covariance moved by {worst:.2e}");
     }
 }
 
@@ -994,7 +1464,121 @@ mod tests {
         }
     }
 
+    // --- the structure the partitioned time update relies on ---------------
+
+    #[test]
+    fn the_parameter_states_are_self_contained() {
+        // `Ud::predict_partitioned` assumes this and does not check it: every
+        // state from `N_NAV` up depends on nothing but itself, and is driven
+        // by its own noise channel and no other. A future state coupled to
+        // the rest — an odometer scale that reads the velocity, say — would
+        // have its coupling silently dropped there, so it has to fail here.
+        let state = test_state();
+        let f = transition_matrix(&state, &test_imu(), &ImuNoise::default());
+        for i in N_NAV..N_STATE {
+            for j in 0..N_STATE {
+                if i != j {
+                    assert_eq!(f[(i, j)], 0.0, "parameter {i} is coupled to state {j}");
+                }
+            }
+        }
+        let g = noise_mapping(&state);
+        for i in 0..N_STATE {
+            for c in 0..N_NOISE {
+                let allowed = if i < N_NAV {
+                    c < N_NAV_NOISE
+                } else {
+                    c == N_NAV_NOISE + (i - N_NAV)
+                };
+                if !allowed {
+                    assert_eq!(g[(i, c)], 0.0, "channel {c} drives state {i}");
+                }
+            }
+        }
+        // And at unit gain, which the partitioned update assumes rather than
+        // reads.
+        for k in 0..N_STATE - N_NAV {
+            assert_eq!(g[(N_NAV + k, N_NAV_NOISE + k)], 1.0, "parameter {k}'s gain");
+        }
+    }
+
+    #[test]
+    fn the_navigation_block_is_the_mappings_corner() {
+        // `nav_noise_mapping` is built separately so the filter need not form
+        // the whole `G` per sample; it has to be the same numbers.
+        let state = test_state();
+        let full = noise_mapping(&state);
+        let nav = nav_noise_mapping(&state);
+        for i in 0..N_NAV {
+            for c in 0..N_NAV_NOISE {
+                assert_eq!(nav[(i, c)], full[(i, c)], "entry ({i}, {c})");
+            }
+        }
+    }
+
+    #[test]
+    fn the_partitioned_time_update_matches_the_full_one_on_the_filters_model() {
+        // The same comparison as in `ud`, with the transition, mapping and
+        // densities the filter builds rather than random ones: a step from a
+        // correlated covariance, and five hundred steps run side by side.
+        let state = test_state();
+        let imu = test_imu();
+        let noise = ImuNoise::default();
+        let mut phi = transition_matrix(&state, &imu, &noise);
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                phi[(i, j)] *= imu.dt;
+            }
+            phi[(i, i)] += 1.0;
+        }
+        let g = noise_mapping(&state);
+        let mut density = Eskf::noise_density(&noise);
+        for d in density.iter_mut() {
+            *d *= imu.dt;
+        }
+
+        // Correlations first: a diagonal prior would leave most of `U` zero
+        // and test little.
+        let mut full = Eskf::new(&std_vector()).covariance;
+        for _ in 0..50 {
+            full.predict(&phi, &g, &density).unwrap();
+        }
+        let mut partitioned = full;
+        let relative = |a: &Ud, b: &Ud| {
+            let (a, b) = (a.to_covariance(), b.to_covariance());
+            let mut worst: F = 0.0;
+            for i in 0..N_STATE {
+                for j in 0..N_STATE {
+                    let scale = (a[(i, i)] * a[(j, j)]).sqrt().max(1e-30);
+                    worst = worst.max((a[(i, j)] - b[(i, j)]).abs() / scale);
+                }
+            }
+            worst
+        };
+        let tolerance = if cfg!(feature = "f32-covariance") {
+            1e-4
+        } else {
+            1e-11
+        };
+        full.predict(&phi, &g, &density).unwrap();
+        let nav = nav_noise_mapping(&state);
+        partitioned
+            .predict_partitioned(&phi, &nav, &density)
+            .unwrap();
+        let one = relative(&full, &partitioned);
+        assert!(one < tolerance, "one step apart by {one:.2e}");
+        for _ in 0..500 {
+            full.predict(&phi, &g, &density).unwrap();
+            partitioned
+                .predict_partitioned(&phi, &nav, &density)
+                .unwrap();
+        }
+        let many = relative(&full, &partitioned);
+        assert!(many < 10.0 * tolerance, "500 steps apart by {many:.2e}");
+    }
+
     use super::*;
+    use crate::state::{N_NAV, N_NAV_NOISE};
     use approx::assert_relative_eq;
     use drifters_core::frames::{Lla, Ned};
     use drifters_core::time::GpsTime;

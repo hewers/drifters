@@ -12,6 +12,7 @@ is never a broken checkout.
 |---|---|---|
 | [KF-GINS demo dataset](#kf-gins-demo-dataset) | 67 MB | the 3.3 cm accuracy regression, `drifters replay`, `drifters eqf` |
 | [GSDC 2023 phone trace](#gsdc-2023-phone-trace) | ~3.7 GB archive | the ground-truth comparison, `drifters gsdc` |
+| [comma2k19](#comma2k19) | 1 MB, or 228 MB for 64 segments | the comma2k19 regression, `drifters comma` |
 | [Source papers](#source-papers) | 2 MB | reading along with `drifters-eqf`; the code does not need them |
 
 ## KF-GINS demo dataset
@@ -82,6 +83,49 @@ cargo run --release -p drifters-cli -- gsdc --dir datasets/gsdc2023 --raw-ranges
 `datasets/` is git-ignored, and so is the archive itself — see below. Full
 analysis of what this trace shows in [gsdc.md](gsdc.md).
 
+## comma2k19
+
+comma.ai's highway dataset: a phone-class IMU, a u-blox receiver, CAN wheel
+speed and comma's post-processed pose for every frame, in one-minute segments.
+MIT-licensed. Results in [comma2k19.md](comma2k19.md).
+
+**One segment**, the example comma keeps in its repository, is all the
+regression test needs — 1 MB of the arrays the replay reads:
+
+```bash
+base='https://raw.githubusercontent.com/commaai/comma2k19/master/Example_1/b0c9d2329ad1606b%7C2018-08-02--08-34-47/40'; dest='datasets/comma2k19/b0c9d2329ad1606b|2018-08-02--08-34-47/40'; for f in global_pose/frame_{times,gps_times,positions,velocities,orientations} processed_log/IMU/{accelerometer,gyro,gyro_uncalibrated}/{t,value} processed_log/GNSS/live_gnss_ublox/{t,value} processed_log/CAN/speed/{t,value}; do curl -fsSL --create-dirs -o "$dest/$f" "$base/$f"; done
+```
+
+```bash
+cargo test -p drifters-cli --test comma2k19_regression -- --nocapture
+```
+
+**Sixty-four segments**, the demo split comma publishes on Hugging Face, are
+what the results use. They come as Parquet, and
+[`prototypes/comma2k19_demo.py`](../prototypes/comma2k19_demo.py) writes them
+out in the dataset's own layout so one reader serves both:
+
+```bash
+mkdir -p datasets/comma2k19-demo && for i in 0 1 2; do curl -fL -o datasets/comma2k19-demo/demo-0000$i-of-00003.parquet "https://huggingface.co/datasets/commaai/comma2k19/resolve/main/data/demo-0000$i-of-00003.parquet"; done
+```
+
+```bash
+pip install pyarrow numpy && python3 prototypes/comma2k19_demo.py datasets/comma2k19-demo datasets/comma2k19
+```
+
+The results are fitted on the July drives and reported on the August ones.
+Links make the split without copying anything:
+
+```bash
+mkdir -p datasets/comma2k19-fit datasets/comma2k19-holdout && for r in datasets/comma2k19/*; do b=$(basename "$r"); case "$b" in *2018-07-*) s=fit;; *) s=holdout;; esac; ln -sfn "../comma2k19/$b" "datasets/comma2k19-$s/$b"; done
+```
+
+The full dataset is ~100 GB in ten zips, on
+[Academic Torrents](http://academictorrents.com/details/65a2fbc964078aff62076ff4e103f18b951c5ddb)
+and on Hugging Face under `raw_data/`, already in the layout the reader takes.
+Chunks 3–10 are a Civic rather than the RAV4, so the `--mount` measured here
+would need measuring again.
+
 ## Source papers
 
 Both are indexed in [papers/README.md](papers/README.md) with citations, DOIs
@@ -106,7 +150,8 @@ Three separate reasons, with different consequences.
 
 **Licence.** The KF-GINS dataset belongs to its authors and the GSDC data is
 distributed under Kaggle competition rules; neither grants this repository the
-right to redistribute. The two papers are the same story — the arXiv licence
+right to redistribute. comma2k19 is MIT-licensed and could be, but the size and
+reproducibility reasons below apply to it as much as to anything. The two papers are the same story — the arXiv licence
 grants *arXiv* distribution rights and does not pass them on, and the ICRA
 preprint is marked © IEEE. A project that documents an
 [AGPL boundary](adr/0003-interop-boundary.md) and runs `cargo deny` in CI to

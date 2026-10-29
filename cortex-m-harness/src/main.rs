@@ -149,7 +149,18 @@ fn main() -> ! {
     let bottom = cortex_m_rt::heap_start() as usize;
 
     hprintln!("drifters bare-metal harness");
-    hprintln!("target: thumbv7em-none-eabihf (Cortex-M4F, f64 in software)");
+    // The core is read from CPUID rather than assumed, so a Cortex-M7 build
+    // run on the M4 image, or the reverse, says so. Whether `f64` is in
+    // hardware is the build's choice, not the core's; see `build.rs`.
+    // SAFETY: CPUID is a read-only System Control Block register.
+    let part = unsafe { (*cortex_m::peripheral::CPUID::PTR).base.read() } >> 4 & 0xFFF;
+    let core = match part {
+        0xC24 => "Cortex-M4",
+        0xC27 => "Cortex-M7",
+        _ => "unknown core",
+    };
+    let f64_in = if cfg!(harness_hard_f64) { "hardware" } else { "software" };
+    hprintln!("target: thumbv7em-none-eabihf ({}, f64 in {})", core, f64_in);
     hprintln!(
         "config: {}-state, scale factors {}",
         N_STATE,
@@ -201,7 +212,27 @@ fn main() -> ! {
     let (_, gnss_step) = measure(bottom, || engine.add_imu(sample(0.015)));
     hprintln!("add_imu with GNSS fix          {}", gnss_step);
 
-    let peak = imu_step.max(zupt).max(height).max(gnss_step);
+    // A late fix, with velocity: its epoch is already behind the filter, so
+    // it is compared with the state worked back to it and both Jacobians are
+    // carried forward through the transition matrix.
+    //
+    // On a copy of the engine. Run on the engine itself, its velocity update
+    // left a denser covariance behind, and the instruction count below — a
+    // soft-float sum over that covariance, cheaper the more of it is exactly
+    // zero — read 25 % more for no change to the code.
+    let mut late_engine = engine;
+    let mut late = drifters_core::types::GnssFix::position_only(
+        GpsTime::from_tow(0.0125),
+        late_engine.nav_state().position(),
+        Vec3::splat(0.5),
+    );
+    late.velocity = Some(Ned::ZERO);
+    late.velocity_std = Vec3::splat(0.1);
+    late_engine.add_gnss(late);
+    let (_, late_step) = measure(bottom, || late_engine.add_imu(sample(0.020)));
+    hprintln!("add_imu with a late GNSS fix   {}", late_step);
+
+    let peak = imu_step.max(zupt).max(height).max(gnss_step).max(late_step);
     hprintln!("");
     // Instructions retired per `add_imu`, under `qemu -icount shift=0`.
     //
@@ -228,18 +259,56 @@ fn main() -> ! {
             syst.clear_current();
             syst.enable_counter();
 
-            // Warm, then measure a fixed batch.
+            // Warm, then measure a fixed number of calls, each timed on its
+            // own and summed in 64 bits.
+            //
+            // One call at a time because SysTick is a 24-bit counter: it wraps
+            // every 16 777 216 ticks, and nothing in reading it says whether it
+            // did. This used to time 500 calls as one batch, which wraps once a
+            // call costs more than 33 554 ticks — and with `f64` in software a
+            // 21-state `add_imu` costs about 87 000. Those builds reported the
+            // remainder: 20 321 for the 21-state filter, 5 445 for 15 states,
+            // both wrong and both quoted in the docs. A single call is far
+            // below the wrap in every configuration, so this cannot alias.
             for k in 0..50 {
                 let _ = engine.add_imu(sample(1.0 + 0.005 * k as f64));
             }
-            let start = cortex_m::peripheral::SYST::get_current();
+            let mut total: u64 = 0;
+            let mut largest: u32 = 0;
             for k in 0..500 {
+                let start = cortex_m::peripheral::SYST::get_current();
                 let _ = engine.add_imu(sample(2.0 + 0.005 * k as f64));
+                let end = cortex_m::peripheral::SYST::get_current();
+                // SysTick counts down.
+                let ticks = start.wrapping_sub(end) & 0x00FF_FFFF;
+                largest = largest.max(ticks);
+                total += u64::from(ticks);
             }
-            let end = cortex_m::peripheral::SYST::get_current();
-            // SysTick counts down.
-            let ticks = start.wrapping_sub(end) & 0x00FF_FFFF;
-            hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", ticks / 500);
+            // A call within an eighth of the counter's range is one the next
+            // change could push past it, at which point per-call timing
+            // aliases too. Say so rather than print a number.
+            if largest > 0x00FF_FFFF / 8 {
+                hprintln!(
+                    "INSTRUCTIONS add_imu: a call took {} ticks, too close to the 24-bit wrap to trust",
+                    largest
+                );
+            } else {
+                hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", total / 500);
+            }
+
+            // The held-state update, timed one call at a time: a single call
+            // has been large enough that a batch would wrap the 24-bit
+            // counter. Each runs after a propagation, as it would on a
+            // vehicle, and only the update itself is counted.
+            let mut total: u64 = 0;
+            for k in 0..20 {
+                let _ = engine.add_imu(sample(5.0 + 0.005 * k as f64));
+                let start = cortex_m::peripheral::SYST::get_current();
+                let _ = engine.apply_zupt(Vec3::splat(0.02));
+                let end = cortex_m::peripheral::SYST::get_current();
+                total += u64::from(start.wrapping_sub(end) & 0x00FF_FFFF);
+            }
+            hprintln!("INSTRUCTIONS apply_zupt = {} (only under -icount shift=0)", total / 20);
         }
     }
 

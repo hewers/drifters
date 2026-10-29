@@ -321,7 +321,10 @@ cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if the peak exceeds 20 KiB.
+CI runs it on every push and fails if the peak exceeds 10 KiB at `f64` and on
+the Cortex-M7, 9.5 KiB with `f32-covariance`, or 7 KiB with 15 states —
+ceilings the full Gram-Schmidt time update, retired since, does not fit under,
+and nor does returning the transition matrix by value.
 
 ### How the measurement works
 
@@ -355,7 +358,8 @@ repository claims otherwise.
 **Instructions retired can be measured, though, and they answer the useful
 half.** `qemu-system-arm -icount shift=0` advances the virtual clock one tick
 per instruction, so SysTick counts instructions; the harness reports
-`INSTRUCTIONS add_imu` under that flag and garbage without it. It cannot see
+`INSTRUCTIONS add_imu`, and `INSTRUCTIONS apply_zupt` for the held-state update,
+under that flag and garbage without it. It cannot see
 pipeline stalls, flash wait states or FPU latency, so it is not a cycle count.
 What it measures exactly is how much *work* a change removes — and on a part
 whose FPU is single-precision, that is the whole soft-float question, since an
@@ -365,16 +369,18 @@ whose FPU is single-precision, that is the whole soft-float question, since an
 cd cortex-m-harness && cargo run --release -- -icount shift=0
 ```
 
-Measured per `add_imu` on `mps2-an386`:
+Measured per `add_imu` on `mps2-an386` when this section was written, and
+corrected since: the `f64` figures were what was left after the counter wrapped,
+and [the section on that](#and-it-has-to-count-what-it-says-it-counts) is below.
 
-| configuration | instructions |
-|---|---|
-| 21-state, `f64` | **21 398** |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| configuration | as first published | corrected |
+|---|---|---|
+| 21-state, `f64` | 21 398 | **88 507** |
+| 21-state, `f32-covariance` | 11 868 | **11 868** |
+| 15-state (`reduced-state`) | 5 911 | **39 465** |
 
-The single-precision covariance removes 45 % of the work on this part, having
-cost nothing measurable in accuracy.
+The single-precision covariance removes 87 % of the work on this part, not the
+45 % first published, having cost nothing measurable in accuracy.
 
 **Stub one stage out at a time, and leave the rest running.** Stubbing two at
 once gives a number that is not the cost of either: with the covariance
@@ -404,21 +410,23 @@ Two things beat it.
 the mechanization calls them about twelve times per sample at two distinct
 latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
 answers all of them, which took `add_imu` from 13 238 to **11 868** with
-`f32-covariance` — 10.4 % — and 22 415 to 21 398 without. Results are
-bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it to
-that.
+`f32-covariance` — 10.4 % — and 89 524 to 88 507 without, 1.1 %, where the
+saved `sin`/`cos` are a smaller share of a larger total. (Published as 22 415 to
+21 398, both wrapped.) Results are bit-identical, and
+`local_agrees_with_the_free_functions_exactly` holds it to that.
 
 **`core::simd`**, from a two-line change. Expressing the lane-split dot products
 as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 22 336 | 21 422 | −4 % |
+| `f64` | 89 445 | 88 531 | −1.0 % |
 | `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
 
 (Measured before the earth-model change above, so both baselines are the older
 ones. The two are independent — one is the covariance recursion, the other the
-mechanization.)
+mechanization. The `f64` row was published as 22 336 against 21 422, a 4 %
+saving; both had wrapped, and two counter periods restore them.)
 
 On a part with no SIMD unit at all, because eight lanes lower to eight
 independent FPU operations without the iterator machinery the hand-written form
@@ -445,6 +453,130 @@ survey:
   half. Paying that in either a second copy of the Jacobian — the most subtle
   code in the filter — or a lower-precision Φ recorded for the smoother is not
   worth 4 %.
+
+### What SIMD there is on Cortex-M4 and M7
+
+None that a floating-point filter can use. Both cores' FPUs are scalar:
+FPv4-SP on the M4F, FPv5 on the M7, single precision or optionally double.
+Vector floating point arrives with Helium in Armv8.1-M, on the M55 and M85. The
+SIMD these cores do have is the DSP extension's, which packs two 16-bit or four
+8-bit integers into a core register (`SADD16`, `SMLAD`, `UQADD8`). That is for
+fixed-point and integer pipelines, and this filter has neither. Disassembled,
+the harness contains one such instruction, a `pkhbt` outside the filter. Rust's
+intrinsics for them are nightly-only in any case.
+
+So `core::simd` above was never vectorising: eight lanes lower to eight scalar
+FPU instructions. What it changed was what the optimiser could keep in
+registers, and the same is available on stable by writing the eight partial
+sums as named locals rather than as an array, with the same reduction order and
+so bit-identical results. Per `add_imu`, built with rustc 1.99, in SysTick
+ticks under `-icount shift=0` — the harness's `INSTRUCTIONS` line, which on
+these boards is one tick per 40 instructions:
+
+| | array, stable | named, stable | `core::simd`, nightly |
+|---|---|---|---|
+| Cortex-M4, `f64` | 88 492 | **87 425** | 89 854 |
+| Cortex-M4, `f32-covariance` | 11 838 | **9 933** | 9 626 |
+| Cortex-M7 with DP FPU, `f64` | 7 361 | **5 087** | 4 851 |
+
+So 1.2 % at `f64` in software, where the arithmetic itself dominates, 16.1 %
+with `f32-covariance` and 30.9 % on the M7. The `f64` row was first published as
+21 388, 20 321 and 22 750, with the saving put at 5 %; all three had wrapped. The
+nightly column is against nightly's own baseline (rustc 1.101 nightly), 90 195
+at `f64`, 10 059 with `f32-covariance` and 5 087 on the M7: `core::simd` buys
+0.4 %, 4.3 % and 4.6 % over it. Stack costs at most 80 bytes.
+
+### The lever that is there: the M7's double-precision FPU
+
+The M4F's FPU is single precision. The M7's is optionally double precision,
+and many shipping parts have it — STM32F76x/F77x and the STM32H7, i.MX
+RT1050/1060/1170, SAM E70/S70/V71. Built with `-C target-cpu=cortex-m7`, every
+`f64` operation is a hardware instruction and the binary calls `__aeabi_d*`
+nowhere. Measured on `mps2-an500`:
+
+| per call, ticks | Cortex-M4 | Cortex-M7, `target-cpu=cortex-m7` |
+|---|---|---|
+| `add_imu`, 21-state, `f64` | 87 425 | **5 087** |
+| `add_imu`, 21-state, `f32-covariance` | 9 933 | 5 248 |
+| `add_imu`, 15-state | 38 995 | **2 365** |
+| held `apply_zupt`, 21-state, `f64` | 13 690 | **1 163** |
+
+Seventeen times less work per sample and nearly twelve per held update, with no
+change to the code. (First published as four times per sample, against M4
+figures of 20 321 and 5 445 that had wrapped.) The results do not move at all:
+hardware and soft-float `f64` are both correctly rounded, Rust does not contract
+a multiply and an add into a fused one, and a fingerprint over the final state
+and every covariance entry is identical between the two builds, at both
+precisions.
+
+Two things follow. On such a part `f32-covariance` buys memory and not work —
+5 248 against 5 087, the difference being conversions — so the reason to
+choose it there is the 924 bytes rather than the arithmetic. And the flag
+matters more than the precision did: an M7 built for the generic `thumbv7em`
+target runs `f64` in soft-float exactly as an M4 does, and so does an M7 whose
+FPU is single precision — 87 745 with `-C target-feature=-fp64`, against the
+M4's 87 425. Two things measured and not worth taking: `-C target-cpu=cortex-m4`
+on the M4 is a wash, 1.1 % better at `f64` and 5.4 % worse with
+`f32-covariance`; and `-C target-feature=+fp64` without the CPU works, but
+`fp64` is a feature rustc warns is unstable.
+
+As everywhere in this layer, this measures work and not cycles. A
+double-precision operation can take more cycles than a single-precision one on
+the M7, which this measurement cannot see; the cycle counts stay with M9.
+
+### The time update, partitioned
+
+Every figure above is Thornton's full sweep: Gram-Schmidt over all twenty-one
+rows of `[Φ U, G]`, forty columns wide, once per IMU sample. Most of that is
+wasted on states whose dynamics are trivial. Every IMU error is a Gauss-Markov
+process that depends on nothing but itself, so `Φ` is block triangular, and the
+update splits in two (NASA/TP-2018-219822, §8.3.2): Gram-Schmidt over the nine
+navigation rows of `[Φxx Uxx, Gxx]`, fifteen columns wide, then for each IMU
+error a rescaling for its decay and one Agee–Turner update for its noise.
+[`Ud::predict_partitioned`](../crates/drifters-filter/src/ud.rs) matches the
+full sweep to 5e-16 per step at `f64` and to 8e-14 over a thousand steps, eight
+mutations of it each fail a test, and KF-GINS reports the same 0.0330 m and the
+same 1.459 NIS to every printed digit.
+
+Per `add_imu`, ticks, with the per-call timing below, built with rustc 1.99:
+
+| | full sweep | partitioned | |
+|---|---|---|---|
+| Cortex-M4, `f64` | 87 425 | **29 716** | −66 % |
+| Cortex-M4, `f32-covariance` | 9 933 | **6 616** | −33 % |
+| Cortex-M4, 15-state | 38 995 | **18 924** | −51 % |
+| Cortex-M7, `f64` | 5 087 | **1 809** | −64 % |
+| Cortex-M7, `f32-covariance` | 5 248 | **1 755** | −67 % |
+| Cortex-M7, 15-state | 2 365 | **1 198** | −49 % |
+
+And the peak stack, which is `add_imu` in every 21-state build:
+
+| | full sweep | partitioned |
+|---|---|---|
+| Cortex-M4, `f64` | 16 156 | **9 820** |
+| Cortex-M4, `f32-covariance` | 12 420 | **9 676** |
+| Cortex-M4, 15-state | 9 684 | **6 268** |
+| Cortex-M7, `f64` | 15 576 | **9 228** |
+
+The working array goes from 21×40 to 9×16, and because the update reads only
+the navigation block of the noise mapping, the filter stops building the full
+21×18 one — 3 KiB of `f64` on the frame at either precision, which is why
+`f32-covariance` gains here too and the two precisions now peak within 150
+bytes of each other.
+
+The new update does more divisions: two per row of each Agee–Turner sweep,
+nearly 400 in all against the full sweep's 21. That was the first suspect when
+the soft-float build appeared to get *slower*, and it was wrong — a software
+`f64` divide measures about one and a half multiplies in the same ticks. What
+had happened was the counter wrapping, below.
+
+Accepting late GNSS fixes then added a path that carries a transition matrix on
+top of an update, and making room for it took the plain `add_imu` frame down
+again, to 8 080 bytes at `f64`: the matrix is now written into its caller's
+buffer instead of returned by value, which had put it in two frames once it had
+two callers. The peak is now a late fix's — 8 708 bytes, 8 256 with
+`f32-covariance`, 6 332 at 15 states and 8 388 on the M7 — and `add_imu` does
+up to 4 % less work than in the table above.
 
 ### Why this layer exists
 
@@ -476,6 +608,50 @@ _start`, and locked the core up on boot with `can't escalate 3 to HardFault`.
 The link argument now comes from `build.rs`, which `RUSTFLAGS` does not
 override. Both are one-line causes that a green checkmark would never have
 distinguished from a healthy run.
+
+### And it has to count what it says it counts
+
+Every soft-float `add_imu` figure this layer published was a remainder. The
+harness timed 500 calls as one batch against SysTick, a 24-bit down-counter that
+wraps every 16 777 216 ticks — 33 554 per call over 500 — and reading it says
+nothing about whether it did. With `f64` in software a 21-state `add_imu` costs
+about 87 000 ticks, so the batch wrapped twice and the harness printed what was
+left: 20 321. The 15-state filter wrapped once, 38 995 reported as 5 445. Every
+`f32-covariance` and Cortex-M7 figure, and every held-update figure, which was
+already timed one call at a time, sat below the wrap and is right.
+
+It surfaced the way the last one did, as a number that disagreed with another.
+A change that measured two to three times less work on every build with the
+covariance in hardware floating point measured 47 % *more* in soft-float, and
+250 % more at fifteen states. Timing the same calls a hundred at a time, which
+cannot wrap at these costs, gave 85 000 for the old code and 27 600 for the new,
+and 87 425 less two counter periods is within five ticks of the 20 321 the
+harness had printed.
+
+The harness now times each call on its own and sums in 64 bits, and if a single
+call comes within an eighth of the wrap it says so instead of printing a figure.
+What the correction changes:
+
+| claim | as published | corrected |
+|---|---|---|
+| `add_imu`, 21-state, `f64` | 20 321 | **87 425** |
+| `add_imu`, 15-state | 5 445 | **38 995** |
+| work removed by `f32-covariance`, when it landed | 41 %: 22 415 → 13 238 | **85 %**: 89 524 → 13 238 |
+| Cortex-M7 against M4, per `add_imu` | a quarter | **a seventeenth** |
+| named partial sums, at `f64` | −5 % | **−1.2 %** |
+| `-C target-cpu=cortex-m4`, at `f64` | −5 % | **−1.1 %** |
+
+Figures from commits that are not re-run here are corrected by adding back two
+counter periods, 2 × 33 554. The fixed harness confirms that on `main`: the
+published 21 398 corrects to 88 507, and it measures 88 492 there now. The
+`f32-covariance`, Cortex-M7 and held-update figures stand as published.
+
+The scenario has to hold still as well. The count is a soft-float sum over the
+covariance, and a soft-float operation on an exact zero is cheap, so it depends
+on how dense the covariance is when the timing starts. A late-fix stack
+measurement added ahead of the timing loop, with a velocity update in it, read
+25 % more work for `add_imu` with no change to the code. It now runs on a copy
+of the engine, and the timing loop starts from the state it always did.
 
 ## Layer 10 — the data path links no panic machinery
 
@@ -531,17 +707,29 @@ divide-by-zero panic survived for a divisor that is the literal `8`. Written
 with indices under `base + LANES <= W` instead, which the optimiser proves
 without help and which measures the same 3.87 µs propagation.
 
+**`panic_bounds_check`, from `measurement::nonholonomic`.** The same lesson as
+the Gauss-Markov blocks, and it sat outside the audit until the audit was
+widened. The non-holonomic Jacobian copied the lateral and vertical rows of the
+body-velocity Jacobians by iterating `[1, 2]`, and an index drawn from an array
+is not a constant to the optimiser, so every `Matrix` index in the loop kept
+its check. The two rows are now written out. Nothing in the audit called
+`apply_nonholonomic`, `apply_wheel_speed` or a GNSS fix before, so nothing had
+looked.
+
 The general lesson matches Layer 8's: what the optimiser can prove is not
 visible in the source. All of these read as obviously-fine code, and every one
 of them linked a panic. It is also why the audit has to actually run — three of
-the five were introduced while it could not.
+the six were introduced while it could not — and why it has to call everything
+a target runs: the sixth had always been there.
 
 ### Scope
 
 This covers the steady-state data path — `add_imu`, `apply_zupt`,
-`apply_height`. Construction and configuration validation are *not* in scope and
-may legitimately panic on programmer error; they run once, at startup, where a
-panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.
+`apply_height`, and once a second a GNSS fix with velocity, `apply_wheel_speed`,
+`apply_nonholonomic` and the `WheelSpeedScale` beside them. Construction and
+configuration validation are *not* in scope and may legitimately panic on
+programmer error; they run once, at startup, where a panic is diagnosable.
+Decoding is covered separately by Layer 5's fuzzing.
 
 ## Layer 11 — error against ground truth
 
@@ -569,6 +757,18 @@ The result on smartphone data is a **negative one**, recorded in full at
 [gsdc.md](gsdc.md): fusing a phone IMU with position-only smartphone GNSS gains
 1.7 %. That is worth as much as a positive result — it bounds where this filter
 helps, and it was diagnosed rather than tuned away.
+
+comma2k19 is the second dataset scored this way, against comma's
+post-processed pose rather than survey truth, so a few decimetres there are not
+resolvable. `comma2k19_regression` replays one segment and holds two things:
+that the filter lands on the u-blox fixes' own accuracy, which a mistimed fix
+or a misread array breaks; and that wheel speed and non-holonomic constraints
+bound a thirty-second outage to under a quarter of the IMU's drift. Both
+failures were introduced to check that the test catches them. The fixes and the
+filter are scored on the same epochs: scoring the filter at every IMU sample
+weighs a 5 Hz segment twice as heavily in one column as the other, and made the
+filter's median look 0.35 m worse than the fixes it was tracking.
+[comma2k19.md](comma2k19.md) has the results.
 
 ## Layer 12 — the smoother, against generated truth
 

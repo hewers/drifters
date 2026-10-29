@@ -66,6 +66,10 @@ pub fn run(check: bool) -> Result<(), Box<dyn Error>> {
         ".drifters.v1.Covariance.row_major",
         Config::new().max_len(COVARIANCE_LEN),
     );
+    generator.configure(
+        ".drifters.v1.GinsOptions.partial_update_percent",
+        Config::new().max_bytes(STATE_STD_LEN),
+    );
 
     let generated = if check {
         let scratch = root.join("target/generated.rs.check");

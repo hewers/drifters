@@ -159,7 +159,12 @@ Where a low-cost MEMS system stops being a toy.
 - [x] Barometric height, to bound the unstable vertical channel
 - [x] Magnetometer heading
 - [x] Innovation gating (chi-squared) shared by all measurement types
-- [x] Covariance inflation to recover from persistent gate rejection
+- [x] Covariance inflation to recover from persistent gate rejection — counted
+      per measurement kind since comma2k19 showed an always-accepted wheel speed
+      resetting the count for a refused non-holonomic constraint, which then
+      stayed refused for a whole outage
+- [x] Zero-angular-rate update, for the yaw-gyro bias a stop can read and a
+      zero-velocity update cannot — see [comma2k19.md](comma2k19.md)
 
 **Exit criterion — met.** A simulated stationary GNSS outage with ZUPT shows
 0.012 m of drift over 30 s against 9.0 m for dead reckoning alone (a factor of
@@ -348,6 +353,32 @@ single-precision is most of the soft-float question. Per `add_imu` on
       `Local` took it to one evaluation per point. Recorded in
       [testing.md](testing.md), along with the two ways this measurement gave a
       wrong answer first.
+- [x] **SIMD on Cortex-M4 and M7.** There is none a floating-point filter can
+      use: both FPUs are scalar, and the DSP extension's SIMD is packed
+      integers. What `core::simd` was buying is register allocation, and named
+      accumulators get most of it on stable — 16 % off `add_imu` on the M4
+      with `f32-covariance`, bit-identical. The lever that is there is the
+      M7's optional double-precision FPU: with `-C target-cpu=cortex-m7`,
+      `add_imu` does a seventeenth of the work and a held update under an
+      eleventh, again bit-identical. CI builds and runs that configuration on
+      `mps2-an500`. See [testing.md](testing.md), Layer 9.
+- [x] **The instruction count could wrap, and did.** SysTick is 24 bits and
+      the harness timed 500 `add_imu` calls as one batch, which wraps above
+      33 554 ticks per call. Every soft-float figure was a remainder — 20 321
+      for what is 87 425 — and so were the claims resting on them: the M7 does
+      a seventeenth of the M4's work, not a quarter, and `f32-covariance`
+      removed 85 % of it, not 41 %. Calls are now timed one at a time. See
+      [testing.md](testing.md), Layer 9.
+- [x] **The time update, partitioned.** Every IMU error state depends on
+      nothing but itself, so Gram-Schmidt need only run over the nine
+      navigation states, with one rank-one update per IMU error for its noise —
+      the partitioned UDU update in NASA's *Navigation Filter Best Practices*.
+      Same factors to 5e-16, and KF-GINS unchanged to every printed digit.
+      `add_imu` does 66 % less work with `f64` in software, 33 % with
+      `f32-covariance` and 64 % on the M7, and the peak stack falls from
+      16 156 to 9 820 bytes, 9 676 with `f32-covariance` and 6 268 at 15
+      states. See [design.md](design.md) and [testing.md](testing.md),
+      Layer 9.
 
 ### Still needs a board
 
@@ -619,12 +650,14 @@ Each step is gated on a measurement rather than on the previous one compiling.
       measurement Jacobian and the proto schema.
 
       Instructions retired per `add_imu` on `mps2-an386` say it does not pay.
-      `f32-covariance` already took the build from 22 415 to 13 238 — 41 % —
-      and of what remains the mechanization is 3 209, or 24 %. Even converting
-      as well as the covariance did, at 56 %, the rewrite is worth about 13 %
-      of current, and it buys that by spending accuracy the covariance change
-      never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
-      anchor, and doing the arithmetic in `f32` would cost more.
+      `f32-covariance` already took the build from 89 524 to 13 238 — 85 % —
+      and of what remains the mechanization is 3 209, or 24 %. Even a perfect
+      conversion is worth at most that 24 % of current, and it buys it by
+      spending accuracy the covariance change never had to: `f32` position
+      *storage* alone costs 7 % of NIS at a 1 km anchor, and doing the
+      arithmetic in `f32` would cost more. (First written against 22 415, a
+      count that had wrapped, which put the covariance's share at 41 % and the
+      rewrite's worth at 13 %; see [testing.md](testing.md), Layer 9.)
 
       One cheaper thing was worth more and cost no precision: the earth model
       was evaluated afresh at every call site, about twelve `sin`/`cos` per
@@ -667,9 +700,29 @@ Each step is gated on a measurement rather than on the previous one compiling.
       | 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
 
       `f32` takes 22 % off `add_imu` because Thornton's working array halves.
-      The remaining excess over M8's 16 432 is the held-state path's dense
-      round trip, which a factored held-state update would remove and Bierman
-      cannot express. Campaign results are bit-identical throughout.
+      Campaign results are bit-identical throughout.
+
+      The remaining excess over M8's 16 432 was the held-state path's dense
+      round trip, recorded here at the time as something Bierman cannot
+      express. That was wrong. Joseph with the held rows of the gain zeroed
+      is the optimal posterior plus `G S Gᵀ`, `G` being the optimal gain's
+      held rows: a positive term with one rank-one piece per measurement row,
+      which the Agee–Turner update adds to the factors. With that, nothing on
+      the data path forms `P`. Built with rustc 1.99, under which the dense
+      path above measures 18 968, 18 048 and 10 536:
+
+      | configuration | `add_imu` | `apply_zupt` | peak |
+      |---|---|---|---|
+      | 21-state, `f64` | 16 156 | 7 676 | **16 156** |
+      | 21-state, `f32-covariance` | 12 420 | 6 476 | **12 420** |
+      | 15-state (`reduced-state`) | 9 684 | 5 340 | **9 684** |
+
+      Every configuration is now below M8's peak. A held zero-velocity update
+      also does under a fifth of the work at `f64` and a twenty-sixth at
+      `f32-covariance`, where it now runs on the single-precision FPU rather
+      than in soft-float: 77 175 to 13 691 and 79 524 to 3 018 SysTick ticks
+      under `-icount shift=0`. Against the dense Joseph form it agrees to
+      1.5e-15 at `f64`.
 
 - [x] **Single-precision covariance**, `--features f32-covariance`, which the
       factored form is what made available: `cond(U√D) = √cond(P)`, so the 13.6
@@ -1004,3 +1057,203 @@ churn.
 Deliberately **not** blocking on M14. Its steps are measurement-gated and
 open-ended, and `0.x` exists precisely so a release does not have to wait for
 them.
+
+---
+
+## M17 — From the literature survey
+
+A survey of the aided-navigation literature, read against what this library
+already does and what its datasets show, ranked the changes worth making. The
+first four are done; the rest are recorded here as optional, each with its
+source, where it would land and the evidence for or against it. Measured
+results come from comma2k19's fit and holdout split (see
+[comma2k19.md](comma2k19.md)) unless stated otherwise.
+
+- [x] **Partitioned UDU time update** (NASA/TP-2018-219822 §8.3.2; Bierman).
+      Gram-Schmidt over the nine navigation states, one rank-one update per
+      IMU error state. Same factors to 5e-16; 66 % less work per `add_imu`
+      with `f64` in software, 64 % on a Cortex-M7. See M9 above and
+      [testing.md](testing.md), Layer 9. Finding it also exposed that the
+      harness's instruction count wrapped on every soft-float build.
+- [x] **Partial updates** (Brink's partial-update Schmidt-Kalman filter, in
+      the factored form of Ramos, Brink, Ganesh and Hurtado, 2022). Exact,
+      tested, and off by default: on comma2k19 no share helps, and the one
+      that improved the fit set's long outages did not transfer to the
+      holdout's medians.
+- [x] **Wheel-speed scale factor** (as in Niu, Nassar and El-Sheimy, 2007, and
+      Chauchat, Bonnabel and Barrau, 2024, but beside the filter rather than in
+      it, since the state is carried on the wire at 21). comma2k19's CAN speed
+      reads 1 % low on every drive; estimating it against GNSS speed cuts the
+      holdout's median thirty-second outage from 11.1 m to 6.9 m.
+- [x] **Late GNSS fixes** (NASA/TP-2018-219822 §4.1). Worked back to their
+      epoch and carried forward through the transition; in arrival order the
+      holdout matches epoch order to within millimetres, where the engine had
+      dropped every fix.
+
+### Optional, in rough order of expected value
+
+- [ ] **Model the GNSS error as time-correlated.** comma2k19's u-blox error is
+      a per-segment offset of about a metre, and what remains still correlates
+      0.62 at one second and 0.27 at ten; GSDC's smoother loses for the same
+      reason, and comma's fix NIS of 0.9 against 3 says the white part is small.
+      Bryson and Henrikson's measurement differencing (1968) handles it with no
+      new states, which suits a fixed-size filter; Petovello et al. (2009) and
+      Wang, Li and Rizos (2012) give the practical variants. Lands in the GNSS
+      update. Expect honest covariances and a useful smoother more than better
+      accuracy: the offset itself is unobservable.
+- [ ] **Invariant error definitions in the ESKF.** Barrau and Bonnabel's
+      invariant EKF (2017, 2018), Scherzinger and Reid's modified error models
+      (1994) and the state-transformation EKF converge from heading errors a
+      conventional filter cannot — in Sun, Chen and Cui's simulation (2024) a
+      conventional EKF failed from 165° where the SE₂(3) form converged.
+      Chauchat, Bonnabel and Barrau (2024) extend it to exactly the comma setup:
+      GNSS, wheel speed, unknown wheel radius and lever arm. Touches `F`, `G`,
+      every Jacobian, the feedback, `error_between` and the smoother, so it is
+      the most expensive item here; the equivariant filter already explores the
+      geometry.
+- [ ] **Attitude covariance reset after large corrections** (NASA/TP-2018-219822
+      §9.9.2; Reynolds, 2008; Mueller, Hehn and D'Andrea, 2017).
+      `P ← (I − [δθ×]/2) P (I − [δθ×]/2)ᵀ` on the attitude block after
+      feedback. Most filters omit it, but omitting it can diverge after large
+      updates.
+      Only worth doing above some `|δθ|`, which keeps it off the per-sample
+      path; `anchor::rebase_covariance` has the machinery. Test with
+      `drifters nees` from large initial heading errors.
+- [ ] **Underweight measurements while the state is uncertain** (Zanetti,
+      DeMars and Bishop, 2010; NASA/TP-2018-219822 ch. 5, which prefers it to
+      scaling `R`). Lear's `U = β H P Hᵀ` when the relevant covariance is large.
+      At 28 m/s a 10° heading error puts 0.43 m/s of second-order error into the
+      non-holonomic constraint's lateral row — the mechanism behind comma's
+      lockout. One `Ud::quadratic` per row.
+- [ ] **Estimate the mounting angles online** (Vinande, Axelrad and Akos, 2010;
+      Wang et al., *Remote Sensing* 16(16), 2024). comma's mount had to be
+      fitted offline, and differs between the fit and holdout drives — 3.33° and
+      0.68° against 3.68° and 0.80° — while GSDC cannot use the non-holonomic
+      constraint at all without the phone's mount. A side estimator in the
+      manner of `WheelSpeedScale` keeps the 21-state core.
+- [ ] **Yaw without a magnetometer.** PX4's EKF-GSF runs a bank of 3-state
+      filters with different initial yaws and combines them as a Gaussian sum,
+      needing no prior heading and no magnetometer. An alignment helper beside
+      the engine would serve phones and arbitrary mounts, where the readers
+      currently level and take heading from the GNSS course.
+- [ ] **Non-holonomic lever arm** (Chae et al., *JPNT* 11(3), 2022). The
+      constraint holds at the rear axle, not at the IMU. Measured on comma's
+      reference poses: a fitted lever arm of 0.5 to 1.9 m, which on the
+      highway holdout changes the lateral velocity at the IMU from 0.061 to
+      0.060 m/s RMS — nothing — and in the fit set's turns from 0.31 to 0.19.
+      Cheap; for urban driving.
+- [ ] **A better stationarity detector** (Skog et al., 2010, generalised
+      likelihood-ratio detectors; Ramanandan, Chen and Farrell, 2012, a
+      frequency-domain detector for idling vehicles; Wahlström and Skog, 2021,
+      a review). The current one thresholds gyro RMS and specific-force
+      variation. Pair it with the zero-angular-rate update, and with the height
+      aid M6 still lists.
+- [ ] **Late fixes beyond half a second.** The back-working assumes the last
+      IMU interval's motion holds and neglects the process noise over the gap.
+      Larsen et al.'s method (1998) or stochastic cloning would handle long
+      latencies exactly.
+- [ ] **Less of the transition matrix.** The partitioned update reads only its
+      navigation rows and diagonal, and a late fix only the rows its Jacobian
+      touches; a filter that never smooths could build less than the full
+      3.5 KiB on the peak path.
+- [ ] **A 22nd state for the wheel-speed scale**, if the side estimator proves
+      too coarse — with the protobuf schema grown to carry it.
+- [ ] **Adaptive noise and robust weighting**, with care. Innovation-based
+      adaptation (Mohamed and Schwarz, 1999), variational Bayes (Särkkä and
+      Nummenmaa, 2009; Huang et al., 2018) and generalised-Bayes weighting
+      (Duran-Martin et al., 2024) all adapt to the innovations, and this
+      repository's own sweep found the equivariant filter's innovation-based
+      inflation four times worse on GSDC, because a large innovation there
+      meant drift rather than a bad measurement. Huber weighting is already on
+      pseudoranges.
+- [ ] **Tuning tools**: Bayesian optimisation of the noise parameters against
+      NIS or NEES (Chen, Heckman, Julier and Ahmed, 2018), and IMU noise
+      identification by the generalised method of wavelet moments (Guerrier et
+      al., 2013) or Allan variance, for `drifters tune`, given that fitted
+      tunings did not transfer on GSDC.
+- [ ] **The equivariant filter's tangent-group symmetry** (Fornasier et al.,
+      arXiv:2309.03765), reported better at asymptotic consistency than the
+      semi-direct-bias symmetry `drifters-eqf` implements.
+- [ ] **Factor-graph smoothing** on the desktop side (Wen, Pfeifer, Bai and Hsu,
+      *NAVIGATION* 68(2), 2021, where it beats the EKF in urban canyons by
+      relinearising over correlated history). In `drifters-gnss`, not on the
+      target.
+- [ ] **Learned noise adaptation** (Brossard, Barrau and Bonnabel's AI-IMU,
+      2020, and RINS-W, 2019; Diker and Klein, 2026; surveyed by Chen and Pan,
+      2024). Needs inference on the target, and sits outside this library's
+      model-based approach for now.
+
+### Sources
+
+- J. R. Carpenter and C. N. D'Souza (eds.), *Navigation Filter Best Practices*,
+  NASA/TP-2018-219822, 2nd ed. (2025) —
+  <https://ntrs.nasa.gov/citations/20250002787>
+- J. H. Ramos, K. M. Brink, P. Ganesh and J. E. Hurtado, "Factorized
+  Partial-Update Schmidt–Kalman Filter", *JGCD* 45(9), 2022 —
+  <https://doi.org/10.2514/1.G006449>
+- X. Niu, S. Nassar and N. El-Sheimy, "An Accurate Land-Vehicle MEMS IMU/GPS
+  Navigation System Using 3D Auxiliary Velocity Updates", *NAVIGATION* 54(3),
+  2007
+- P. Chauchat, S. Bonnabel and A. Barrau, "Invariant filtering for wheeled
+  vehicle localization with unknown wheel radius and unknown GNSS lever arm",
+  CDC 2024 — <https://arxiv.org/abs/2409.07050>
+- T. D. Larsen, N. A. Andersen, O. Ravn and N. K. Poulsen, "Incorporation of
+  Time Delayed Measurements in a Discrete-time Kalman Filter", CDC 1998
+- A. E. Bryson and L. J. Henrikson, "Estimation using sampled data containing
+  sequentially correlated noise", *J. Spacecraft and Rockets* 5(6), 1968
+- M. G. Petovello, K. O'Keefe, G. Lachapelle and M. E. Cannon, "Consideration
+  of time-correlated errors in a Kalman filter applicable to GNSS", *J. Geodesy*
+  83(1), 2009 — <https://doi.org/10.1007/s00190-008-0231-z>
+- K. Wang, Y. Li and C. Rizos, "Practical approaches to Kalman filtering with
+  time-correlated measurement errors", *IEEE TAES* 48(2), 2012
+- A. Barrau and S. Bonnabel, "The Invariant Extended Kalman Filter as a Stable
+  Observer", *IEEE TAC* 62(4), 2017 — <https://arxiv.org/abs/1410.1465>; and
+  "Invariant Kalman Filtering", *Annu. Rev. Control Robot. Auton. Syst.* 1, 2018
+- B. M. Scherzinger and D. B. Reid, "Modified strapdown inertial navigator
+  error models", PLANS 1994 — <https://doi.org/10.1109/PLANS.1994.303345>
+- J. Sun, Y. Chen and B. Cui, "An Improved Initial Alignment Method Based on
+  SE2(3)/EKF for SINS/GNSS Integrated Navigation System with Large Misalignment
+  Angles", *Sensors* 24(9), 2024 — <https://doi.org/10.3390/s24092945>
+- R. G. Reynolds, "Asymptotically optimal attitude filtering with guaranteed
+  convergence", *JGCD* 31(1), 2008; M. W. Mueller, M. Hehn and R. D'Andrea,
+  "Covariance Correction Step for Kalman Filtering with an Attitude", *JGCD*,
+  2017
+- R. Zanetti, K. J. DeMars and R. H. Bishop, "Underweighting Nonlinear
+  Measurements", *JGCD* 33(5), 2010 — <https://doi.org/10.2514/1.50596>
+- E. Vinande, P. Axelrad and D. Akos, "Mounting-Angle Estimation for Personal
+  Navigation Devices", *IEEE TVT* 59(3), 2010
+- PX4, "Using PX4's Navigation Filter (EKF2)" —
+  <https://docs.px4.io/main/en/advanced_config/tuning_the_ecl_ekf>
+- M. S. Chae, J. U. Kwon, E. Y. Cho and S. Y. Cho, "INS/GNSS/NHC Integrated
+  Navigation System Compensating for Lever Arm Effect between NHC Effective
+  Point and IMU Mounting Location", *JPNT* 11(3), 2022 —
+  <https://doi.org/10.11003/JPNT.2022.11.3.199>
+- I. Skog, P. Händel, J.-O. Nilsson and J. Rantakokko, "Zero-Velocity
+  Detection—An Algorithm Evaluation", *IEEE TBME* 57(11), 2010; A. Ramanandan,
+  A. Chen and J. A. Farrell, "Inertial Navigation Aiding by Stationary
+  Updates", *IEEE TITS* 13(1), 2012; J. Wahlström and I. Skog, "Fifteen Years
+  of Progress at Zero Velocity: A Review", *IEEE Sensors J.* 21(2), 2021
+- A. H. Mohamed and K. P. Schwarz, "Adaptive Kalman filtering for INS/GPS",
+  *J. Geodesy* 73, 1999; Y. Huang, Y. Zhang, Z. Wu, N. Li and J. Chambers, "A
+  Novel Adaptive Kalman Filter With Inaccurate Process and Measurement Noise
+  Covariance Matrices", *IEEE TAC* 63(2), 2018; G. Duran-Martin et al.,
+  "Outlier-robust Kalman Filtering through Generalised Bayes", ICML 2024 —
+  <https://arxiv.org/abs/2405.05646>
+- Z. Chen, C. Heckman, S. Julier and N. Ahmed, "Weak in the NEES?: Auto-tuning
+  Kalman Filters with Bayesian Optimization", FUSION 2018 —
+  <https://arxiv.org/abs/1807.08855>; S. Guerrier, J. Skaloud, Y. Stebler and
+  M.-P. Victoria-Feser, "Wavelet-Variance-Based Estimation for Composite
+  Stochastic Processes", *JASA* 108(503), 2013
+- A. Fornasier, Y. Ge, P. van Goor, R. Mahony and S. Weiss, "Equivariant
+  Symmetries for Inertial Navigation Systems" —
+  <https://arxiv.org/abs/2309.03765>
+- W. Wen, T. Pfeifer, X. Bai and L.-T. Hsu, "Factor graph optimization for
+  GNSS/INS integration: A comparison with the extended Kalman filter",
+  *NAVIGATION* 68(2), 2021 — <https://navi.ion.org/content/68/2/315>
+- M. Brossard, A. Barrau and S. Bonnabel, "AI-IMU Dead-Reckoning", *IEEE T-IV*
+  5(4), 2020 — <https://arxiv.org/abs/1904.06064>; "RINS-W", IROS 2019 —
+  <https://arxiv.org/abs/1903.02210>; B. Diker and I. Klein, "Neural Aided
+  Adaptive Innovation-Based Invariant Kalman Filter", 2026 —
+  <https://arxiv.org/abs/2603.26709>; C. Chen and X. Pan, "Deep Learning for
+  Inertial Positioning: A Survey", *IEEE T-ITS*, 2024 —
+  <https://arxiv.org/abs/2303.03757>

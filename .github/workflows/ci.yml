@@ -248,6 +248,7 @@ jobs:
           cargo build --release --features reduced-state
           cargo build --release --features f32-covariance
           cargo build --release --bin panic_audit
+          RUSTFLAGS="-D warnings -C target-cpu=cortex-m7" cargo build --release --target-dir target/m7
       - name: run harness under QEMU
         working-directory: cortex-m-harness
         run: |
@@ -255,16 +256,19 @@ jobs:
           cargo run --release | tee report.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
-          # Ceiling, not a target. 20 KiB leaves headroom over the measured
-          # 18.5 KiB while still failing if a change reintroduces the
-          # expression-chained form that cost 35.3 KiB.
+          # Ceiling, not a target. 10 KiB leaves headroom over the measured
+          # 8 708 B, a late GNSS fix, while failing if a change returns the
+          # transition matrix by value again (10.5 KiB), reintroduces the full
+          # Gram-Schmidt time update (15.8 KiB), the full noise mapping on
+          # the predict frame (12.1 KiB), the dense held-state update
+          # (18.5 KiB) or the expression-chained form that cost 35.3 KiB.
           #
           # This job could not build for three weeks — `cargo run` went
           # ambiguous when a second binary was added — and in that window the
           # peak grew 63 % unnoticed. A job that fails to build is a job that
           # measures nothing, so the build is now a separate step above.
-          test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
-      - name: the 15-state configuration must fit a 16 KiB stack
+          test "$peak" -lt 10240 || { echo "stack budget exceeded"; exit 1; }
+      - name: the 15-state configuration must fit a 7 KiB stack
         working-directory: cortex-m-harness
         run: |
           set -o pipefail
@@ -272,8 +276,9 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 10 464 B.
-          test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
+          # not. Measured at 6 332 B, a late GNSS fix; the full Gram-Schmidt
+          # time update peaked at 9 684 B.
+          test "$peak" -lt 7168 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
         run: |
@@ -281,14 +286,40 @@ jobs:
           cargo run --release --features f32-covariance | tee f32.txt
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
-          # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 22 %. Measured at 17 976 B.
-          test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
+          # Halving the covariance cannot make the stack grow. With the
+          # partitioned time update the predict frame is mostly the f64
+          # transition matrix, so the precisions peak within 500 bytes of each
+          # other. Measured at 8 256 B, a late GNSS fix; the full sweep peaked
+          # at 12 420 B and the dense held-state update at 18 048 B.
+          test "$peak" -lt 9728 || { echo "f32-covariance budget exceeded"; exit 1; }
+      # Many Cortex-M7 parts have a double-precision FPU, and this is the build
+      # that uses it: every `f64` operation in hardware, a seventeenth of the
+      # work per `add_imu`, bit-identical results. docs/testing.md recommends
+      # it, so it has to keep building and running. The banner check is what
+      # makes it mean anything — a flag that quietly stopped taking effect
+      # would still build, run and fit.
+      - name: the Cortex-M7 double-precision build must run and fit
+        working-directory: cortex-m-harness
+        env:
+          RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+          CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: >-
+            qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic
+            -semihosting-config enable=on,target=native -kernel
+        run: |
+          set -o pipefail
+          cargo run --release --target-dir target/m7 | tee m7.txt
+          grep -q 'Cortex-M7, f64 in hardware' m7.txt || { echo "not running f64 in hardware"; exit 1; }
+          peak=$(grep -oP 'PEAK\s+\K[0-9]+' m7.txt)
+          echo "Cortex-M7 peak stack: $peak bytes"
+          # Measured at 8 388 B, a late GNSS fix; the full Gram-Schmidt time
+          # update peaked at 15 576 B.
+          test "$peak" -lt 10240 || { echo "Cortex-M7 budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |
           # Every configuration: `f32-covariance` and `reduced-state` change
-          # what the filter computes, so neither inherits the default's audit.
+          # what the filter computes, so neither inherits the default's audit,
+          # and the Cortex-M7 build is different code generation altogether.
           for features in "" "--features f32-covariance" "--features reduced-state"; do
             cargo build --release --bin panic_audit $features
             bin=target/thumbv7em-none-eabihf/release/panic_audit
@@ -298,6 +329,13 @@ jobs:
             fi
             echo "no panic machinery linked [${features:-default}]"
           done
+          RUSTFLAGS="-D warnings -C target-cpu=cortex-m7" \
+            cargo build --release --bin panic_audit --target-dir target/m7
+          if nm target/m7/thumbv7em-none-eabihf/release/panic_audit | grep -i 'core9panicking'; then
+            echo "the data path can reach a panic on Cortex-M7; see docs/testing.md Layer 10"
+            exit 1
+          fi
+          echo "no panic machinery linked [cortex-m7]"
 
   # `portable_simd` is opt-in through `--cfg drifters_nightly_simd`, not a cargo
   # feature, so that `--all-features` on stable does not try to enable a

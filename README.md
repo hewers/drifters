@@ -28,11 +28,11 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
 | | per-axis bias below 1 mm |
-| **Footprint** | **10.2 KiB** peak stack (15-state), 18.5 KiB (21-state), on Cortex-M4 |
+| **Footprint** | **6.2 KiB** peak stack (15-state), 8.5 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 434, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 489, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -181,12 +181,43 @@ Three findings on the way there are worth more than the number:
 Full diagnosis in [docs/gsdc.md](docs/gsdc.md) and
 [docs/gsdc-observables.md](docs/gsdc-observables.md).
 
+### A car, with wheel speed: comma2k19
+
+comma.ai's [comma2k19](https://github.com/commaai/comma2k19) pairs a phone-class
+IMU with a 10 Hz u-blox receiver and the car's CAN. On 45 held-out highway
+segments, scored against comma's own post-processed pose:
+
+| | horizontal RMS | heading RMS | after a 30 s GNSS outage, median / p95 |
+|---|---|---|---|
+| u-blox fixes | 1.40 m | | |
+| ESKF, IMU + GNSS | 1.40 m | 5.2° | 71 m / 313 m |
+| ESKF, + wheel speed, non-holonomic, zero-rate | 1.40 m | **1.15°** | 11.1 m / 34 m |
+| … and the wheel speed's scale estimated | 1.40 m | **1.15°** | **6.9 m / 34 m** |
+
+The receiver's error is a slowly varying metre that no IMU can see, so the
+fused fix is no better than the receiver's own. What the library buys on a car
+is the outage. Getting there meant measuring an 80 ms fix latency and a camera
+pitched 3.3° off the direction of travel, and it changed the library twice: the
+lockout recovery counted rejections across all sensors, so an accepted wheel
+speed kept a refused constraint locked out through a whole outage, and there
+was no zero-angular-rate update to read a gyro bias at a stop. The CAN speed
+reads 1 % low on every drive, and estimating that against GNSS speed cuts the
+median outage drift by more than a third. Details in
+[docs/comma2k19.md](docs/comma2k19.md).
+
 ## Status
 
-**Working and validated:** core math, strapdown mechanization, 21-state ESKF,
-loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
-odometer, barometric height, magnetometer heading), protobuf serialization,
-bare-metal Cortex-M, KF-GINS dataset regression.
+**Working and validated:** core math, strapdown mechanization, 21-state ESKF
+with a partitioned factored time update and partial updates, loosely-coupled
+GNSS including fixes that arrive after their epoch, auxiliary sensors (ZUPT,
+zero angular rate, non-holonomic constraints, odometer with its scale factor
+estimated, barometric height, magnetometer heading), protobuf serialization,
+bare-metal Cortex-M, KF-GINS and comma2k19 dataset regressions.
+
+**Next, from the literature:** a time-correlated GNSS error model, invariant
+error definitions, an attitude covariance reset, underweighting, online mount
+angles and more, each with its source and the evidence for it, in
+[M17](docs/milestones.md#m17--from-the-literature-survey).
 
 **In progress:** the equivariant filter. It runs end to end on both datasets
 (see above) — symmetry group, lift, linearisation, group exponential, GCU and
@@ -259,8 +290,9 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 - **Factored covariance** — `P` is stored as `U D Uᵀ` and updated by the Bierman
   and Thornton recursions, so it is never formed and never assembled by
   subtracting two nearly-equal matrices. Positive-definiteness is a property of
-  the representation rather than something to test for and repair. Joseph form
-  remains for the held-state path, where a row must not touch every state.
+  the representation rather than something to test for and repair. Held
+  states stay factored too: holding a state is the optimal update plus a
+  positive term, which goes back in as rank-one updates.
 - **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
   file. That is what lets the same code run inside an interrupt handler.
 - **NED navigation frame, FRD body frame** — the navigation-literature
@@ -273,6 +305,12 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   single-precision FPU instead of in soft-float, with KF-GINS, GSDC and NEES
   all unchanged. Both, and how the second was got wrong the first time, in
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
+- **On a Cortex-M7, build with `-C target-cpu=cortex-m7`.** Many M7 parts have
+  a double-precision FPU, and the generic `thumbv7em` target does not use it.
+  With the flag every `f64` operation is a hardware instruction and `add_imu`
+  does a seventeenth of the work, with bit-identical results. Neither core has
+  floating-point SIMD; what there is, and what it is worth, is in
+  [docs/testing.md](docs/testing.md), Layer 9.
 
 ## Minimum supported Rust
 
@@ -290,6 +328,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [frames.md](docs/frames.md) — coordinate frames and conventions
 - [testing.md](docs/testing.md) — eleven layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
+- [comma2k19.md](docs/comma2k19.md) — a phone IMU on the highway, with wheel speed
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
 - [milestones.md](docs/milestones.md) — roadmap and measured outcomes
