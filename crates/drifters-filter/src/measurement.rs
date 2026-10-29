@@ -73,14 +73,17 @@ pub enum Kind {
     Height,
     /// [`magnetic_heading`].
     Heading,
-    /// Anything a caller builds itself.
+    /// Anything a caller builds itself. Keep it last: [`Kind::COUNT`] is
+    /// derived from it.
     #[default]
     Other,
 }
 
 impl Kind {
-    /// How many kinds there are.
-    pub const COUNT: usize = 9;
+    /// How many kinds there are. Derived from the last variant rather than
+    /// written out, so a kind added before it cannot index past the engine's
+    /// counters.
+    pub const COUNT: usize = Kind::Other as usize + 1;
 
     /// A dense index in `0..COUNT`.
     #[inline]
