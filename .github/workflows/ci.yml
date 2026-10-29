@@ -257,7 +257,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
           # Ceiling, not a target. 18 KiB leaves headroom over the measured
-          # 15.9 KiB while failing if a change reintroduces the dense
+          # 15.8 KiB while failing if a change reintroduces the dense
           # held-state update, which peaked at 18.5 KiB, or the
           # expression-chained form that cost 35.3 KiB.
           #
@@ -274,7 +274,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 9 804 B.
+          # not. Measured at 9 684 B.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
@@ -284,7 +284,7 @@ jobs:
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 12 548 B; the dense
+          # predict path it shrinks it by 23 %. Measured at 12 420 B; the dense
           # held-state update this ceiling would catch peaked at 17 976 B.
           test "$peak" -lt 16384 || { echo "f32-covariance budget exceeded"; exit 1; }
       # Many Cortex-M7 parts have a double-precision FPU, and this is the build
@@ -306,7 +306,7 @@ jobs:
           grep -q 'Cortex-M7, f64 in hardware' m7.txt || { echo "not running f64 in hardware"; exit 1; }
           peak=$(grep -oP 'PEAK\s+\K[0-9]+' m7.txt)
           echo "Cortex-M7 peak stack: $peak bytes"
-          # Measured at 15 712 B.
+          # Measured at 15 576 B.
           test "$peak" -lt 16384 || { echo "Cortex-M7 budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness

@@ -261,6 +261,7 @@ pub fn single_differences<const M: usize>(
         // not taken.
         gate: crate::eskf::chi_squared::P999.get(used).copied(),
         held: HeldStates::NONE,
+        kind: crate::measurement::Kind::Pseudoranges,
     })
 }
 

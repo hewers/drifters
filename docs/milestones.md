@@ -159,7 +159,12 @@ Where a low-cost MEMS system stops being a toy.
 - [x] Barometric height, to bound the unstable vertical channel
 - [x] Magnetometer heading
 - [x] Innovation gating (chi-squared) shared by all measurement types
-- [x] Covariance inflation to recover from persistent gate rejection
+- [x] Covariance inflation to recover from persistent gate rejection — counted
+      per measurement kind since comma2k19 showed an always-accepted wheel speed
+      resetting the count for a refused non-holonomic constraint, which then
+      stayed refused for a whole outage
+- [x] Zero-angular-rate update, for the yaw-gyro bias a stop can read and a
+      zero-velocity update cannot — see [comma2k19.md](comma2k19.md)
 
 **Exit criterion — met.** A simulated stationary GNSS outage with ZUPT shows
 0.012 m of drift over 30 s against 9.0 m for dead reckoning alone (a factor of

@@ -15,7 +15,7 @@
 //! cannot. Leaving the latency out, or reading the arrays in the wrong order,
 //! fails it; both were tried.
 //!
-//! It does not pin the mount. On this segment the aided outage ends at 4.2 m
+//! It does not pin the mount. On this segment the aided outage ended at 4.2 m
 //! with the IMU rotated into the vehicle frame and 4.1 m without, and over the
 //! fit routes the mount is a mixed gain — see `docs/comma2k19.md`. Nor does it
 //! exercise comma's Fortran-ordered files when the segment came from the
@@ -30,7 +30,8 @@ use drifters_cli::{run_comma, CommaOptions};
 
 /// Observed 0.426 m against the fixes' 0.432 m.
 const MAX_HORIZONTAL_RMS_M: f64 = 0.6;
-/// Observed 4.2 m with wheel speed and NHC, against 40.9 m on the IMU alone.
+/// Observed 4.0 m with wheel speed, NHC and zero-rate updates, against 40.9 m
+/// on the IMU alone.
 const MAX_AIDED_OUTAGE_M: f64 = 10.0;
 
 fn segment() -> Option<PathBuf> {
@@ -80,7 +81,8 @@ fn the_example_segment_lands_on_the_fixes_and_bridges_an_outage() {
         options.replay.outage = Some((20.0, 30.0));
         if aided {
             options.replay.wheel_sigma = Some(0.3);
-            options.replay.nhc_sigma = Some((0.2, 0.5));
+            options.replay.nhc_sigma = Some((0.1, 0.5));
+            options.replay.zaru_sigma = Some(0.002);
         }
         let report = run_comma(&dir, &options).expect("the segment replays");
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);

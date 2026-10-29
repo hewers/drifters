@@ -42,7 +42,52 @@ use drifters_core::types::{ImuSample, Pva};
 use drifters_core::F;
 
 use crate::eskf::HeldStates;
-use crate::state::{N_STATE, PHI_ID, P_ID, V_ID};
+#[cfg(not(feature = "reduced-state"))]
+use crate::state::SG_ID;
+use crate::state::{BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
+
+/// Which sensor a [`Measurement`] came from.
+///
+/// The engine counts gate rejections per kind, so that one sensor being
+/// accepted cannot hide another being refused every time. Counted together,
+/// an always-accepted wheel speed kept resetting the count for a non-holonomic
+/// constraint the gate was rejecting, the lockout recovery never fired, and a
+/// thirty-second GNSS outage drifted 92 m. See
+/// [`GinsEngine::consecutive_rejections_of`](crate::GinsEngine::consecutive_rejections_of).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Kind {
+    /// [`gnss_velocity`].
+    GnssVelocity,
+    /// Single-differenced pseudoranges; see [`crate::range`].
+    Pseudoranges,
+    /// [`zero_velocity`].
+    ZeroVelocity,
+    /// [`zero_angular_rate`].
+    ZeroRate,
+    /// [`nonholonomic`].
+    Nonholonomic,
+    /// [`wheel_speed`].
+    WheelSpeed,
+    /// [`height`].
+    Height,
+    /// [`magnetic_heading`].
+    Heading,
+    /// Anything a caller builds itself.
+    #[default]
+    Other,
+}
+
+impl Kind {
+    /// How many kinds there are.
+    pub const COUNT: usize = 9;
+
+    /// A dense index in `0..COUNT`.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
 
 /// A measurement ready to be applied to the filter.
 ///
@@ -61,6 +106,8 @@ pub struct Measurement<const M: usize> {
     /// Error states this measurement must not correct. See
     /// [`HeldStates`].
     pub held: HeldStates,
+    /// Which sensor this is, for counting gate rejections. See [`Kind`].
+    pub kind: Kind,
 }
 
 impl<const M: usize> Measurement<M> {
@@ -79,6 +126,13 @@ impl<const M: usize> Measurement<M> {
         self.held = held;
         self
     }
+
+    /// Say which sensor this is. See [`Kind`].
+    #[inline]
+    pub fn with_kind(mut self, kind: Kind) -> Self {
+        self.kind = kind;
+        self
+    }
 }
 
 /// `(∂v_body/∂δv, ∂v_body/∂φ)` — the pair every body-frame velocity
@@ -95,10 +149,11 @@ fn body_velocity_jacobians(pva: &Pva) -> (Mat3, Mat3) {
 /// Zero-velocity update (ZUPT): assert the vehicle is not moving.
 ///
 /// The single most valuable auxiliary measurement for a low-cost system. During
-/// a stop it observes velocity directly, and because a gyro bias integrates
-/// into a growing tilt which integrates into a growing velocity, holding
-/// velocity at zero for a few seconds observes **gyro bias** far better than
-/// anything else available without motion.
+/// a stop it observes velocity directly, and because a horizontal gyro bias
+/// integrates into a growing tilt which integrates into a growing velocity,
+/// holding velocity at zero for a few seconds observes that bias too. Not the
+/// yaw-rate bias, which tilts nothing: pair it with [`zero_angular_rate`],
+/// which reads every axis of the bias directly.
 ///
 /// The constraint is on the navigation-frame velocity, so attitude does not
 /// enter the Jacobian.
@@ -129,6 +184,65 @@ pub fn zero_velocity(pva: &Pva, sigma: Vec3) -> Measurement<3> {
         noise: sigma.squared().to_diag(),
         gate: Some(crate::eskf::chi_squared::P999[3]),
         held: HeldStates::NONE,
+        kind: Kind::ZeroVelocity,
+    }
+}
+
+/// Zero-angular-rate update (ZARU): assert the vehicle is not rotating.
+///
+/// Still, the gyro reads its own bias plus the earth's rotation, so this
+/// observes the gyro bias directly. A zero-velocity update reaches it only
+/// slowly, through the tilt the bias builds up, and not at all about the
+/// vertical, where a yaw-rate bias tilts nothing: a stop is exactly when a
+/// residual yaw bias walks the heading, and [`zero_velocity`] holds attitude
+/// by default, so it cannot correct that either. This can, through the bias
+/// and its correlation with the attitude it has already turned.
+///
+/// `rate` is the compensated angular rate, rad/s, in the body frame —
+/// [`GinsEngine::apply_zero_rate`](crate::GinsEngine::apply_zero_rate) forms it
+/// from the raw sample with the current estimates — and `gyro_scale` the
+/// scale-factor estimate it was compensated with.
+///
+/// The expected rate is the earth's, `Cᵀ·ω_ie`, not zero. For a tactical gyro
+/// earth rate is hundreds of times the bias, and asserting zero would estimate
+/// the earth as a bias. With `ω = (1 + s)·ω_true + b` compensated as
+/// `(ω − b̂)/(1 + ŝ)`, the innovation `rate − Ĉᵀ·ω_ie` is to first order
+///
+/// ```text
+/// (δb + ω·δs) / (1 + ŝ)  +  Cᵀ·[ω_ie×]·φ
+/// ```
+///
+/// with `δb` and `δs` the corrections feedback adds, and the last term the
+/// nav-fixed-vector Jacobian from the module docs with its sign reversed,
+/// because the earth's rate is the measured side here.
+///
+/// `sigma` is the one-sigma rate noise per axis, rad/s, for one sample: it has
+/// to cover the gyro's white noise at the sample rate, and how still the
+/// vehicle really is.
+pub fn zero_angular_rate(pva: &Pva, rate: Vec3, gyro_scale: Vec3, sigma: Vec3) -> Measurement<3> {
+    let earth = drifters_core::earth::Wgs84::omega_ie_n(pva.position.lat);
+    let ct = pva.attitude.dcm.transpose();
+    let expected = ct * earth;
+    let innovation = rate - expected;
+
+    let mut jacobian = Matrix::<3, N_STATE>::zeros();
+    jacobian.set_block(0, PHI_ID, &ct.matmul(&earth.skew()));
+    for c in 0..3 {
+        let gain = 1.0 / (1.0 + gyro_scale[c]);
+        jacobian[(c, BG_ID + c)] = gain;
+        #[cfg(not(feature = "reduced-state"))]
+        {
+            jacobian[(c, SG_ID + c)] = rate[c] * gain;
+        }
+    }
+
+    Measurement {
+        innovation: Matrix::<3, 1>::from_column([innovation.x, innovation.y, innovation.z]),
+        jacobian,
+        noise: sigma.squared().to_diag(),
+        gate: Some(crate::eskf::chi_squared::P999[3]),
+        held: HeldStates::NONE,
+        kind: Kind::ZeroRate,
     }
 }
 
@@ -167,6 +281,7 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
         noise: Matrix::<2, 2>::from_diagonal(&[sigma.0 * sigma.0, sigma.1 * sigma.1]),
         gate: Some(crate::eskf::chi_squared::P999[2]),
         held: HeldStates::NONE,
+        kind: Kind::Nonholonomic,
     }
 }
 
@@ -196,6 +311,7 @@ pub fn wheel_speed(pva: &Pva, speed: F, sigma: F) -> Measurement<1> {
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
         held: HeldStates::NONE,
+        kind: Kind::WheelSpeed,
     }
 }
 
@@ -222,6 +338,7 @@ pub fn height(pva: &Pva, height: F, sigma: F) -> Measurement<1> {
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
         held: HeldStates::NONE,
+        kind: Kind::Height,
     }
 }
 
@@ -250,6 +367,7 @@ pub fn magnetic_heading(pva: &Pva, heading: F, sigma: F) -> Measurement<1> {
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
         held: HeldStates::NONE,
+        kind: Kind::Heading,
     }
 }
 
@@ -288,6 +406,7 @@ pub fn gnss_velocity(
         noise: sigma.squared().to_diag(),
         gate: Some(crate::eskf::chi_squared::P999[3]),
         held: HeldStates::NONE,
+        kind: Kind::GnssVelocity,
     }
 }
 

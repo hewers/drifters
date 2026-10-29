@@ -20,6 +20,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
   and handed the filter `diag(σ²)` as an ε-coordinate covariance, which the two
   are only at the anchor with no velocity. Nothing in the filter changed, and no
   dataset result moves.
+- **The lockout recovery counts rejections per measurement kind.** It counted
+  them across every kind, so an accepted measurement of one reset the count
+  for another the gate kept refusing, and the recovery never fired. On
+  comma2k19 an always-accepted wheel speed kept a non-holonomic constraint
+  locked out through thirty-second outages that drifted up to 127 m; with
+  per-kind counts the worst is 27 m. `Measurement` carries a `kind`,
+  `GinsEngine::consecutive_rejections_of` reports one kind's run and
+  `consecutive_rejections` the longest, and a `max_consecutive_rejections`
+  above 255 is refused as `ConfigError::RejectionLimitTooLarge`. The engine
+  is the same size.
 - **`Eskf::update` is exact from a non-zero error state.** With more than one
   row, the Bierman path subtracted the standing error state's effect row by
   row, which matches `K H δx` only to first order. It now runs the recursion
@@ -46,15 +56,22 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **A zero-angular-rate update**, `measurement::zero_angular_rate` and
+  `GinsEngine::apply_zero_rate`. Still, a gyro reads its bias plus the earth's
+  rotation; this asserts exactly that, so a stop can read the yaw-rate bias a
+  zero-velocity update cannot reach. Earth rate is the expected value, not
+  zero, so a tactical gyro does not estimate the earth as a bias. On the
+  comma2k19 holdout it takes heading error from 1.29° to 1.15° RMS.
 - **`drifters comma`** — a reader and replay for comma.ai's
   [comma2k19](https://github.com/commaai/comma2k19): phone-class IMU, 10 Hz
   u-blox, CAN wheel speed, scored against comma's post-processed pose, with
   optional wheel-speed and non-holonomic aiding and a GNSS outage. A `.npy`
   reader for comma's Fortran-ordered arrays, a regression test on comma's
   example segment, and a script unpacking the 64-segment Hugging Face demo
-  split. On 45 held-out segments the filter matches the receiver, 1.39 m
-  against 1.40, and bounds a thirty-second outage to 11.6 m median against
-  71 m on the IMU alone. See [`docs/comma2k19.md`](docs/comma2k19.md).
+  split. On 45 held-out segments the filter matches the receiver, 1.40 m
+  against 1.40, holds heading to 1.15° RMS, and bounds a thirty-second outage
+  to 11.1 m median against 71 m on the IMU alone. See
+  [`docs/comma2k19.md`](docs/comma2k19.md).
 - **Cortex-M7's double-precision FPU, measured and in CI.** Neither Cortex-M4
   nor M7 has floating-point SIMD, but many M7 parts have a double-precision
   FPU that the generic `thumbv7em` target leaves unused. Built with

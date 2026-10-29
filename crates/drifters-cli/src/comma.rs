@@ -399,13 +399,20 @@ pub struct ReplayOptions {
     /// Apply non-holonomic constraints, with this one-sigma in m/s for
     /// (lateral, vertical).
     ///
-    /// Too tight a lateral sigma is self-defeating. At 28 m/s a degree of
-    /// heading error is 0.5 m/s of lateral body velocity; at 0.1 m/s that fails
-    /// the gate, so the measurement that would correct the heading is refused
-    /// once the heading needs correcting, and a thirty-second outage drifted
-    /// 92 m. The engine's lockout recovery does not rescue it while the wheel
-    /// speed is being accepted in between. See `docs/comma2k19.md`.
+    /// A tight lateral sigma depends on the engine's lockout recovery. At
+    /// 28 m/s a degree of heading error is 0.5 m/s of lateral body velocity;
+    /// at 0.1 m/s that fails the gate, so the measurement that would correct
+    /// the heading is refused once the heading needs correcting. The recovery
+    /// inflates the covariance after repeated rejections and re-admits it —
+    /// since it counts per measurement kind; before, an accepted wheel speed
+    /// reset the count and a thirty-second outage drifted 92 m. See
+    /// `docs/comma2k19.md`.
     pub nhc_sigma: Option<(F, F)>,
+    /// Apply a zero-angular-rate update, with this one-sigma in rad/s,
+    /// whenever CAN speed reads below 0.05 m/s. A stop is when a residual yaw
+    /// bias walks the heading and nothing else observes it; see
+    /// [`drifters_filter::measurement::zero_angular_rate`].
+    pub zaru_sigma: Option<F>,
     /// Withhold fixes for `(start, length)` seconds after the filter starts.
     pub outage: Option<(F, F)>,
     /// Seconds after the filter starts that are not scored.
@@ -418,6 +425,7 @@ impl Default for ReplayOptions {
             imu_scale: 3.0,
             wheel_sigma: None,
             nhc_sigma: None,
+            zaru_sigma: None,
             outage: None,
             settle: 10.0,
         }
@@ -575,6 +583,10 @@ pub fn replay(
             }
             if let Some(sigma) = options.nhc_sigma {
                 engine.apply_nonholonomic(sigma, 3.0)?;
+            }
+            let still = interpolate(&segment.speed, t).is_some_and(|v| v.abs() < 0.05);
+            if let (Some(sigma), true) = (options.zaru_sigma, still) {
+                engine.apply_zero_rate(sample, Vec3::splat(sigma))?;
             }
         }
 

@@ -165,6 +165,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 ///   --mount <up,right>     direction of travel in the IMU frame, degrees
 ///   --wheel <sigma>        CAN speed as wheel-speed aiding, m/s
 ///   --nhc <lat[,vert]>     non-holonomic constraints, m/s
+///   --zaru <sigma>         zero-angular-rate updates while CAN speed reads zero, rad/s
 ///   --outage <start,len>   withhold fixes, seconds after the filter starts
 ///   --settle <s>           unscored seconds after the start (default 10)
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
@@ -212,6 +213,7 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                     Some((s, s))
                 }
             },
+            zaru_sigma: flag(args, "--zaru").map(str::parse).transpose()?,
             outage: pair("--outage")?,
             settle: flag(args, "--settle")
                 .map(str::parse)

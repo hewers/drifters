@@ -38,12 +38,17 @@ pub struct GinsOptions {
     /// down from the IMU reference point). This is the lever arm; getting its
     /// sign wrong shows up as a heading-dependent position bias.
     pub antenna_lever_arm: Vec3,
-    /// Consecutive gate rejections tolerated before the covariance is inflated.
+    /// Consecutive gate rejections of one measurement kind tolerated before
+    /// the covariance is inflated.
     ///
     /// A filter that rejects every measurement is not being robust, it is
     /// broken: its covariance has become confident and wrong, so it discards
     /// exactly the information that would fix it. This bounds how long that can
     /// go on. Zero disables the recovery entirely.
+    ///
+    /// Counted per [`Kind`](crate::measurement::Kind), so an accepted wheel
+    /// speed does not reset the count for a non-holonomic constraint the gate
+    /// keeps refusing. At most 255.
     pub max_consecutive_rejections: u32,
     /// Whether a zero-velocity update may correct attitude.
     ///
@@ -163,6 +168,9 @@ impl GinsOptions {
         if !self.rejection_inflation.is_finite() || self.rejection_inflation < 1.0 {
             return Some(ConfigError::InvalidInflation);
         }
+        if self.max_consecutive_rejections > u32::from(u8::MAX) {
+            return Some(ConfigError::RejectionLimitTooLarge);
+        }
         None
     }
 }
@@ -186,6 +194,9 @@ pub enum ConfigError {
     /// one would shrink the covariance, making the deadlock it exists to break
     /// permanent.
     InvalidInflation,
+    /// The rejection limit is above 255, which the per-kind counters cannot
+    /// reach, so the recovery would silently never fire.
+    RejectionLimitTooLarge,
 }
 
 impl ConfigError {
@@ -198,6 +209,7 @@ impl ConfigError {
             Self::NegativeProcessNoise => "process noise densities must be >= 0",
             Self::InvalidLeverArm => "antenna lever arm is not finite",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
+            Self::RejectionLimitTooLarge => "max consecutive rejections must be <= 255",
         }
     }
 }

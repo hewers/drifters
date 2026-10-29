@@ -28,11 +28,11 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
 | | per-axis bias below 1 mm |
-| **Footprint** | **9.6 KiB** peak stack (15-state), 15.9 KiB (21-state), on Cortex-M4 |
+| **Footprint** | **9.5 KiB** peak stack (15-state), 15.8 KiB (21-state), on Cortex-M4 |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 455, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 463, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -191,21 +191,24 @@ segments, scored against comma's own post-processed pose:
 |---|---|---|---|
 | u-blox fixes | 1.40 m | | |
 | ESKF, IMU + GNSS | 1.40 m | 5.2° | 71 m / 313 m |
-| ESKF, + wheel speed and non-holonomic | **1.39 m** | **2.0°** | **11.6 m / 41 m** |
+| ESKF, + wheel speed, non-holonomic, zero-rate | 1.40 m | **1.15°** | **11.1 m / 34 m** |
 
 The receiver's error is a slowly varying metre that no IMU can see, so the
 fused fix is no better than the receiver's own. What the library buys on a car
-is the outage. Getting there meant measuring an 80 ms fix latency, a camera
-pitched 3.3° off the direction of travel, and a constraint sigma tight enough
-that the gate refused it exactly when the heading needed it. Details in
+is the outage. Getting there meant measuring an 80 ms fix latency and a camera
+pitched 3.3° off the direction of travel, and it changed the library twice: the
+lockout recovery counted rejections across all sensors, so an accepted wheel
+speed kept a refused constraint locked out through a whole outage, and there
+was no zero-angular-rate update to read a gyro bias at a stop. Details in
 [docs/comma2k19.md](docs/comma2k19.md).
 
 ## Status
 
 **Working and validated:** core math, strapdown mechanization, 21-state ESKF,
-loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
-odometer, barometric height, magnetometer heading), protobuf serialization,
-bare-metal Cortex-M, KF-GINS dataset regression.
+loosely-coupled GNSS, auxiliary sensors (ZUPT, zero angular rate,
+non-holonomic constraints, odometer, barometric height, magnetometer heading),
+protobuf serialization, bare-metal Cortex-M, KF-GINS and comma2k19 dataset
+regressions.
 
 **In progress:** the equivariant filter. It runs end to end on both datasets
 (see above) — symmetry group, lift, linearisation, group exponential, GCU and
