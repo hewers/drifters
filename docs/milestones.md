@@ -289,7 +289,7 @@ measured 0.033 m residual budget.
 The covariance is a separate question, and once it is stored factored the answer
 differs. `--features f32-covariance` changes nothing measurable — KF-GINS
 0.0330 m, NIS 1.459, GSDC 3.244, NEES 13.874, each matching `f64` — and removes
-41 % of the instructions retired per `add_imu` on Cortex-M4. Reasoning in
+85 % of the instructions retired per `add_imu` on Cortex-M4. Reasoning in
 [adr/0005](adr/0005-scalar-type.md).
 
 Mixed precision for the *states* remains open and belongs in M9.
@@ -321,20 +321,21 @@ without one on a desk.
 ### Answered without a board
 
 Instructions retired can be counted exactly: `qemu -icount shift=0` advances the
-virtual clock one tick per instruction, so SysTick counts instructions. That is
-not a cycle count — no pipeline, no wait states, no FPU latency — but it
-measures how much *work* a change removes, which on a part whose FPU is
-single-precision is most of the soft-float question. Per `add_imu` on
-`mps2-an386`:
+virtual clock 1 ns per instruction, SysTick ticks once per 40 of them on this
+board's 25 MHz clock, and the harness calibrates that ratio against a loop of
+known length. That is not a cycle count — no pipeline, no wait states, no FPU
+latency — but it measures how much *work* a change removes, which on a part
+whose FPU is single-precision is most of the soft-float question. Per `add_imu`
+on `mps2-an386`:
 
 | configuration | instructions |
 |---|---|
-| 21-state, `f64` | 21 398 |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| 21-state, `f64` | 3 539 256 |
+| 21-state, `f32-covariance` | **473 745** |
+| 15-state (`reduced-state`) | 1 577 641 |
 
 - [x] **Cost of software-emulated `f64`, in work rather than time.** The
-      single-precision covariance removes 45 % of the instructions retired. On
+      single-precision covariance removes 87 % of the instructions retired. On
       `thumbv7em` the UD routines compile to `vmul.f32`, `vdiv.f32` and
       `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
       `__aeabi_dadd` and `__aeabi_ddiv` without it. What remains for a board is
@@ -344,10 +345,10 @@ single-precision is most of the soft-float question. Per `add_imu` on
       NEES 13.874. See [adr/0005](adr/0005-scalar-type.md).
 - [x] **Where the remaining work is.** Stubbing one stage at a time against the
       shipping configuration: the covariance recursion dominates, the transition
-      matrix costs 986 instructions, and the earth model cost 1 560 until
+      matrix costs 39 440 instructions, and the earth model cost 62 400 until
       `Local` took it to one evaluation per point. Recorded in
-      [testing.md](testing.md), along with the two ways this measurement gave a
-      wrong answer first.
+      [testing.md](testing.md), along with the four ways this measurement gave
+      a wrong answer first.
 
 ### Still needs a board
 
@@ -619,19 +620,20 @@ Each step is gated on a measurement rather than on the previous one compiling.
       measurement Jacobian and the proto schema.
 
       Instructions retired per `add_imu` on `mps2-an386` say it does not pay.
-      `f32-covariance` already took the build from 22 415 to 13 238 — 41 % —
-      and of what remains the mechanization is 3 209, or 24 %. Even converting
-      as well as the covariance did, at 56 %, the rewrite is worth about 13 %
-      of current, and it buys that by spending accuracy the covariance change
-      never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
-      anchor, and doing the arithmetic in `f32` would cost more.
+      `f32-covariance` already took the build from 3 579 931 to 528 546, 85 %,
+      and of what remains the mechanization is 128 360, or 24 %. Even
+      converting as well as the covariance did, at 92 %, the rewrite is worth
+      about 22 % of current, and it buys that by spending accuracy the
+      covariance change never had to: `f32` position *storage* alone costs 7 %
+      of NIS at a 1 km anchor, and doing the arithmetic in `f32` would cost
+      more.
 
       One cheaper thing was worth more and cost no precision: the earth model
       was evaluated afresh at every call site, about twelve `sin`/`cos` per
       sample at two distinct latitudes.
       [`Local`](../crates/drifters-core/src/earth.rs) evaluates once, which took
-      `add_imu` from 13 238 to 11 868 — 10.4 % — with bit-identical results.
-      Building the transition matrix in `f32` was measured and left: 986
+      `add_imu` from 528 546 to 473 745 — 10.4 % — with bit-identical results.
+      Building the transition matrix in `f32` was measured and left: 39 440
       instructions, 8.3 %, of which single precision might return half, against
       either a second copy of the Jacobian or a lower-precision Φ recorded for
       the smoother. See [testing.md](testing.md).

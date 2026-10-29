@@ -349,17 +349,20 @@ harness therefore reports stack and size and takes **no** timing measurement,
 rather than publishing a number that cannot be supported.
 
 The trap specific to this project: Cortex-M4F's FPU is **single precision**, and
-Timing claims need real silicon — that work is not done, and nothing in this
-repository claims otherwise.
+`drifters` uses `f64` throughout, so every float operation on that target is
+software-emulated. Timing claims need real silicon — that work is not done, and
+nothing in this repository claims otherwise.
 
 **Instructions retired can be measured, though, and they answer the useful
-half.** `qemu-system-arm -icount shift=0` advances the virtual clock one tick
-per instruction, so SysTick counts instructions; the harness reports
-`INSTRUCTIONS add_imu` under that flag and garbage without it. It cannot see
-pipeline stalls, flash wait states or FPU latency, so it is not a cycle count.
-What it measures exactly is how much *work* a change removes — and on a part
-whose FPU is single-precision, that is the whole soft-float question, since an
-`__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
+half.** `qemu-system-arm -icount shift=0` advances the virtual clock 1 ns per
+instruction. SysTick runs from the board's 25 MHz clock on that virtual time,
+so it ticks once per 40 instructions; the harness finds that ratio by timing a
+loop of known length, converts, and reports `INSTRUCTIONS add_imu` under that
+flag and garbage without it. It cannot see pipeline stalls, flash wait states
+or FPU latency, so it is not a cycle count. What it measures exactly is how
+much *work* a change removes — and on a part whose FPU is single-precision,
+that is the whole soft-float question, since an `__aeabi_dmul` is tens of
+instructions where a `vmul.f32` is one.
 
 ```bash
 cd cortex-m-harness && cargo run --release -- -icount shift=0
@@ -369,23 +372,36 @@ Measured per `add_imu` on `mps2-an386`:
 
 | configuration | instructions |
 |---|---|
-| 21-state, `f64` | **21 398** |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| 21-state, `f64` | **3 539 256** |
+| 21-state, `f32-covariance` | **473 745** |
+| 15-state (`reduced-state`) | **1 577 641** |
 
-The single-precision covariance removes 45 % of the work on this part, having
-cost nothing measurable in accuracy.
+The single-precision covariance removes 87 % of the work on this part, having
+cost nothing measurable in accuracy. Dropping six states without it removes
+55 %.
+
+**Read the counter in the units it counts, and before it wraps.** This table
+was first published wrong twice over. It took SysTick ticks for instructions,
+when each is 40. And it timed 500 calls as one interval on a 24-bit counter,
+which the `f64` build overran twice and the 15-state build once: 21 398 and
+5 911 were what was left after the wraps, and "45 %" compared one of them with
+an `f32` figure that had not wrapped. Every `f32` figure on this page escaped
+the second error, so the stage costs and the 10.4 % below stood once scaled.
+The harness now times each call separately, using under 1 % of the counter's
+range, sums into a `u64`, and prints the calibrated ratio with a check against
+a second known loop.
 
 **Stub one stage out at a time, and leave the rest running.** Stubbing two at
 once gives a number that is not the cost of either: with the covariance
-propagation disabled, the transition matrix appeared to cost 1 396 instructions,
-because the optimiser could then discard most of what built it. Measured against
-the shipping configuration it is 986.
+propagation disabled, the transition matrix appeared to cost 55 840
+instructions, because the optimiser could then discard most of what built it.
+Measured against the shipping configuration it is 39 440.
 
 A stub also has to leave the filter doing the same work. Replacing the
-transition matrix with a dense fill read 7 419 — apparently a saving of 4 449 —
-because the fill was rank-deficient, Thornton found a non-positive pivot and
-returned early. The number was a measurement of the filter giving up.
+transition matrix with a dense fill appeared to save 177 960 instructions, over
+a third of the total, because the fill was rank-deficient, Thornton found a
+non-positive pivot and returned early. The number was a measurement of the
+filter giving up.
 
 That table is what a proposal to go further has to argue against, and it is
 worth having before the argument rather than after.
@@ -403,48 +419,47 @@ Two things beat it.
 `omega_ie_n`, `omega_en_n` and `dr_inv` each compute their own `sin`/`cos`, and
 the mechanization calls them about twelve times per sample at two distinct
 latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
-answers all of them, which took `add_imu` from 13 238 to **11 868** with
-`f32-covariance` — 10.4 % — and 22 415 to 21 398 without. Results are
-bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it to
-that.
+answers all of them, which took `add_imu` from 528 546 to **473 745** with
+`f32-covariance` — 10.4 % — and 3 579 931 to 3 539 256 without, 1.1 %. Results
+are bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it
+to that.
 
 **`core::simd`**, from a two-line change. Expressing the lane-split dot products
 as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 22 336 | 21 422 | −4 % |
-| `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
-
-(Measured before the earth-model change above, so both baselines are the older
-ones. The two are independent — one is the covariance recursion, the other the
-mechanization.)
+| `f64` | 3 539 256 | 3 593 445 | +1.5 % |
+| `f32-covariance` | 473 745 | **384 362** | **−18.9 %** |
 
 On a part with no SIMD unit at all, because eight lanes lower to eight
 independent FPU operations without the iterator machinery the hand-written form
-leaves for the optimiser to undo. It needs nightly, so it is behind
-`--cfg drifters_nightly_simd` — a cfg rather than a cargo feature, so that
-`--all-features` on stable cannot reach a nightly-only attribute — with a
+leaves for the optimiser to undo. In `f64` it measures slightly worse, so it
+only pays where the arithmetic is in hardware. (Both rows are the current tree
+on nightly 1.101. The survey that first recorded this read −17.5 %, against a
+scalar baseline the committed tree does not reproduce.) It needs nightly, so it
+is behind `--cfg drifters_nightly_simd` — a cfg rather than a cargo feature, so
+that `--all-features` on stable cannot reach a nightly-only attribute — with a
 non-blocking CI job so it cannot rot.
 
 Two things did *not* survive the same scrutiny, which is the useful half of a
 survey:
 
 - **`slice::as_chunks::<8>`** says what the lane loop means — a const-generic
-  chunk size, so no division to prove and no bound to check — and measured at
-  13 209 instructions against the hand-indexed 13 238, which is nothing. It is
-  stable since 1.88 and this crate's floor is 1.85, held so firmware on a
-  pinned toolchain can use it. Clippy's MSRV lint caught it; a tidier spelling
-  is not worth the floor.
+  chunk size, so no division to prove and no bound to check — and measured
+  0.2 % below the hand-indexed loop, which is nothing. It is stable since 1.88
+  and this crate's floor is 1.85, held so firmware on a pinned toolchain can
+  use it. Clippy's MSRV lint caught it; a tidier spelling is not worth the
+  floor.
 - **`generic_const_exprs`** would let `Ud::predict` be generic over the noise
   channel count instead of naming `N_NOISE`. The filter has exactly one noise
   shape, so the workaround costs a comment and nothing else.
 - **Building the transition matrix in `f32`.** It is narrowed for Thornton
-  immediately, so under the default build nothing would lose precision. It costs
-  986 instructions, 8.3 % of `add_imu`, of which single precision might return
-  half. Paying that in either a second copy of the Jacobian — the most subtle
-  code in the filter — or a lower-precision Φ recorded for the smoother is not
-  worth 4 %.
+  immediately, so under the default build nothing would lose precision. It
+  costs 39 440 instructions, 8.3 % of `add_imu`, of which single precision
+  might return half. Paying that in either a second copy of the Jacobian — the
+  most subtle code in the filter — or a lower-precision Φ recorded for the
+  smoother is not worth 4 %.
 
 ### Why this layer exists
 

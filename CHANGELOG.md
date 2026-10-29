@@ -20,6 +20,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
   and handed the filter `diag(σ²)` as an ε-coordinate covariance, which the two
   are only at the anchor with no velocity. Nothing in the filter changed, and no
   dataset result moves.
+- **Cortex-M instruction counts are instructions.** The bare-metal harness took
+  SysTick for an instruction counter under `qemu -icount shift=0`, when on
+  `mps2-an386` it ticks once per 40; it now calibrates the ratio against a loop
+  of known length. It also timed 500 calls as one interval on the 24-bit
+  counter, which the `f64` and 15-state builds overran. Per `add_imu`: 3 539 256
+  in `f64`, 473 745 with `f32-covariance` and 1 577 641 at 15 states, so the
+  single-precision covariance removes 87 % of the work rather than the 45 %
+  documented. Comparisons between `f32-covariance` builds were only mis-scaled
+  and stand.
 
 ### Added
 
@@ -41,8 +50,9 @@ breaking wire change becomes `v2` rather than a crate version bump.
   in [`adr/0004`](docs/adr/0004-linear-algebra.md).
 - **`--cfg drifters_nightly_simd`** — expresses the lane-split dot products as
   `core::simd` vectors. Nightly only, off by default, and not a cargo feature so
-  that `--all-features` on stable is unaffected. Worth 17.5 % of the
-  instructions retired per `add_imu` on Cortex-M4 with `f32-covariance`.
+  that `--all-features` on stable is unaffected. Worth 18.9 % of the
+  instructions retired per `add_imu` on Cortex-M4 with `f32-covariance`;
+  without it, 1.5 % worse.
 - **`drifters-filter::anchor`** — the re-anchoring transform: the
   block-diagonal Jacobian (rotation on position, velocity and attitude error;
   identity on the body-frame IMU errors) and `P ← J P Jᵀ` over the factored

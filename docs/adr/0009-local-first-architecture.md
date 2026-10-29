@@ -430,6 +430,6 @@ nothing to keep at 200 Hz.
 
 **The win is larger on the target.** x86 vectorises; a Cortex-M4F does not, and
 carries `f64` in software. Instructions retired per `add_imu` on `mps2-an386`,
-under `qemu -icount shift=0`: 22 415 in double precision, **13 238** with
+under `qemu -icount shift=0`: 3 579 931 in double precision, **528 546** with
 `f32-covariance`, which the factorisation is what allows. Cycles still need a
 board, since QEMU models no pipeline.

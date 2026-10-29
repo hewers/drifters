@@ -18,7 +18,7 @@
 //! | does the code run bare-metal at all | **exact** |
 //! | stack high-water mark | **exact** — it is just memory writes |
 //! | code and data size | **exact** — from the linker, not QEMU |
-//! | instruction counts | deterministic under `-icount`, good for A/B |
+//! | instructions retired | **exact** under `-icount shift=0`, calibrated below |
 //! | **cycle counts, wall-clock timing** | **worthless** |
 //!
 //! QEMU models no pipeline, no cache, no flash wait states and no FPU latency.
@@ -31,8 +31,9 @@
 //! -builtins` routines. QEMU executes them correctly and tells you nothing
 //! about what they cost. Any timing claim needs real silicon.
 //!
-//! So this harness reports **stack and size**, which are exact, and deliberately
-//! does not report cycles.
+//! So this harness reports **stack and size**, which are exact, and instructions
+//! retired when run under `-icount shift=0`, and deliberately does not report
+//! cycles.
 
 #![no_std]
 #![no_main]
@@ -126,6 +127,86 @@ fn measure<T>(bottom: usize, workload: impl FnOnce() -> T) -> (T, usize) {
     (value, sp.saturating_sub(deepest))
 }
 
+/// SysTick's current-value register is 24 bits wide.
+const SYST_MASK: u32 = 0x00FF_FFFF;
+
+/// Iterations of the calibration loop, at two instructions each.
+///
+/// 800 000 instructions is 20 000 ticks on `mps2-an386`. Long enough that
+/// landing a tick out, depending on where the loop starts in SysTick's period,
+/// moves the ratio by 0.005 % — less than the hundredth [`InstructionClock`]
+/// rounds it to — and short enough to fit the 24-bit counter at any clock up
+/// to 1 GHz.
+const CALIBRATION_ITERATIONS: u32 = 400_000;
+
+/// Retire exactly `2 * iterations` instructions: a `subs` and a `bne` per turn.
+///
+/// `iterations` must not be zero, or the loop runs 2^32 times.
+#[inline(always)]
+fn spin(iterations: u32) {
+    // SAFETY: register arithmetic and a branch to a local label. No memory or
+    // stack is touched, and the flags `subs` sets are not preserved, which
+    // `asm!` assumes unless told otherwise.
+    unsafe {
+        core::arch::asm!(
+            "1:",
+            "subs {0}, {0}, #1",
+            "bne 1b",
+            inout(reg) iterations => _,
+            options(nomem, nostack),
+        );
+    }
+}
+
+/// SysTick ticks that elapse while `work` runs.
+///
+/// Wraps if `work` takes 2^24 ticks or more. One `add_imu` takes under 1 % of
+/// that, but 500 of them in `f64` take 2.6 times it, and timing them as one
+/// batch silently lost two whole wraps. So calls are timed one at a time and
+/// summed into a `u64`.
+fn ticks(work: impl FnOnce()) -> u32 {
+    use core::sync::atomic::{compiler_fence, Ordering};
+    let start = cortex_m::peripheral::SYST::get_current();
+    compiler_fence(Ordering::SeqCst);
+    work();
+    compiler_fence(Ordering::SeqCst);
+    let end = cortex_m::peripheral::SYST::get_current();
+    // SysTick counts down.
+    start.wrapping_sub(end) & SYST_MASK
+}
+
+/// Converts SysTick ticks to instructions retired.
+///
+/// `-icount shift=0` advances QEMU's virtual clock 1 ns per instruction, but
+/// SysTick runs from the board's system clock, not from that: 25 MHz on
+/// `mps2-an386`, so one tick per 40 instructions. The ratio is measured by
+/// timing a loop of known length rather than assumed, so that a different
+/// board or QEMU version cannot silently change what the figures mean.
+struct InstructionClock {
+    /// Instructions per tick, in hundredths. Rounded, so that the calibration's
+    /// own tick of phase does not make every figure drift with whatever code
+    /// happens to precede it.
+    per_tick_x100: u64,
+}
+
+impl InstructionClock {
+    /// Instructions in the calibration loop.
+    const INSTRUCTIONS: u64 = 2 * CALIBRATION_ITERATIONS as u64;
+
+    /// Time the calibration loop. SysTick must already be running from the
+    /// core clock.
+    fn calibrate() -> (Self, u32) {
+        let counted = ticks(|| spin(CALIBRATION_ITERATIONS));
+        let t = u64::from(counted).max(1);
+        let per_tick_x100 = (Self::INSTRUCTIONS * 100 + t / 2) / t;
+        (Self { per_tick_x100 }, counted)
+    }
+
+    fn instructions(&self, ticks: u64) -> u64 {
+        (ticks * self.per_tick_x100 + 50) / 100
+    }
+}
+
 /// A stationary IMU sample, enough to exercise the full data path.
 fn sample(t: f64) -> ImuSample {
     ImuSample {
@@ -205,11 +286,16 @@ fn main() -> ! {
     hprintln!("");
     // Instructions retired per `add_imu`, under `qemu -icount shift=0`.
     //
-    // Only meaningful with that flag: `-icount shift=0` makes QEMU's virtual
-    // clock advance one tick per instruction, so SysTick counts instructions
-    // rather than time. Without it the number below is emulator wall-clock and
-    // means nothing — the runner in `.cargo/config.toml` does not pass it, so
-    // read this line only from an explicit `-icount` invocation. See
+    // Only meaningful with that flag. `-icount shift=0` advances QEMU's virtual
+    // clock 1 ns per instruction, and SysTick runs from the 25 MHz system clock
+    // on that virtual time, so it decrements once per 40 instructions — not
+    // once per instruction, which is what this harness used to assume and
+    // print. `InstructionClock` measures the ratio against a loop of known
+    // length instead, and the check line times a second, shorter one through
+    // the same path so the conversion is verified on every run. Without the
+    // flag, SysTick follows emulator wall-clock and every figure below means
+    // nothing. The runner in `.cargo/config.toml` does not pass it, so read
+    // these lines only from an explicit `-icount` invocation. See
     // docs/testing.md Layer 9.
     //
     // Not a cycle count. It cannot see pipeline stalls, flash wait states or
@@ -224,22 +310,36 @@ fn main() -> ! {
             let syst = &mut p.SYST;
             use cortex_m::peripheral::syst::SystClkSource;
             syst.set_clock_source(SystClkSource::Core);
-            syst.set_reload(0x00FF_FFFF);
+            syst.set_reload(SYST_MASK);
             syst.clear_current();
             syst.enable_counter();
 
-            // Warm, then measure a fixed batch.
+            let (clock, counted) = InstructionClock::calibrate();
+            hprintln!(
+                "SysTick: {}.{:02} instructions per tick ({} instructions in {} ticks)",
+                clock.per_tick_x100 / 100,
+                clock.per_tick_x100 % 100,
+                InstructionClock::INSTRUCTIONS,
+                counted
+            );
+            const CHECK_ITERATIONS: u32 = 15_000;
+            let check = clock.instructions(u64::from(ticks(|| spin(CHECK_ITERATIONS))));
+            hprintln!("check: a {}-instruction loop measures {}", 2 * CHECK_ITERATIONS, check);
+
+            // Warm, then time each call and sum.
             for k in 0..50 {
                 let _ = engine.add_imu(sample(1.0 + 0.005 * k as f64));
             }
-            let start = cortex_m::peripheral::SYST::get_current();
-            for k in 0..500 {
-                let _ = engine.add_imu(sample(2.0 + 0.005 * k as f64));
+            const CALLS: u64 = 500;
+            let mut total: u64 = 0;
+            for k in 0..CALLS {
+                let s = core::hint::black_box(sample(2.0 + 0.005 * k as f64));
+                total += u64::from(ticks(|| {
+                    let _ = engine.add_imu(s);
+                }));
             }
-            let end = cortex_m::peripheral::SYST::get_current();
-            // SysTick counts down.
-            let ticks = start.wrapping_sub(end) & 0x00FF_FFFF;
-            hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", ticks / 500);
+            let per_call = (clock.instructions(total) + CALLS / 2) / CALLS;
+            hprintln!("INSTRUCTIONS add_imu = {} (only under -icount shift=0)", per_call);
         }
     }
 

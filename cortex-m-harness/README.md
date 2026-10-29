@@ -20,6 +20,7 @@ rustup target add thumbv7em-none-eabihf
 | runs bare-metal at all | **exact** |
 | stack high-water mark | **exact** — stack painting measures memory writes, which QEMU emulates faithfully |
 | code and data size | **exact** — from the linker, not from QEMU |
+| instructions retired | **exact** with `cargo run --release -- -icount shift=0`, calibrated against a loop of known length; meaningless without the flag |
 | cycle counts, wall-clock timing | **do not use** |
 
 QEMU models no pipeline, no cache, no flash wait states and no FPU latency, so
