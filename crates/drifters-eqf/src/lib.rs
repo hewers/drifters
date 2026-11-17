@@ -33,6 +33,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod config;
+pub mod engine;
 pub mod filter;
 pub mod gcu;
 pub mod group;
@@ -40,3 +42,11 @@ pub mod lie;
 pub mod lift;
 pub mod linear;
 pub mod local;
+pub mod physical;
+pub mod rewind;
+
+pub use config::{ConfigError, EqfOptions};
+pub use drifters_core::estimator::{Estimator, FilterError, GnssQueued};
+pub use engine::EqfEngine;
+pub use filter::{EqFilter, ProcessNoise};
+pub use rewind::EqfRewindEngine;

@@ -1,24 +1,21 @@
-//! Apply a GNSS fix after the engine has already propagated past its epoch.
+//! Apply a GNSS fix to the ESKF after the engine has already propagated past
+//! its epoch.
 //!
 //! [`GinsEngine`] applies a fix from inside the IMU interval that contains
 //! it, which assumes the fix is in hand before that interval is pushed. On a
-//! device it is not. A receiver reports a fix tens to hundreds of
-//! milliseconds after the epoch it describes, and the IMU stream, arriving at
-//! 100 Hz or more, has long since passed. The engine refuses such a fix as
-//! [`GnssQueued::Stale`], correctly, because nothing in a forward-only filter
-//! can absorb it. What is left is to hold every IMU sample back until its fix
-//! arrives, which puts the receiver's latency on the navigation output, or to
-//! rewind.
+//! device it is not: a receiver reports a fix tens to hundreds of
+//! milliseconds after the epoch it describes, and the engine refuses it as
+//! [`GnssQueued::Stale`](crate::GnssQueued::Stale). [`RewindEngine`] applies it anyway, by restoring a
+//! snapshot from before the epoch and replaying the IMU samples and aiding
+//! calls since, with the fix where it belonged. The result is the state the
+//! engine would have reached had the fix been on time, **bit for bit**, which
+//! is what this module's tests hold it to.
 //!
-//! [`RewindEngine`] rewinds. It keeps the engine, two earlier snapshots of it,
-//! the IMU samples pushed since the older snapshot, and the aiding calls made
-//! in that span. A late fix restores the most recent snapshot that precedes
-//! it, queues the fix where it would have been queued on time, and pushes the
-//! recorded samples and aiding calls over it again. What comes out is the
-//! state the engine would have reached had the fix been on time, and it is
-//! that state **bit for bit**: the same calls, in the same order, on a `Copy`
-//! of the same engine. The tests pin it against a plain engine handed the same
-//! fixes on time.
+//! The machinery — the two anchors, the rings, what counts as late and what is
+//! covered — is [`drifters_core::rewind`], shared with the equivariant
+//! filter's engine, and its documentation is the account of how it works.
+//! This module is the ESKF's side: the aiding calls a replay can repeat, and
+//! what it all costs at 21 states.
 //!
 //! ```
 //! use drifters_core::prelude::*;
@@ -54,37 +51,6 @@
 //! # Ok::<(), drifters_filter::FilterError>(())
 //! ```
 //!
-//! # Lateness, and what is covered
-//!
-//! A fix is *n samples late* when `n` IMU samples have been pushed at or past
-//! its epoch: the one that should have consumed it, and every one since. That
-//! is also the fewest samples any replay could push to apply it.
-//!
-//! Two snapshots rather than one so that steady state costs no propagation.
-//! With a single snapshot refreshed every `W` samples, coverage falls to
-//! nothing just before each refresh; holding it at `W` would mean advancing
-//! the snapshot on every sample, which is a second filter. With two, the newer
-//! is refreshed every `W` samples and the older is whatever the newer was
-//! before, so the older anchor is always between `W` and `2W − 1` samples
-//! back. Refreshing is two copies of the engine and nothing else.
-//!
-//! So a fix up to `W` samples late is **always** applicable, one up to
-//! `2W − 1` late is applicable depending on where the stream is between two
-//! refreshes, and anything older is [`FixOutcome::Stale`] and counted.
-//!
-//! `W` is [`RewindEngine::WINDOW`], which is `SAMPLES / 2`. The const
-//! parameter is the ring's length rather than the window because stable Rust
-//! cannot write `[T; 2 * W]`, and the ring is the one array whose size
-//! depends on it. Choose `SAMPLES` as twice the number of IMU intervals the
-//! receiver's worst-case latency spans: at 200 Hz and 300 ms, `W = 60` and
-//! `SAMPLES = 120`.
-//!
-//! A fix stamped with the time of the latest sample is one sample late, not
-//! on time. On time it would have been applied at the end of that sample,
-//! before any aid that followed; queued afterwards the engine would apply it
-//! at the start of the next, after them. Those are the same update only when
-//! nothing came between, so it takes the rewind.
-//!
 //! # Cost
 //!
 //! Steady state is copying: 64 bytes of sample into the ring per `add_imu`, a
@@ -111,20 +77,16 @@
 //! means are this benchmark's, whose fixes land on three phases of the
 //! refresh; over all phases the mean is `L + (W − 1) / 2`.
 //!
-//! No timing exists for a target, but the count does: 21 398 instructions per
-//! `add_imu` on Cortex-M4 (docs/testing.md, Layer 9) makes the 300 ms case
-//! between 1.3 and 2.6 million instructions, arriving at once. That is the
-//! number to hold against the gap between two IMU samples. This type does not
-//! spread a replay over several calls.
-//!
-//! Where that burst cannot be afforded the other architecture is a **delayed
-//! horizon with an output predictor**: run the filter `W` samples behind real
-//! time, so that every fix is on time when its interval is reached, and
-//! integrate the last `W` samples forward from the filtered state for output.
-//! Its cost is flat. Its output is a prediction, with a covariance the filter
-//! does not carry. Rewind was built first because of a property the horizon
-//! cannot have: the output is the filter's own, and whether it is right is
-//! checkable bit for bit against on-time delivery.
+//! No timing exists for a target, but the count does. An `add_imu` on
+//! Cortex-M4 retires 3.5 million instructions in the default build and
+//! 473 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
+//! the 300 ms case between 212 and 421 million instructions by default and
+//! between 28 and 56 million with `f32-covariance`, arriving at once. That is
+//! the number to hold against the gap between two IMU samples, and it does
+//! not fit in one: at an instruction per cycle, which is the best that core
+//! does, the smaller range is 34 to 67 sample periods of work at 168 MHz and
+//! 200 Hz. A replay is not spread over several calls, so on such a part the
+//! samples that arrive during one have to be queued by the caller.
 //!
 //! # Memory
 //!
@@ -148,154 +110,125 @@
 //! not it is recording, the rewind layer holds three engines, and a replay
 //! cannot reproduce the checkpoints a caller already took. Smooth, or rewind.
 //!
-//! A replay runs in place on the live engine, so it adds no engine-sized
-//! temporary to the stack. That is by construction; the bare-metal harness
-//! does not measure this path yet.
-//!
 //! # What is recorded, and what is not
 //!
-//! The aiding calls this type mirrors are recorded: ZUPT, non-holonomic, wheel
-//! speed, height and heading, and every GNSS fix queued through it. A replay
-//! repeats each after the sample it followed, in the order it was made, and
-//! re-evaluates its gate there. An aid the live engine rejected may be
-//! accepted on replay, and the reverse, which is the point: the late fix
-//! changes the state the gate judged.
-//!
-//! [`GinsEngine::apply_pseudoranges`] and [`GinsEngine::apply`] are not
+//! The five aiding calls this type mirrors — ZUPT, non-holonomic, wheel speed,
+//! height and heading — as an [`Aid`] each, and every GNSS fix queued through
+//! it. [`GinsEngine::apply_pseudoranges`] and [`GinsEngine::apply`] are not
 //! mirrored. Their inputs are a slice and a generic measurement, neither of
 //! which fits a fixed-size record, and a call that reached the inner engine
 //! around this type would be invisible to a replay. The inner engine is
 //! therefore reachable read-only, through [`RewindEngine::engine`].
 //!
-//! `EVENTS` must hold every aiding call made over `SAMPLES` intervals. When it
-//! cannot, the oldest record is dropped and
-//! [`RewindEngine::dropped_event_count`] says so. A replay that needed it
-//! omits that aid, and from then on the state is not the on-time one. Zero on
-//! a live system is the thing to check; this module's own tests failed that
-//! way first, on a fixture sized too small for its aids.
-//!
-//! Fixes inherit the engine's single pending slot. One queued, live or on
-//! replay, while another is still waiting replaces it, so fixes should reach
-//! this type in epoch order. Late is the whole point; out of order is not
-//! supported.
-//!
-//! # Errors
-//!
-//! A [`FilterError`] during a replay stops it, and the live engine is left
-//! where it failed: partly replayed, the anchors as they were. It is the error
-//! the engine would have returned on time, from a filter that has diverged or
-//! been handed a singular measurement, and what remains is not a state to
-//! continue from. The same holds for an error from [`RewindEngine::add_imu`]:
-//! the sample is not recorded, and the record is no longer a history.
+//! `EVENTS` must hold every aiding call made over `SAMPLES` intervals, or a
+//! replay omits one and [`RewindEngine::dropped_event_count`] says so. This
+//! module's own tests failed that way first, on a fixture sized too small for
+//! its aids.
 
 use drifters_core::frames::Lla;
 use drifters_core::math::Vec3;
+use drifters_core::rewind::{Record, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample, NavState};
 use drifters_core::F;
 
 use crate::config::{ConfigError, GinsOptions};
-use crate::engine::{place, GinsEngine, GnssPlacement, GnssQueued};
+use crate::engine::GinsEngine;
 use crate::eskf::FilterError;
 use crate::state::{StateMatrix, N_STATE};
 
 /// What [`RewindEngine::add_gnss`] did with a fix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use = "a Stale or Invalid fix was not applied"]
+///
+/// Shared with the equivariant filter's rewind layer, so it is defined beside
+/// the machinery in [`drifters_core::rewind`] and re-exported here.
+pub use drifters_core::rewind::FixOutcome;
+
+/// One of the ESKF's aiding calls, as a value a replay can repeat.
+///
+/// Each variant is the arguments of the [`GinsEngine`] method of the same
+/// name, and [`Rewindable::apply_aid`] calls that method, so a replay goes
+/// down exactly the path the original call did.
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum FixOutcome {
-    /// The epoch is ahead of the engine. Queued, exactly as
-    /// [`GinsEngine::add_gnss`] would have.
-    Queued,
-    /// Ahead of the engine, and it displaced a fix that was still waiting.
-    Replaced,
-    /// The epoch had been passed. An anchor was restored, the fix queued where
-    /// it would have been consumed on time, and `samples` IMU samples were
-    /// pushed again over it.
-    Rewound {
-        /// How many samples the replay re-propagated.
-        samples: u32,
+pub enum Aid {
+    /// [`GinsEngine::apply_zupt`].
+    Zupt {
+        /// Per-axis confidence in the vehicle being still, m/s.
+        sigma: Vec3,
     },
-    /// The epoch is behind the older anchor, or falls in a gap in the IMU
-    /// stream. Not applied; counted in [`RewindEngine::stale_fix_count`].
-    Stale,
-    /// Failed [`GnssFix::is_valid`]. Not applied.
-    Invalid,
+    /// [`GinsEngine::apply_nonholonomic`].
+    Nonholonomic {
+        /// Lateral and vertical sigmas, m/s.
+        sigma: (F, F),
+        /// Speed below which the constraint is skipped, m/s.
+        min_speed: F,
+    },
+    /// [`GinsEngine::apply_wheel_speed`].
+    WheelSpeed {
+        /// Speed along the body forward axis, m/s.
+        speed: F,
+        /// Its one-sigma noise, m/s.
+        sigma: F,
+    },
+    /// [`GinsEngine::apply_height`].
+    Height {
+        /// Height above the WGS-84 ellipsoid, metres.
+        height: F,
+        /// Its one-sigma noise, metres.
+        sigma: F,
+    },
+    /// [`GinsEngine::apply_heading`].
+    Heading {
+        /// True heading, radians.
+        heading: F,
+        /// Its one-sigma noise, radians.
+        sigma: F,
+    },
 }
 
-/// One aiding call, recorded so a replay can repeat it.
-#[derive(Clone, Copy, Debug)]
-enum Aiding {
-    Gnss(GnssFix),
-    Zupt { sigma: Vec3 },
-    Nonholonomic { sigma: (F, F), min_speed: F },
-    WheelSpeed { speed: F, sigma: F },
-    Height { height: F, sigma: F },
-    Heading { heading: F, sigma: F },
-}
+impl Rewindable for GinsEngine {
+    type Aid = Aid;
 
-/// An aiding call and where in the IMU stream it was made.
-#[derive(Clone, Copy, Debug)]
-struct Event {
-    /// Sequence number of the IMU sample this call followed. A replay from an
-    /// anchor at sequence `s` repeats the events tagged `s` before pushing
-    /// sample `s + 1`.
-    after: u64,
-    aiding: Aiding,
-}
+    fn apply_aid(&mut self, aid: &Aid) -> Result<bool, FilterError> {
+        match *aid {
+            Aid::Zupt { sigma } => self.apply_zupt(sigma),
+            Aid::Nonholonomic { sigma, min_speed } => self.apply_nonholonomic(sigma, min_speed),
+            Aid::WheelSpeed { speed, sigma } => self.apply_wheel_speed(speed, sigma),
+            Aid::Height { height, sigma } => self.apply_height(height, sigma),
+            Aid::Heading { heading, sigma } => self.apply_heading(heading, sigma),
+        }
+    }
 
-impl Event {
-    /// Filler for the unused tail of the event ring.
-    const EMPTY: Self = Self {
-        after: 0,
-        aiding: Aiding::Zupt { sigma: Vec3::ZERO },
-    };
+    #[inline]
+    fn has_time_origin(&self) -> bool {
+        GinsEngine::has_time_origin(self)
+    }
+
+    #[inline]
+    fn epoch_tolerance(&self) -> F {
+        GinsEngine::epoch_tolerance(self)
+    }
 }
 
 /// A [`GinsEngine`] that can apply a GNSS fix after its epoch has passed.
 ///
-/// `SAMPLES` is the IMU ring length and sets the coverage: a fix up to
+/// [`Rewind`] over the ESKF, with the engine's aiding calls under their own
+/// names. `SAMPLES` is the IMU ring length and sets the coverage: a fix up to
 /// `SAMPLES / 2` samples late is always applicable, one up to `SAMPLES − 1`
 /// late sometimes is, and anything older is [`FixOutcome::Stale`]. `EVENTS`
-/// is how many aiding calls can be recorded over that span. See the
-/// [module documentation](self) for what "late" counts, and for the cost.
+/// is how many aiding calls can be recorded over that span.
 ///
 /// `Clone` but deliberately not `Copy`, unlike the engine it wraps. It is
 /// three of them and two rings, and a type this size should not be copied by
 /// an assignment that did not say so.
 #[derive(Clone, Debug)]
 pub struct RewindEngine<const SAMPLES: usize, const EVENTS: usize> {
-    /// The engine as the caller sees it.
-    live: GinsEngine,
-    /// The engine as it was just after sample `older_seq`.
-    older: GinsEngine,
-    /// The engine as it was just after sample `newer_seq`.
-    newer: GinsEngine,
-    older_seq: u64,
-    newer_seq: u64,
-    /// Samples accepted so far; the sequence number of the latest one.
-    seq: u64,
-    /// Samples `older_seq + 1 ..= seq`, oldest at `head`.
-    samples: [ImuSample; SAMPLES],
-    head: usize,
-    len: usize,
-    /// Aiding calls since the older anchor, in the order they were made.
-    events: [Event; EVENTS],
-    events_len: usize,
-    rewinds: u32,
-    stale_fixes: u32,
-    dropped_events: u32,
-    replayed_samples: u64,
-    longest_replay: u32,
+    inner: Rewind<GinsEngine, SAMPLES, EVENTS>,
 }
 
 impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     /// The lateness, in samples, that is always covered.
-    pub const WINDOW: usize = SAMPLES / 2;
-
-    /// A ring shorter than two cannot hold a window; evaluated at
-    /// monomorphisation, so the mistake is a compile error.
-    const SIZED: () = assert!(SAMPLES >= 2, "RewindEngine needs SAMPLES >= 2");
+    pub const WINDOW: usize = Rewind::<GinsEngine, SAMPLES, EVENTS>::WINDOW;
 
     /// Build an engine from its configuration, validating it up front.
     pub fn new(options: GinsOptions) -> Result<Self, ConfigError> {
@@ -305,25 +238,15 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     /// Wrap an engine. Its current state becomes both anchors, so nothing
     /// before this call can be rewound to.
     pub fn from_engine(engine: GinsEngine) -> Self {
-        let () = Self::SIZED;
         Self {
-            live: engine,
-            older: engine,
-            newer: engine,
-            older_seq: 0,
-            newer_seq: 0,
-            seq: 0,
-            samples: [ImuSample::default(); SAMPLES],
-            head: 0,
-            len: 0,
-            events: [Event::EMPTY; EVENTS],
-            events_len: 0,
-            rewinds: 0,
-            stale_fixes: 0,
-            dropped_events: 0,
-            replayed_samples: 0,
-            longest_replay: 0,
+            inner: Rewind::new(engine),
         }
+    }
+
+    /// The machinery itself, for code written against [`Rewind`] generically.
+    #[inline]
+    pub fn rewind(&self) -> &Rewind<GinsEngine, SAMPLES, EVENTS> {
+        &self.inner
     }
 
     /// The wrapped engine, read-only.
@@ -332,441 +255,154 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     /// type would be absent from the record a replay works from.
     #[inline]
     pub fn engine(&self) -> &GinsEngine {
-        &self.live
+        self.inner.engine()
     }
 
     /// See [`GinsEngine::nav_state`].
     #[inline]
     pub fn nav_state(&self) -> NavState {
-        self.live.nav_state()
+        self.engine().nav_state()
     }
 
     /// See [`GinsEngine::covariance`].
     #[inline]
     pub fn covariance(&self) -> StateMatrix {
-        self.live.covariance()
+        self.engine().covariance()
     }
 
     /// See [`GinsEngine::std_deviations`].
     #[inline]
     pub fn std_deviations(&self) -> [F; N_STATE] {
-        self.live.std_deviations()
+        self.engine().std_deviations()
     }
 
     /// See [`GinsEngine::timestamp`].
     #[inline]
     pub fn timestamp(&self) -> GpsTime {
-        self.live.timestamp()
+        self.engine().timestamp()
     }
 
     /// See [`GinsEngine::options`].
     #[inline]
     pub fn options(&self) -> &GinsOptions {
-        self.live.options()
+        self.engine().options()
     }
 
     /// See [`GinsEngine::antenna_position`].
     #[inline]
     pub fn antenna_position(&self) -> Lla {
-        self.live.antenna_position()
+        self.engine().antenna_position()
     }
 
     /// See [`GinsEngine::last_nis`].
     #[inline]
     pub fn last_nis(&self) -> Option<F> {
-        self.live.last_nis()
+        self.engine().last_nis()
     }
 
     /// See [`GinsEngine::consecutive_rejections`].
     #[inline]
     pub fn consecutive_rejections(&self) -> u32 {
-        self.live.consecutive_rejections()
+        self.engine().consecutive_rejections()
     }
 
     /// See [`GinsEngine::inflation_count`].
     #[inline]
     pub fn inflation_count(&self) -> u32 {
-        self.live.inflation_count()
+        self.engine().inflation_count()
     }
 
-    /// How many fixes have been applied by rewinding.
+    /// See [`Rewind::rewind_count`].
     #[inline]
     pub fn rewind_count(&self) -> u32 {
-        self.rewinds
+        self.inner.rewind_count()
     }
 
-    /// Samples re-propagated by rewinds, in total.
-    ///
-    /// Divided by [`RewindEngine::rewind_count`] it is the mean replay length,
-    /// which against `WINDOW` says whether the ring is sized to the latency
-    /// actually seen.
+    /// See [`Rewind::replayed_sample_count`].
     #[inline]
     pub fn replayed_sample_count(&self) -> u64 {
-        self.replayed_samples
+        self.inner.replayed_sample_count()
     }
 
-    /// The most samples any single rewind re-propagated.
-    ///
-    /// The burst a deadline has to absorb.
+    /// See [`Rewind::longest_replay`].
     #[inline]
     pub fn longest_replay(&self) -> u32 {
-        self.longest_replay
+        self.inner.longest_replay()
     }
 
     /// Fixes that were behind both anchors, or fell in a gap in the stream.
-    ///
-    /// Non-zero means the receiver's latency exceeds what `SAMPLES` covers.
+    /// See [`Rewind::stale_fix_count`].
     #[inline]
     pub fn stale_fix_count(&self) -> u32 {
-        self.stale_fixes
+        self.inner.stale_fix_count()
     }
 
-    /// Aiding records lost because the event ring was full.
-    ///
-    /// Any value but zero means a replay since may have omitted an aid, and
-    /// `EVENTS` is too small for the aiding rate.
+    /// See [`Rewind::dropped_event_count`].
     #[inline]
     pub fn dropped_event_count(&self) -> u32 {
-        self.dropped_events
+        self.inner.dropped_event_count()
     }
 
-    /// The greatest lateness, in samples, applicable right now.
-    ///
-    /// Between [`RewindEngine::WINDOW`] and `2 * WINDOW − 1` once the stream
-    /// has run that long, and less before it has.
+    /// See [`Rewind::coverage`].
     #[inline]
     pub fn coverage(&self) -> usize {
-        self.len
+        self.inner.coverage()
     }
 
-    /// Push one IMU sample. See [`GinsEngine::add_imu`].
-    ///
-    /// An invalid sample is dropped by the engine and so is not recorded. A
-    /// sample the engine returns an error for is not recorded either, and the
-    /// record is no longer a faithful history after one.
+    /// See [`Rewind::history`].
+    #[inline]
+    pub fn history(&self) -> &[Record<Aid>] {
+        self.inner.history()
+    }
+
+    /// Push one IMU sample. See [`Rewind::add_imu`].
+    #[inline]
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
-        if !raw.is_valid() {
-            return Ok(());
-        }
-        self.live.add_imu(raw)?;
-        self.seq += 1;
-        self.push_sample(raw);
-        if self.seq - self.newer_seq >= Self::WINDOW as u64 {
-            self.rotate();
-        }
-        Ok(())
+        self.inner.add_imu(raw)
     }
 
-    /// Queue or apply a GNSS fix.
-    ///
-    /// A fix ahead of the engine is queued as [`GinsEngine::add_gnss`] would
-    /// queue it. One behind the engine is applied by rewinding, and the
-    /// outcome says how far. See the module documentation for the cost and
-    /// for what happens to a fix behind both anchors.
+    /// Queue or apply a GNSS fix. See [`Rewind::add_gnss`].
+    #[inline]
     pub fn add_gnss(&mut self, fix: GnssFix) -> Result<FixOutcome, FilterError> {
-        if !fix.is_valid() {
-            return Ok(FixOutcome::Invalid);
-        }
-        let tolerance = self.live.epoch_tolerance();
+        self.inner.add_gnss(fix)
+    }
 
-        // Ahead of the stream: a later interval will contain it, and the
-        // engine's own queue is the right place. Before the first sample there
-        // is no stream to be behind.
-        //
-        // Strictly ahead. A fix within tolerance of the latest sample's end
-        // would have been applied at the end of that sample had it been on
-        // time, before any aid that followed. Queued now it would be applied
-        // at the start of the next one, after them — the same update at the
-        // same state only when nothing came between, which this type cannot
-        // promise. So it is late, by one sample, and takes the other path.
-        if !self.live.has_time_origin() || fix.time.seconds_since(self.live.timestamp()) > tolerance
-        {
-            return Ok(match self.live.add_gnss(fix) {
-                GnssQueued::Queued => {
-                    self.record(self.seq, Aiding::Gnss(fix));
-                    FixOutcome::Queued
-                }
-                GnssQueued::Replaced => {
-                    self.record(self.seq, Aiding::Gnss(fix));
-                    FixOutcome::Replaced
-                }
-                GnssQueued::Stale => {
-                    self.stale_fixes = self.stale_fixes.saturating_add(1);
-                    FixOutcome::Stale
-                }
-                GnssQueued::Invalid => FixOutcome::Invalid,
-            });
-        }
-
-        // Behind the stream. The sample that consumes a fix is the first one
-        // whose end the fix does not lie beyond; the older anchor was taken
-        // after its own sample, so a fix that sample would have consumed is
-        // out of reach.
-        if self.older.has_time_origin()
-            && fix.time.seconds_since(self.older.timestamp()) <= tolerance
-        {
-            self.stale_fixes = self.stale_fixes.saturating_add(1);
-            return Ok(FixOutcome::Stale);
-        }
-        let Some(consumer) = self.consuming_sample(fix.time, tolerance) else {
-            // Cannot happen while the stream is behind the fix and the ring
-            // holds the latest sample, but a counted refusal beats a panic.
-            self.stale_fixes = self.stale_fixes.saturating_add(1);
-            return Ok(FixOutcome::Stale);
-        };
-
-        // Would the engine take it there? Asked before rewinding, with the
-        // engine's own rule, because the answer can be no: a stream with a
-        // gap in it has epochs no sample covers, and a replay that ended in
-        // the engine dropping the fix would be the whole burst spent on
-        // nothing. The stream's very first sample is the one exception to
-        // "the consuming sample decides" — it only fixes the time origin and
-        // classifies nothing, so a fix queued ahead of it is judged by the
-        // sample after, and stays pending if there is not one yet.
-        let first_of_stream = !self.older.has_time_origin() && consumer == self.older_seq + 1;
-        let judge = if first_of_stream {
-            consumer + 1
-        } else {
-            consumer
-        };
-        if judge <= self.seq
-            && place(fix.time, &self.sample(judge), tolerance) == GnssPlacement::Stale
-        {
-            self.stale_fixes = self.stale_fixes.saturating_add(1);
-            return Ok(FixOutcome::Stale);
-        }
-
-        // Queued just before the sample that consumes it: the engine then
-        // classifies it exactly as it would have on time, including the split
-        // of that sample at the epoch.
-        let tag = consumer - 1;
-        self.record(tag, Aiding::Gnss(fix));
-        let replayed = self.replay(tag >= self.newer_seq)?;
-        self.rewinds = self.rewinds.saturating_add(1);
-        Ok(FixOutcome::Rewound { samples: replayed })
+    /// Make any recorded aiding call. See [`Rewind::aid`].
+    #[inline]
+    pub fn aid(&mut self, aid: Aid) -> Result<bool, FilterError> {
+        self.inner.aid(aid)
     }
 
     /// See [`GinsEngine::apply_zupt`].
     pub fn apply_zupt(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
-        let accepted = self.live.apply_zupt(sigma)?;
-        self.record(self.seq, Aiding::Zupt { sigma });
-        Ok(accepted)
+        self.aid(Aid::Zupt { sigma })
     }
 
     /// See [`GinsEngine::apply_nonholonomic`].
     pub fn apply_nonholonomic(&mut self, sigma: (F, F), min_speed: F) -> Result<bool, FilterError> {
-        let accepted = self.live.apply_nonholonomic(sigma, min_speed)?;
-        self.record(self.seq, Aiding::Nonholonomic { sigma, min_speed });
-        Ok(accepted)
+        self.aid(Aid::Nonholonomic { sigma, min_speed })
     }
 
     /// See [`GinsEngine::apply_wheel_speed`].
     pub fn apply_wheel_speed(&mut self, speed: F, sigma: F) -> Result<bool, FilterError> {
-        let accepted = self.live.apply_wheel_speed(speed, sigma)?;
-        self.record(self.seq, Aiding::WheelSpeed { speed, sigma });
-        Ok(accepted)
+        self.aid(Aid::WheelSpeed { speed, sigma })
     }
 
     /// See [`GinsEngine::apply_height`].
     pub fn apply_height(&mut self, height: F, sigma: F) -> Result<bool, FilterError> {
-        let accepted = self.live.apply_height(height, sigma)?;
-        self.record(self.seq, Aiding::Height { height, sigma });
-        Ok(accepted)
+        self.aid(Aid::Height { height, sigma })
     }
 
     /// See [`GinsEngine::apply_heading`].
     pub fn apply_heading(&mut self, heading: F, sigma: F) -> Result<bool, FilterError> {
-        let accepted = self.live.apply_heading(heading, sigma)?;
-        self.record(self.seq, Aiding::Heading { heading, sigma });
-        Ok(accepted)
-    }
-
-    /// Ring slot of sample `seq`, which must lie in `older_seq + 1 ..= seq`.
-    #[inline]
-    fn slot(&self, seq: u64) -> usize {
-        // `seq - older_seq - 1` is below `len <= SAMPLES`, so the sum is
-        // below `2 * SAMPLES` and the remainder is one wrap at most.
-        (self.head + (seq - self.older_seq - 1) as usize) % SAMPLES
-    }
-
-    /// Indexed by a remainder of `SAMPLES`, which the compiler can see is in
-    /// bounds, so this is not a reachable panic. Everything below that touches
-    /// the event ring goes through `get` and iterators for the same reason:
-    /// its length is an invariant of this type, not something a bounds check
-    /// can be folded away from.
-    #[inline]
-    fn sample(&self, seq: u64) -> ImuSample {
-        self.samples[self.slot(seq)]
-    }
-
-    /// Append the sample just accepted as sequence number `seq`.
-    fn push_sample(&mut self, raw: ImuSample) {
-        if self.len == SAMPLES {
-            // Unreachable by the rotation arithmetic — `len` peaks at
-            // `2 * WINDOW <= SAMPLES` — but if it ever were, rotating frees
-            // the ring and keeps every anchor consistent with it, where
-            // dropping the oldest sample would silently orphan the older one.
-            self.rotate();
-        }
-        let slot = (self.head + self.len) % SAMPLES;
-        self.samples[slot] = raw;
-        self.len += 1;
-    }
-
-    /// Promote the newer anchor to older and take a new one at the present.
-    fn rotate(&mut self) {
-        let advance = self.newer_seq - self.older_seq;
-        self.older = self.newer;
-        self.older_seq = self.newer_seq;
-        self.newer = self.live;
-        self.newer_seq = self.seq;
-        // Samples up to and including the new older anchor are inside it.
-        self.head = (self.head + advance as usize) % SAMPLES;
-        self.len -= advance as usize;
-        // Events before the new older anchor are inside it too; the ones
-        // tagged with its sequence number were made after it and stay.
-        self.retain_events_from(self.older_seq);
-    }
-
-    /// Remove the events for which `keep` is false, preserving order.
-    fn retain_events(&mut self, mut keep: impl FnMut(usize, &Event) -> bool) {
-        let mut kept = 0;
-        for i in 0..self.events_len.min(EVENTS) {
-            let Some(&event) = self.events.get(i) else {
-                break;
-            };
-            if keep(i, &event) {
-                if let Some(slot) = self.events.get_mut(kept) {
-                    *slot = event;
-                }
-                kept += 1;
-            }
-        }
-        self.events_len = kept;
-    }
-
-    /// Drop every event tagged before `seq`.
-    fn retain_events_from(&mut self, seq: u64) {
-        self.retain_events(|_, event| event.after >= seq);
-    }
-
-    /// Record an aiding call made after sample `after`.
-    fn record(&mut self, after: u64, aiding: Aiding) {
-        if self.events_len >= EVENTS {
-            // Full. The event with the oldest tag is needed by the fewest
-            // replays, so it goes, and the count says the ring is too small.
-            // The first of several equally old, so that what remains at that
-            // tag keeps its order.
-            let mut oldest: Option<(usize, u64)> = None;
-            for (i, event) in self.events.iter().enumerate().take(self.events_len) {
-                if oldest.is_none_or(|(_, tag)| event.after < tag) {
-                    oldest = Some((i, event.after));
-                }
-            }
-            if let Some((victim, _)) = oldest {
-                self.retain_events(|i, _| i != victim);
-            }
-            self.dropped_events = self.dropped_events.saturating_add(1);
-        }
-        // With `EVENTS = 0` there is nowhere to put it; the count above has
-        // already said so.
-        if let Some(slot) = self.events.get_mut(self.events_len) {
-            *slot = Event { after, aiding };
-            self.events_len += 1;
-        }
-    }
-
-    /// The sequence number of the ring sample that would consume a fix at
-    /// `epoch`: the first whose end the epoch does not lie beyond.
-    fn consuming_sample(&self, epoch: GpsTime, tolerance: F) -> Option<u64> {
-        (self.older_seq + 1..=self.seq)
-            .find(|&s| epoch.seconds_since(self.sample(s).time) <= tolerance)
-    }
-
-    /// Restore an anchor and push everything since it again.
-    ///
-    /// Returns how many samples were pushed. On an error the live engine is
-    /// left at the point of failure.
-    ///
-    /// In place, on the live engine. Replaying on a copy and assigning it
-    /// back would put a third of this type's engines on the stack for the
-    /// length of the burst, on top of the deepest frame the engine has.
-    fn replay(&mut self, from_newer: bool) -> Result<u32, FilterError> {
-        let start = if from_newer {
-            self.live = self.newer;
-            self.newer_seq
-        } else {
-            self.live = self.older;
-            self.older_seq
-        };
-        let mut pushed = 0u32;
-        let mut result = Ok(());
-        for s in start + 1..=self.seq {
-            result = self.repeat_events(s - 1);
-            if result.is_err() {
-                break;
-            }
-            let sample = self.sample(s);
-            result = self.live.add_imu(sample);
-            if result.is_err() {
-                break;
-            }
-            pushed = pushed.saturating_add(1);
-            if s == self.newer_seq {
-                // The newer anchor is on the path from the older one, so a
-                // replay that passes it is the cheapest way to make it
-                // current. Taken before the events tagged with its sequence
-                // number, as the original was.
-                self.newer = self.live;
-            }
-        }
-        if result.is_ok() {
-            result = self.repeat_events(self.seq);
-        }
-        self.replayed_samples = self.replayed_samples.saturating_add(u64::from(pushed));
-        self.longest_replay = self.longest_replay.max(pushed);
-        result.map(|()| pushed)
-    }
-
-    /// Repeat on the live engine, in order, the aiding calls that followed
-    /// sample `after`.
-    fn repeat_events(&mut self, after: u64) -> Result<(), FilterError> {
-        let engine = &mut self.live;
-        for event in self.events.iter().take(self.events_len) {
-            if event.after != after {
-                continue;
-            }
-            match event.aiding {
-                // Queued where it was queued, or where it should have been.
-                // The outcome was settled when the record was made: this is
-                // the same fix reaching the same engine at the same point.
-                Aiding::Gnss(fix) => {
-                    let _ = engine.add_gnss(fix);
-                }
-                Aiding::Zupt { sigma } => {
-                    engine.apply_zupt(sigma)?;
-                }
-                Aiding::Nonholonomic { sigma, min_speed } => {
-                    engine.apply_nonholonomic(sigma, min_speed)?;
-                }
-                Aiding::WheelSpeed { speed, sigma } => {
-                    engine.apply_wheel_speed(speed, sigma)?;
-                }
-                Aiding::Height { height, sigma } => {
-                    engine.apply_height(height, sigma)?;
-                }
-                Aiding::Heading { heading, sigma } => {
-                    engine.apply_heading(heading, sigma)?;
-                }
-            }
-        }
-        Ok(())
+        self.aid(Aid::Heading { heading, sigma })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::GnssQueued;
     use drifters_core::earth::Wgs84;
     use drifters_core::frames::Ned;
     use drifters_core::math::{Euler, Quat};
@@ -1189,8 +825,9 @@ mod tests {
             e.add_imu(sample(i)).unwrap();
             aid(&mut e, i);
         }
-        assert_eq!(e.newer_seq, 4 * w);
-        assert_eq!(e.older_seq, 3 * w);
+        // Newer anchor at 4w, older at 3w: the ring holds everything since
+        // the older one.
+        assert_eq!(e.coverage(), (w + 5) as usize);
         // Rewinds to the newer anchor, five samples back.
         assert_eq!(
             e.add_gnss(after_newer).unwrap(),
@@ -1230,35 +867,33 @@ mod tests {
         assert_eq!(e.nav_state(), state, "a refused fix leaves the state alone");
     }
 
+    /// The ring mechanics are tested in `drifters_core::rewind` against an
+    /// engine that does no arithmetic. This is the one that belongs here: the
+    /// named methods record the same thing the generic call does.
     #[test]
-    fn a_full_event_ring_drops_the_oldest_record_and_says_so() {
-        let mut e = RewindEngine::<40, 4>::new(options()).unwrap();
-        for i in 1..=10 {
-            e.add_imu(sample(i)).unwrap();
-            e.apply_height(25.0, 0.5).unwrap();
-        }
-        assert_eq!(e.events_len, 4);
-        assert_eq!(e.dropped_event_count(), 6);
-        assert_eq!(e.events[0].after, 7, "the oldest records are the ones lost");
-    }
-
-    #[test]
-    fn rotation_discards_what_the_older_anchor_already_contains() {
-        const S: usize = 10;
-        let w = RewindEngine::<S, 16>::WINDOW as u64;
-        let mut e = RewindEngine::<S, 16>::new(options()).unwrap();
-        for i in 1..=3 * w {
-            e.add_imu(sample(i)).unwrap();
-            e.apply_height(25.0, 0.5).unwrap();
-        }
-        assert_eq!(e.older_seq, 2 * w);
-        assert_eq!(e.newer_seq, 3 * w);
-        assert_eq!(e.coverage(), w as usize);
-        assert!(
-            e.events[..e.events_len].iter().all(|ev| ev.after >= 2 * w),
-            "events before the older anchor are inside it"
+    fn the_named_aids_record_what_they_did() {
+        let mut e = RewindEngine::<40, 8>::new(options()).unwrap();
+        e.add_imu(sample(1)).unwrap();
+        e.add_imu(sample(2)).unwrap();
+        e.apply_height(25.0, 0.5).unwrap();
+        e.apply_nonholonomic((0.1, 0.2), 0.5).unwrap();
+        let history = e.history();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].after(), 2);
+        assert_eq!(
+            history[0].aid(),
+            Some(&Aid::Height {
+                height: 25.0,
+                sigma: 0.5
+            })
         );
-        assert_eq!(e.events_len as u64, w + 1, "those tagged with it stay");
+        assert_eq!(
+            history[1].aid(),
+            Some(&Aid::Nonholonomic {
+                sigma: (0.1, 0.2),
+                min_speed: 0.5
+            })
+        );
     }
 
     #[test]
@@ -1270,7 +905,7 @@ mod tests {
             size_of::<Representative>(),
             3 * size_of::<GinsEngine>()
                 + 120 * size_of::<ImuSample>()
-                + 32 * size_of::<Event>()
+                + 32 * size_of::<Record<Aid>>()
                 + 72,
             "three engines, the two rings, and 72 bytes of bookkeeping"
         );
@@ -1281,7 +916,7 @@ mod tests {
         )))]
         {
             assert_eq!(size_of::<ImuSample>(), 64);
-            assert_eq!(size_of::<Event>(), 120, "a GnssFix plus its tag");
+            assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
             assert_eq!(size_of::<Representative>(), 21_312);
         }
     }

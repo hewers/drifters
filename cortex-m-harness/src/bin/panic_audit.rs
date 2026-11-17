@@ -21,6 +21,7 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
+use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine};
 use drifters_filter::{GinsEngine, GinsOptions, RewindEngine};
 
 /// Abort without formatting. `panic-semihosting` would drag in `core::fmt`,
@@ -48,6 +49,19 @@ fn main() -> ! {
             core::hint::spin_loop();
         }
     };
+    // The equivariant filter's engine, on the same terms.
+    let Ok(mut eqf) = EqfEngine::new(EqfOptions::default().with_initial_state(
+        Lla::from_degrees(30.4, 114.4, 20.0),
+        Ned::ZERO,
+        Euler::new(0.0, 0.0, 0.0),
+    )) else {
+        loop {
+            core::hint::spin_loop();
+        }
+    };
+    // And its rewind layer, with rings as small as the ESKF's below so that
+    // every branch of the shared machinery is reached within a few loops.
+    let mut eqf_rewind = EqfRewindEngine::<16, 4>::from_engine(eqf);
     // The rewind layer is data path too: on a device every fix goes through
     // it. Small rings, so that rotation, eviction from a full event ring and
     // a replay past the newer anchor all happen within a few iterations.
@@ -80,10 +94,51 @@ fn main() -> ! {
         );
         let _ = rewind.add_gnss(late);
 
+        // A fix inside the next interval, carrying a velocity: the split, both
+        // updates and both gates. Then the magnetometer.
+        let mut fix = GnssFix::position_only(
+            GpsTime::from_tow(t + 0.002),
+            eqf.antenna_position(),
+            Vec3::splat(1.0),
+        );
+        fix.velocity = Some(Ned::ZERO);
+        fix.velocity_std = Vec3::splat(0.1);
+        let _ = eqf.add_gnss(fix);
+        let _ = eqf.add_imu(ImuSample {
+            time: GpsTime::from_tow(t + 0.005),
+            ..sample
+        });
+        let _ = eqf.apply_magnetometer(
+            Vec3::new(0.48, 0.02, 0.88),
+            Vec3::new(0.48, 0.0, 0.88),
+            0.02,
+        );
+
+        let _ = eqf_rewind.add_imu(sample);
+        let _ = eqf_rewind.apply_magnetometer(
+            Vec3::new(0.48, 0.02, 0.88),
+            Vec3::new(0.48, 0.0, 0.88),
+            0.02,
+        );
+        // Late, and carrying a velocity, so the replay splits a sample and
+        // runs both gated updates.
+        let mut late_eqf = GnssFix::position_only(
+            GpsTime::from_tow(t - 0.022),
+            eqf_rewind.antenna_position(),
+            Vec3::splat(1.0),
+        );
+        late_eqf.velocity = Some(Ned::ZERO);
+        late_eqf.velocity_std = Vec3::splat(0.1);
+        let _ = eqf_rewind.add_gnss(late_eqf);
+
         // SAFETY: single-threaded, no interrupts enabled, and the write only
         // exists to keep the work above from being optimised out.
         unsafe {
-            SINK = engine.nav_state().position().height + rewind.nav_state().position().height;
+            SINK = engine.nav_state().position().height
+                + rewind.nav_state().position().height
+                + eqf.nav_state().position().height
+                + eqf.pva_std().position.x
+                + eqf_rewind.nav_state().position().height;
         }
     }
 }

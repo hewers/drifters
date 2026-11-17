@@ -313,15 +313,36 @@ for bit-exact golden vectors, so tests needing bit-exactness call
 
 ## Layer 9 — bare-metal stack budget
 
-`cortex-m-harness/` boots the filter on an emulated Cortex-M4 and measures its
-peak stack use. Run it with:
+`cortex-m-harness/` boots both estimators on an emulated Cortex-M4 and measures
+their peak stack use. Run it with:
 
 ```bash
 cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if the peak exceeds 20 KiB.
+CI runs it on every push and fails if either estimator's peak exceeds 20 KiB:
+`PEAK` for the ESKF, `PEAK_EQF` for the equivariant filter's engine.
+
+| | peak stack, bytes |
+|---|---|
+| ESKF, 21-state | 19 120 |
+| ESKF, 21-state, `f32-covariance` | 18 208 |
+| ESKF, 15-state (`reduced-state`) | 10 688 |
+| EqF engine | **13 568** |
+
+The two engines are measured by the same generic code, written against
+[`Estimator`](../crates/drifters-core/src/estimator.rs) and
+[`Rewindable`](../crates/drifters-core/src/rewind.rs): a plain `add_imu`, an
+`add_imu` with a GNSS fix inside its interval, and a fix fifteen samples late
+through the rewind layer. A difference between their numbers is therefore a
+difference between them and not between two harnesses.
+
+The late fix is the ESKF's peak in every configuration. It replays the
+held-state ZUPT, the engine's deepest path, with the rewind's own frame
+beneath it: 152 bytes more at 21 states and at 15, and 160 with
+`f32-covariance`. Before it was measured the
+ESKF's peaks were 18 968, 18 048 and 10 536, and the rewind path was a claim.
 
 ### How the measurement works
 
@@ -335,6 +356,35 @@ This is **exact**, and it is the reason to use an emulator at all here: it
 measures memory writes, which QEMU emulates faithfully. The result is the same
 number real silicon would give.
 
+### The equivariant filter needed the same treatment the ESKF did
+
+Its first measurement was **28 852 bytes**, 41 % over the ceiling, and for the
+reason the ESKF's first measurement was 35 328: covariance arithmetic written
+one expression per equation, every operator returning a `21 × 21` by value.
+`phi.matmul(&sigma).mul_transpose(&phi) + noise * dt` reads like the equation
+and keeps half a dozen 3 528-byte temporaries alive to evaluate it.
+
+| operation | as expressions | in place |
+|---|---|---|
+| `add_imu` (propagate) | 28 852 | **9 848** |
+| `add_imu` with a GNSS fix | 28 852 | **13 488** |
+| `apply_magnetometer` | 23 364 | **11 040** |
+
+Those are the figures the rewrite produced. Since the GCU update took its
+inflated noise into the Joseph form they read 9 856, 13 568 and 12 328.
+
+Each of propagation, the Joseph update and the reset's covariance transport now
+runs in two buffers, with `Σ` itself the destination of the last product, and
+`G Q Gᵀ` is accumulated straight into `Σ` as a sum over its eighteen noise
+channels without `G Q` or the product ever being formed. The three are separate
+non-inlined functions, so their buffers are not alive together.
+
+It is a change to where the arithmetic is kept and not to the arithmetic. The
+expression forms are still in the crate, under `#[cfg(test)]`, and
+`the_in_place_forms_match_the_expressions_bit_for_bit` runs both over sixty
+seconds of closed loop through all three kinds of update and compares the
+observer state and all 441 covariance elements with `assert_eq!` at every step.
+
 ### What QEMU cannot measure
 
 | measurement | verdict |
@@ -342,6 +392,7 @@ number real silicon would give.
 | runs bare-metal at all | exact |
 | stack high-water mark | exact |
 | code and data size | exact (from the linker) |
+| instructions retired | exact under `-icount shift=0`, once calibrated — see below |
 | **cycle counts, wall-clock timing** | **worthless** |
 
 QEMU models no pipeline, no cache, no flash wait states and no FPU latency. The
@@ -349,36 +400,133 @@ harness therefore reports stack and size and takes **no** timing measurement,
 rather than publishing a number that cannot be supported.
 
 The trap specific to this project: Cortex-M4F's FPU is **single precision**, and
-Timing claims need real silicon — that work is not done, and nothing in this
-repository claims otherwise.
+`drifters` uses `f64` throughout, so every floating-point operation outside the
+`f32-covariance` factors is software-emulated. QEMU runs them correctly and
+says nothing about what they cost. Timing claims need real silicon — that work
+is not done, and nothing in this repository claims otherwise.
 
-**Instructions retired can be measured, though, and they answer the useful
-half.** `qemu-system-arm -icount shift=0` advances the virtual clock one tick
-per instruction, so SysTick counts instructions; the harness reports
-`INSTRUCTIONS add_imu` under that flag and garbage without it. It cannot see
-pipeline stalls, flash wait states or FPU latency, so it is not a cycle count.
-What it measures exactly is how much *work* a change removes — and on a part
-whose FPU is single-precision, that is the whole soft-float question, since an
-`__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
+### Instructions retired
+
+They can be measured, and they answer the useful half. Under
+`qemu-system-arm -icount shift=0` the virtual clock advances one nanosecond per
+instruction, and the harness times `add_imu` with SysTick against it:
 
 ```bash
 cd cortex-m-harness && cargo run --release -- -icount shift=0
 ```
 
-Measured per `add_imu` on `mps2-an386`:
+```text
+CALIBRATION 2000000 instructions = 50000 ticks
+INSTRUCTIONS add_imu = 3538560 (88464 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 5078640 (126966 ticks; only under -icount shift=0)
+```
 
-| configuration | instructions |
+Without the flag all three lines are emulator wall-clock and mean nothing.
+
+It cannot see pipeline stalls, flash wait states or FPU latency, so it is not a
+cycle count. What it measures exactly is how much *work* a change removes — and
+on a part whose FPU is single-precision, that is the whole soft-float question,
+since an `__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
+
+Per `add_imu` on `mps2-an386`, the mean of 200 steps:
+
+| configuration | instructions | SysTick ticks |
+|---|---|---|
+| ESKF, 21-state, `f64` | **3 538 560** | 88 464 |
+| ESKF, 21-state, `f32-covariance` | **473 440** | 11 836 |
+| ESKF, 15-state (`reduced-state`) | **1 578 080** | 39 452 |
+| ESKF, 15-state, `f32-covariance` | **270 560** | 6 764 |
+| EqF engine | **5 078 640** | 126 966 |
+
+The single-precision covariance removes **87 %** of the work at 21 states and
+83 % at 15, having cost nothing measurable in accuracy. Dropping the six
+scale-factor states removes 55 %. The equivariant filter costs 1.44 times the
+21-state ESKF in `f64`, and nearly eleven times the ESKF with `f32-covariance`:
+its covariance is dense, 441 scalars against the ESKF's 231 factored ones, and
+it has no single-precision form.
+
+#### The count is a floor on time, and the floor already says something
+
+Timing still needs a board. But a Cortex-M4 retires about one instruction per
+cycle at best — loads, taken branches and divides take more — so instructions
+retired are a lower bound on cycles, and a lower bound can rule a configuration
+out even though it cannot rule one in. At 168 MHz, which is as fast as the
+common M4 parts run:
+
+| configuration | at best | against a 200 Hz IMU's 5 ms |
+|---|---|---|
+| ESKF, 21-state, `f64` | 21.1 ms | cannot keep up, nor at 100 Hz |
+| ESKF, 21-state, `f32-covariance` | 2.8 ms | fits, if the real figure is within 1.8× of the floor |
+| ESKF, 15-state | 9.4 ms | cannot at 200 Hz; marginal at 100 Hz |
+| ESKF, 15-state, `f32-covariance` | 1.6 ms | fits with a factor of three to spare |
+| EqF engine | 30.2 ms | cannot keep up, nor at 50 Hz |
+
+So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
+configuration that runs. The default build and the equivariant filter both need
+a part with a double-precision FPU — a Cortex-M7 with FPv5-D16, an
+application processor — or an IMU rate set by what the filter can sustain. This
+is the first statement this repository makes about whether its filters keep up
+with a sensor, and it is a statement about which ones cannot.
+
+#### This measurement was wrong for as long as it existed
+
+Every count this repository quoted before the table above came from the same
+harness line, and that line was wrong in two independent ways. Neither made the
+output look wrong.
+
+**The unit.** `-icount shift=0` ties the virtual clock to instructions, one
+nanosecond each. SysTick does not count nanoseconds. It counts the core clock,
+which on `mps2-an386` is 25 MHz, so one tick is 40 ns: **forty instructions**.
+The harness printed ticks under the label `INSTRUCTIONS`.
+
+**The counter.** SysTick is 24 bits. The harness started it, ran five hundred
+`add_imu`, and divided the masked difference by five hundred. A 21-state
+`add_imu` in software `f64` is 88 464 ticks, so five hundred of them is 44
+million and the counter went round twice and most of a third time. It reported
+`21 398`, which is `88 507 − 2 × 2²⁴ / 500`. The 15-state build wrapped once
+and reported `5 911` for 39 465. The `f32-covariance` build, at 11 868, did not
+wrap at all — which is the worst case for noticing, because one of the three
+rows was right and it made the other two look plausible beside it.
+
+The harness now times each step on its own, refuses to report an interval in
+which the wrap flag was raised, and measures its unit with a calibration loop
+of a known two million instructions instead of assuming it. That last check is
+what found the first error; printing the wrap flag at intervals while chasing a
+spurious report of it is what found the second.
+
+**What it changes.** A difference between two aliased counts is still the true
+difference, as long as both wrapped the same number of times, so nothing that
+was measured as a small delta is wrong in ticks. What is wrong is every ratio
+taken against an aliased baseline:
+
+| claim, as recorded | corrected |
 |---|---|
-| 21-state, `f64` | **21 398** |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| `f32-covariance` removes 45 % of the work (21 398 → 11 868) | **87 %** (88 507 → 11 868 ticks) |
+| the same from the earlier baseline, 41 % (22 415 → 13 238) | **85 %** (89 524 → 13 238) |
+| 15-state is the cheapest configuration, at 5 911 | it is 39 465 ticks, 3.3× the 21-state `f32-covariance` build |
+| `Local` took `f64` from 22 415 to 21 398 | 89 524 to 88 507: the same 1 017 ticks, **1.1 %** of that build and not 4.5 % |
+| `core::simd` is worth 4 % in `f64` (22 336 → 21 422) | **1.0 %** (89 445 → 88 531) |
 
-The single-precision covariance removes 45 % of the work on this part, having
-cost nothing measurable in accuracy.
+Everything measured *within* the `f32-covariance` build stands as it was, in
+ticks: the 10.4 % from `Local`, the 17.5 % from `core::simd`, the 986 for the
+transition matrix, the stub experiments below. Read every such number in this
+document and in [milestones.md](milestones.md) as SysTick ticks of forty
+instructions, whatever unit it was given when it was written.
+
+The corrected rows are arithmetic on the recorded figures, not new
+measurements: those builds are in history and the modulus is known. The tables
+further up are new measurements of the tree as it is.
+
+The general form of the failure is the one Layer 12 records for the NEES
+harness: an instrument that reports a plausible number is not thereby reporting
+a correct one, and the check that would have caught this — time something whose
+answer is known — took ten lines once someone thought to write it.
+
+#### Stubbing a stage to find its cost
 
 **Stub one stage out at a time, and leave the rest running.** Stubbing two at
 once gives a number that is not the cost of either: with the covariance
-propagation disabled, the transition matrix appeared to cost 1 396 instructions,
+propagation disabled, the transition matrix appeared to cost 1 396 ticks,
 because the optimiser could then discard most of what built it. Measured against
 the shipping configuration it is 986.
 
@@ -387,15 +535,31 @@ transition matrix with a dense fill read 7 419 — apparently a saving of 4 449 
 because the fill was rank-deficient, Thornton found a non-positive pivot and
 returned early. The number was a measurement of the filter giving up.
 
+All of these are in the `f32-covariance` build, so none of them was aliased.
+
+The mechanization, re-measured the same way against the tree as it is: skipping
+it takes `add_imu` from 11 836 ticks to 9 740 with `f32-covariance`, so it
+costs **2 096 ticks, 18 %** of that build. It was 3 209 of 13 238, 24 %, before
+`Local`.
+
 That table is what a proposal to go further has to argue against, and it is
 worth having before the argument rather than after.
 
 ### What it argued against, and what it argued for
 
-The local-frame rewrite in M14 targets the mechanization row — 24 %, and only
-if it converts as well as the covariance did. It is
+The local-frame rewrite in M14 targets the mechanization row, and only if it
+converts as well as the covariance did. It is
 [parked](milestones.md#m14--local-first-architecture--in-progress) on that
-number.
+number, and the number moved under the correction above in two directions that
+nearly cancel. The covariance converted far better than was recorded — about
+nine tenths of its own work, where 56 % was written down — and the
+mechanization has since shrunk from 24 % of the build to 18 %. Converting it as
+well as the covariance did would now be worth about **16 %** of `add_imu`,
+where the decision was taken on 13 %. The accuracy it would spend is unchanged.
+
+(The nine tenths is inferred, not re-measured. The recorded 56 % of a recorded
+9 177-tick saving puts the single-precision covariance near 7 200 ticks; the
+saving was really 76 286, and 76 286 of 83 500 is 91 %.)
 
 Two things beat it.
 
@@ -403,22 +567,23 @@ Two things beat it.
 `omega_ie_n`, `omega_en_n` and `dr_inv` each compute their own `sin`/`cos`, and
 the mechanization calls them about twelve times per sample at two distinct
 latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
-answers all of them, which took `add_imu` from 13 238 to **11 868** with
-`f32-covariance` — 10.4 % — and 22 415 to 21 398 without. Results are
-bit-identical, and `local_agrees_with_the_free_functions_exactly` holds it to
-that.
+answers all of them, which took `add_imu` from 13 238 ticks to **11 868** with
+`f32-covariance` — 10.4 % — and by the same thousand ticks without, where it is
+1.1 %. Results are bit-identical, and
+`local_agrees_with_the_free_functions_exactly` holds it to that.
 
 **`core::simd`**, from a two-line change. Expressing the lane-split dot products
-as `Simd<Scalar, 8>` rather than as a hand-written accumulator array:
+as `Simd<Scalar, 8>` rather than as a hand-written accumulator array, in ticks:
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 22 336 | 21 422 | −4 % |
+| `f64` | 89 445 | 88 531 | −1.0 % |
 | `f32-covariance` | 13 182 | **10 875** | **−17.5 %** |
 
 (Measured before the earth-model change above, so both baselines are the older
 ones. The two are independent — one is the covariance recursion, the other the
-mechanization.)
+mechanization. The `f64` row is the recorded pair with the counter's two wraps
+restored; it was written down as 22 336 and 21 422, −4 %.)
 
 On a part with no SIMD unit at all, because eight lanes lower to eight
 independent FPU operations without the iterator machinery the hand-written form
@@ -432,7 +597,7 @@ survey:
 
 - **`slice::as_chunks::<8>`** says what the lane loop means — a const-generic
   chunk size, so no division to prove and no bound to check — and measured at
-  13 209 instructions against the hand-indexed 13 238, which is nothing. It is
+  13 209 ticks against the hand-indexed 13 238, which is nothing. It is
   stable since 1.88 and this crate's floor is 1.85, held so firmware on a
   pinned toolchain can use it. Clippy's MSRV lint caught it; a tidier spelling
   is not worth the floor.
@@ -441,7 +606,7 @@ survey:
   shape, so the workaround costs a comment and nothing else.
 - **Building the transition matrix in `f32`.** It is narrowed for Thornton
   immediately, so under the default build nothing would lose precision. It costs
-  986 instructions, 8.3 % of `add_imu`, of which single precision might return
+  986 ticks, 8.3 % of `add_imu`, of which single precision might return
   half. Paying that in either a second copy of the Jacobian — the most subtle
   code in the filter — or a lower-precision Φ recorded for the smoother is not
   worth 4 %.
@@ -548,10 +713,23 @@ absence of panics in what it links, and nothing about what it does not.
 
 ### Scope
 
-This covers the steady-state data path: `add_imu`; the five aiding calls,
-ZUPT, non-holonomic, wheel speed, height and heading; and a late fix through
-`RewindEngine::add_gnss`, the rewind and the replay included. It does not link
-`apply_pseudoranges` or the smoother, and so says nothing about them.
+This covers the steady-state data path of both estimators. For the ESKF:
+`add_imu`; the five aiding calls, ZUPT, non-holonomic, wheel speed, height and
+heading; and a late fix through `RewindEngine::add_gnss`, the rewind and the
+replay included. For the equivariant filter's engine: `add_imu` with a fix
+inside the interval that carries a velocity, so the split, both updates and
+both gates; `apply_magnetometer`; `pva_std`, which maps the covariance into
+physical units; and a late fix with a velocity through `EqfRewindEngine`,
+which is the shared rewind machinery monomorphised a second time. It does not link `apply_pseudoranges` or the smoother, and so
+says nothing about them.
+
+The equivariant filter linked nothing on the first build with its engine in
+the audit, which is worth recording precisely because the ESKF needed five
+fixes to get there. Its loops run over const-generic bounds and its blocks are
+set at literal offsets, which is the form those five fixes converged on. The
+one place the engine could have panicked was written not to: the split of a
+sample at a fix reads the pending fix's epoch through `map_or`, where the
+ESKF's engine has an `expect` the optimiser happens to remove.
 Construction and configuration validation are *not* in scope and may
 legitimately panic on programmer error; they run once, at startup, where a
 panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.

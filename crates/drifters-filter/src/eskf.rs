@@ -310,25 +310,12 @@ fn nis<const M: usize>(chol: &Cholesky<M>, innovation: &Matrix<M, 1>) -> F {
 
 /// Chi-squared critical values, indexed by measurement dimension.
 ///
-/// A gate rejects a measurement whose normalised innovation squared exceeds the
-/// critical value for its dimension. Prefer the loose thresholds: a filter that
-/// rejects good data because its own covariance is optimistic diverges *faster*
-/// than one that accepts a little bad data, because rejection removes the very
-/// information that would have corrected the overconfidence.
-pub mod chi_squared {
-    use drifters_core::F;
-
-    /// 95th percentile — tight. Rejects 5 % of *valid* measurements.
-    pub const P95: [F; 7] = [0.0, 3.841, 5.991, 7.815, 9.488, 11.070, 12.592];
-    /// 99th percentile.
-    pub const P99: [F; 7] = [0.0, 6.635, 9.210, 11.345, 13.277, 15.086, 16.812];
-    /// 99.9th percentile — the recommended default. Catches gross outliers
-    /// while almost never rejecting a good measurement.
-    pub const P999: [F; 17] = [
-        0.0, 10.828, 13.816, 16.266, 18.467, 20.515, 22.458, 24.322, 26.124, 27.877, 29.588,
-        31.264, 32.909, 34.528, 36.123, 37.697, 39.252,
-    ];
-}
+/// The thresholds belong to the statistic, not to this filter, and the
+/// equivariant filter's engine gates against the same ones. They live beside
+/// the [`Estimator`](drifters_core::estimator::Estimator) trait and are
+/// re-exported here, where the measurement constructors have always found
+/// them.
+pub use drifters_core::estimator::chi_squared;
 
 /// The running filter state: the error-state estimate and its covariance.
 #[derive(Clone, Copy, Debug)]
@@ -349,34 +336,10 @@ pub struct Eskf {
 }
 
 /// Why a filter operation could not complete.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum FilterError {
-    /// The innovation covariance was not positive definite. Almost always a
-    /// mis-specified measurement noise, or a covariance that has already
-    /// diverged.
-    SingularInnovation,
-    /// The covariance contains a non-finite element.
-    Diverged,
-}
-
-impl FilterError {
-    /// A short human-readable description.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SingularInnovation => "innovation covariance is not positive definite",
-            Self::Diverged => "covariance is not finite",
-        }
-    }
-}
-
-impl core::fmt::Display for FilterError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl core::error::Error for FilterError {}
+///
+/// The same two failures for either estimator, so the type is shared; see
+/// [`drifters_core::estimator`].
+pub use drifters_core::estimator::FilterError;
 
 impl Eskf {
     /// Start with a zero error state and a diagonal covariance built from the

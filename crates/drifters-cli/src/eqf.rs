@@ -1,8 +1,11 @@
-//! Replay the equivariant filter over the KF-GINS dataset formats.
+//! The equivariant filter's side of the replays.
 //!
-//! Deliberately the *same* inputs and the *same* scoring as [`crate::replay`],
-//! so the two estimators can be put side by side. What differs is the model,
-//! and those differences are stated here rather than buried:
+//! Every replay runs the engine `--engine` selects through the same loop; see
+//! [`crate::engines`]. What is here is what is particular to the EqF: how its
+//! engine is configured for each dataset, and the part of its report that is
+//! modelling error rather than filter error.
+//!
+//! What differs from the ESKF on the same data is stated rather than buried:
 //!
 //! - **Flat, non-rotating Earth.** The EqF works in a local tangent frame about
 //!   an anchor. Two modelling errors follow, and the report quotes both:
@@ -15,72 +18,24 @@
 //!   the only place in this comparison where the EqF is doing something the
 //!   ESKF cannot.
 //! - **No scale factors.** The EqF's 21 states spend six on extrinsics where
-//!   the ESKF spends them on IMU scale.
+//!   the ESKF spends them on IMU scale. The accelerometer's scale-factor prior
+//!   is carried in its bias prior instead, from the same numbers the ESKF is
+//!   given; see [`EqfOptions::with_accel_scale_factor`].
 //!
 //! A head-to-head number that ignores the first bullet is not a comparison of
 //! estimators, it is a comparison of Earth models. See
 //! [`docs/eqf.md`](https://github.com/hewers/drifters/blob/main/docs/eqf.md).
 
-use drifters_core::math::Matrix;
-use drifters_core::math::{Mat3, Vec3};
-use drifters_core::types::{GnssFix, ImuSample};
-use drifters_eqf::filter::{EqFilter, ProcessNoise};
-use drifters_eqf::group::State;
-use drifters_eqf::lie::{Se23, Se3Tangent};
-use drifters_eqf::lift::Input;
+use drifters_core::frames::Lla;
+use drifters_core::math::{Euler, Vec3};
+use drifters_core::types::{GnssFix, ImuNoise};
 use drifters_eqf::local::{
-    compensate_earth, earth_rate_ratio, flat_earth_verdict, gyrocompass_accuracy, Anchor,
-    FlatEarthVerdict,
+    earth_rate_ratio, flat_earth_verdict, gyrocompass_accuracy, Anchor, FlatEarthVerdict,
 };
+use drifters_eqf::{EqfOptions, ProcessNoise};
 
 use crate::kfgins;
-use crate::stats::Running;
-use crate::truth;
-use crate::Epoch;
-
-/// What an EqF replay produced.
-pub struct EqfReport {
-    /// IMU samples processed.
-    pub processed: u64,
-    /// GNSS fixes applied.
-    pub applied: u64,
-    /// Open-loop antenna-position residual before each fix, per axis.
-    pub residual_north: Running,
-    /// See [`EqfReport`].
-    pub residual_east: Running,
-    /// See [`EqfReport`].
-    pub residual_down: Running,
-    /// Horizontal residual magnitude.
-    pub horizontal: Running,
-    /// Normalised innovation squared, before GCU inflation.
-    pub nis: Running,
-    /// Per-epoch trace, in the same shape the plotter already consumes.
-    pub epochs: Vec<Epoch>,
-    /// The lever arm the filter converged to, metres in the body frame.
-    pub lever: Vec3,
-    /// The lever arm the ESKF was handed, for comparison.
-    pub configured_lever: Vec3,
-    /// Greatest horizontal range from the anchor, metres.
-    pub max_range: f64,
-    /// Tangent-plane error at that range, metres.
-    pub curvature_error: f64,
-    /// Whether Earth-rate compensation was applied to the gyro input.
-    pub earth_rate_compensated: bool,
-    /// Which reverse-pass seeding the forward run used.
-    pub warm_start: WarmStart,
-    /// The residual at the last fix, metres.
-    ///
-    /// Reported next to the RMS because on a long convergence the two mean
-    /// different things: the RMS carries the startup transient for the whole
-    /// run, the final residual says where the filter ended up.
-    pub final_residual: f64,
-    /// Earth rate divided by this IMU's gyroscope bias stability.
-    pub earth_rate_ratio: f64,
-    /// Which Earth model that ratio calls for, per adr/0008.
-    pub verdict: FlatEarthVerdict,
-    /// Static heading accuracy this gyroscope could gyrocompass to, radians.
-    pub gyrocompass: f64,
-}
+use crate::Report;
 
 /// How much of a reverse pass to carry into the forward run.
 ///
@@ -134,8 +89,14 @@ pub struct EqfReport {
 /// The backward arm of a two-filter smoother is an **information** filter for
 /// this reason: `Y = Σ⁻¹` transforms correctly under time reversal where `Σ`
 /// does not. Implementing one for the 21-state EqF, with the process-noise
-/// update via the matrix inversion lemma, is what this needs. The reverse pass
-/// below is otherwise sound and can be reused once that exists.
+/// update via the matrix inversion lemma, is what this needs.
+///
+/// The reverse pass that produced the table drove `EqFilter` directly with a
+/// negative `dt`, which the engine every replay now goes through does not
+/// offer. It was removed when the replays moved onto the engine; it is at
+/// commit `96d9598` (`reverse_pass` in this file), seeded from the closing
+/// fixes' course over ground, and is the place to start once an information
+/// filter exists.
 ///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WarmStart {
@@ -169,416 +130,235 @@ impl WarmStart {
     }
 }
 
-/// Run the filter backwards over the whole dataset, ending at `start_time`.
+/// Which Earth model the EqF runs with.
 ///
-/// Time reversal is `dt < 0` in [`EqFilter::propagate`], which inverts the state
-/// step and the transition matrix while still accumulating process noise. The
-/// measurement updates are unchanged: an update has no notion of time direction.
-fn reverse_pass(
-    config: &kfgins::Config,
-    imu: &[ImuSample],
-    gnss: &[GnssFix],
-    anchor: &Anchor,
-    seed: &State,
-    noise: &ProcessNoise,
-    compensate: bool,
-) -> EqFilter {
-    let end = config.end_time.unwrap_or(f64::INFINITY);
-
-    // Walk the fixes downwards alongside the samples.
-    let mut next_fix = gnss.len();
-    while next_fix > 0 && gnss[next_fix - 1].time.tow() > end {
-        next_fix -= 1;
-    }
-
-    // The reverse pass starts at the END of the trajectory, so it is seeded
-    // there, from the trace rather than from the forward configuration.
-    //
-    // Position comes from the last fix. Velocity and heading come from the
-    // course over the closing fixes, which is the same forward-motion
-    // assumption the non-holonomic constraint already makes for a road vehicle.
-    // Roll and pitch are carried from the configured attitude: a car is level
-    // to within a couple of degrees for the whole trace, and nothing in GNSS
-    // alone constrains them.
-    let last = next_fix.saturating_sub(1);
-    let closing = course(gnss, last, anchor, -1);
-    let opening = course(gnss, 0, anchor, 1);
-    let (rotation, velocity) = match (closing, opening) {
-        (Some((psi_end, v_end)), Some((psi_start, _))) => {
-            // Turn the configured attitude about the local vertical by the
-            // heading change across the trace, keeping its roll and pitch.
-            (yaw(psi_end - psi_start).matmul(&seed.pose.rotation), v_end)
-        }
-        _ => (seed.pose.rotation, Vec3::ZERO),
-    };
-    let tail = State {
-        pose: Se23::new(
-            rotation,
-            velocity,
-            gnss.get(last)
-                .map(|f| anchor.to_local(f.position))
-                .unwrap_or(seed.pose.position),
-        ),
-        bias: Se3Tangent::ZERO,
-        lever: Vec3::ZERO,
-        mag: Mat3::identity(),
-    };
-
-    // The covariance has to be built in physical terms and mapped into normal
-    // coordinates, not written down diagonally.
-    //
-    // In this parameterisation `ε₁,ω` rotates the trajectory about the GLOBAL
-    // origin, so a physical position error is `δp = −p̂^ ε₁,ω + ε₁,ρ`. A
-    // diagonal Σ with an attitude variance of 1 rad² therefore asserts a
-    // position uncertainty of |p̂| — 1.5 km at the end of this trace — however
-    // the position block is set. The forward run gets away with a diagonal
-    // because it starts at the anchor, where p̂ ≈ 0 and the map is the
-    // identity. The reverse pass does not.
-    let jac_inv = |v: Vec3, p: Vec3| {
-        let mut j = Matrix::<9, 9>::identity();
-        j.set_block(3, 0, &v.skew());
-        j.set_block(6, 0, &p.skew());
-        j
-    };
-    let physical = Matrix::<9, 9>::from_diagonal(&[
-        4.0e-3, 4.0e-3, 3.0e-2, // attitude: 3.6° in roll/pitch, 10° in heading
-        4.0, 4.0, 1.0, // velocity, from a 1 Hz course estimate
-        25.0, 25.0, 100.0, // position, from one fix
-    ]);
-    let j = jac_inv(tail.pose.velocity, tail.pose.position);
-    let pose_block = j.matmul(&physical).mul_transpose(&j);
-
-    let mut sigma = Matrix::<21, 21>::zeros();
-    sigma.set_block(0, 0, &pose_block);
-    for i in 0..3 {
-        sigma[(9 + i, 9 + i)] = 1.0e-8; // gyro bias
-        sigma[(12 + i, 12 + i)] = 1.0e-4; // accel bias
-        sigma[(15 + i, 15 + i)] = 1.0; // lever arm, unknown
-        sigma[(18 + i, 18 + i)] = 1.0e-6; // magnetometer, unobservable here
-    }
-    let mut filter = EqFilter::new(&tail, sigma, anchor.gravity);
-    let mut applied = 0usize;
-
-    // The increment for the gap (tow, later] belongs to the LATER sample, since
-    // `dtheta` covers the interval ending at its own timestamp. Pairing a gap
-    // with the earlier sample's rate offsets the whole integration by one step.
-    let mut later: Option<&ImuSample> = None;
-    for sample in imu.iter().rev() {
-        let tow = sample.time.tow();
-        if tow > end {
-            later = Some(sample);
-            continue;
-        }
-        if tow < config.start_time {
-            break;
-        }
-        let Some(next) = later else {
-            later = Some(sample);
-            continue;
-        };
-        let dt = next.time.tow() - tow;
-        later = Some(sample);
-        if !(dt > 0.0 && dt < 1.0) {
-            continue;
-        }
-
-        let mut input = Input::new(next.gyro(), next.accel());
-        if compensate {
-            let st = filter.nav_state();
-            input = compensate_earth(
-                &input,
-                st.pose.rotation,
-                st.pose.velocity,
-                anchor.origin.lat,
-                anchor.origin.height,
-            );
-        }
-        filter.propagate(&input, -dt, noise);
-
-        while next_fix > 0 && gnss[next_fix - 1].time.tow() >= tow {
-            next_fix -= 1;
-            let fix = gnss[next_fix];
-            let sigma = fix.position_std;
-            let r = Mat3::from_diagonal(&[sigma.x * sigma.x, sigma.y * sigma.y, sigma.z * sigma.z]);
-            let measured = anchor.to_local(fix.position);
-            let st = filter.nav_state();
-            let innovation = (st.pose.position + st.pose.rotation * st.lever - measured).norm();
-            filter.update_position(measured, &r);
-            applied += 1;
-            if std::env::var("DRIFTERS_REVERSE_TRACE").is_ok() && applied.is_multiple_of(300) {
-                eprintln!(
-                    "  rev n={applied:5}  t={:7.1}  innov={:11.3e} m  tr(S)={:11.3e}  \
-                     att_var={:10.3e}  bg_var={:10.3e}",
-                    tow - config.start_time,
-                    innovation,
-                    filter.sigma.trace(),
-                    filter.sigma[(0, 0)] + filter.sigma[(1, 1)] + filter.sigma[(2, 2)],
-                    filter.sigma[(9, 9)] + filter.sigma[(10, 10)] + filter.sigma[(11, 11)]
-                );
-            }
-        }
-    }
-    filter
+/// [adr/0008](https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md)
+/// decides it by the gyroscope's grade, so that is the default: a replay of a
+/// dataset gets the model its IMU calls for without being told. The other two
+/// are for asking what the choice is worth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EarthModel {
+    /// By the ratio of Earth rate to the gyroscope's bias stability.
+    #[default]
+    ByGrade,
+    /// Flat and non-rotating, as the paper has it. `--flat-earth`.
+    Flat,
+    /// Input-side Earth-rate and Coriolis compensation. `--earth-rate`.
+    Compensated,
 }
 
-/// A rotation of `angle` about the local vertical, for NED axes.
-fn yaw(angle: f64) -> Mat3 {
-    let (s, c) = (angle.sin(), angle.cos());
-    Mat3::from_rows([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+impl EarthModel {
+    /// From the two command-line switches, which are exclusive.
+    pub fn from_switches(earth_rate: bool, flat_earth: bool) -> Result<Self, String> {
+        match (earth_rate, flat_earth) {
+            (true, true) => Err("--earth-rate and --flat-earth contradict each other".into()),
+            (true, false) => Ok(Self::Compensated),
+            (false, true) => Ok(Self::Flat),
+            (false, false) => Ok(Self::ByGrade),
+        }
+    }
+
+    /// Whether to compensate the input, for a gyroscope of this bias
+    /// stability, rad/s.
+    ///
+    /// By grade, a gyroscope good enough to find north from Earth rate has no
+    /// right answer here, and is refused rather than given one.
+    pub fn compensate(self, gyro_bias_stability: f64) -> Result<bool, String> {
+        match self {
+            Self::Flat => Ok(false),
+            Self::Compensated => Ok(true),
+            Self::ByGrade => flat_earth_verdict(gyro_bias_stability)
+                .compensates_input()
+                .ok_or_else(|| {
+                    format!(
+                        "this gyroscope sees Earth rate at {:.0}x its bias stability: \
+                         navigation grade, which needs Earth rotation inside the \
+                         symmetry group (adr/0008). Pass --earth-rate or --flat-earth \
+                         to run the EqF anyway.",
+                        earth_rate_ratio(gyro_bias_stability)
+                    )
+                }),
+        }
+    }
 }
 
-/// Course over ground and velocity near fix `from`, searching in `step`.
+/// The EqF configured from a KF-GINS YAML.
 ///
-/// Walks outwards until the fixes are far enough apart to give a heading worth
-/// having. Returns `None` when the vehicle is too slow for course to mean
-/// anything, which is the case this must not guess at: a stationary vehicle has
-/// a heading and its GNSS track does not know it.
-fn course(gnss: &[GnssFix], from: usize, anchor: &Anchor, step: isize) -> Option<(f64, Vec3)> {
-    let here = gnss.get(from)?;
-    let base = anchor.to_local(here.position);
-    let mut i = from as isize;
-    for _ in 0..20 {
-        i += step;
-        if i < 0 || i as usize >= gnss.len() {
-            return None;
-        }
-        let other = gnss[i as usize];
-        let d = anchor.to_local(other.position) - base;
-        let dt = here.time.tow() - other.time.tow();
-        if dt.abs() < 1e-6 {
-            continue;
-        }
-        // 5 m of separation keeps a metre of GNSS noise out of the heading.
-        if d.x.hypot(d.y) < 5.0 {
-            continue;
-        }
-        // `d` points from `here` towards `other`; travel is the other way when
-        // `other` is earlier.
-        let travel = if dt > 0.0 { -d } else { d };
-        let velocity = travel * (1.0 / dt.abs());
-        return Some((travel.y.atan2(travel.x), velocity));
-    }
-    None
-}
-
-/// Replay the EqF over the same inputs as [`crate::replay`].
-pub fn replay_eqf(
+/// Everything the two filters share comes from the same fields the ESKF
+/// reads: the initial state, its sigmas, the bias priors, the IMU noise. What
+/// the ESKF has no counterpart for is set here:
+///
+/// - **The lever arm starts at zero with a metre of uncertainty**, because
+///   that is the claim being tested. The ESKF is handed `antlever`.
+/// - **The magnetometer calibration** is unobservable — the dataset has no
+///   magnetometer — so it keeps a 1 mrad prior and never moves.
+/// - **The anchor** is the first fix inside the processing window, as the
+///   replay's own plotting origin is.
+/// - **The accelerometer scale factors** the ESKF estimates are folded into
+///   the bias prior. This IMU's vertical one is about −260 ppm, which at 1 g
+///   is a 250 mGal bias against a configured bias prior of 15 mGal.
+///
+/// `compensate` turns on input-side Earth-rate compensation, which on this
+/// tactical-grade IMU is worth a factor of twenty-seven; `alpha` is the GCU
+/// rate, `None` for off.
+pub fn kfgins_options(
     config: &kfgins::Config,
-    imu: &[ImuSample],
     gnss: &[GnssFix],
     compensate: bool,
-    warm: WarmStart,
-    quiet: bool,
-) -> EqfReport {
-    let mut next_fix = 0usize;
-    while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
-        next_fix += 1;
-    }
-    let anchor = Anchor::new(
-        gnss.get(next_fix)
-            .map(|f| f.position)
-            .unwrap_or(config.options.initial_state.position),
-    );
-
-    let initial = config.options.initial_state;
-    let start = State {
-        pose: Se23::new(
-            initial.attitude.quat.to_dcm(),
-            Vec3::new(initial.velocity.n, initial.velocity.e, initial.velocity.d),
-            anchor.to_local(initial.position),
-        ),
-        bias: Se3Tangent::ZERO,
-        // The headline: start with no antenna offset at all and let the filter
-        // find it. The ESKF is handed the answer.
-        lever: Vec3::ZERO,
-        mag: Mat3::identity(),
-    };
-
-    let noise = process_noise(config);
-    let mut filter = EqFilter::new(&start, initial_covariance(config), anchor.gravity);
-
-    // A reverse pass, then seed the forward run from it. See `WarmStart` for
-    // what each mode does to the meaning of the result.
-    if warm != WarmStart::None {
-        let back = reverse_pass(config, imu, gnss, &anchor, &start, &noise, compensate);
-        let learned = back.nav_state();
-        let seeded = match warm {
-            WarmStart::Full => learned,
-            // Keep the configured pose, take everything the reverse pass
-            // learned about the sensors.
-            _ => State {
-                pose: start.pose,
-                ..learned
-            },
-        };
-        filter = EqFilter::new(&seeded, back.sigma, anchor.gravity);
-    }
-    // Bias stability is per-axis in the config; the ratio is a scalar property
-    // of the part, so take the largest axis as the representative figure.
-    let bias_stability = config.options.imu_noise.gyro_bias_std.amax();
-
-    let mut report = EqfReport {
-        processed: 0,
-        applied: 0,
-        residual_north: Running::new(),
-        residual_east: Running::new(),
-        residual_down: Running::new(),
-        horizontal: Running::new(),
-        nis: Running::new(),
-        epochs: Vec::new(),
-        lever: Vec3::ZERO,
-        configured_lever: config.options.antenna_lever_arm,
-        max_range: 0.0,
-        curvature_error: 0.0,
-        earth_rate_compensated: compensate,
-        warm_start: warm,
-        final_residual: 0.0,
-        earth_rate_ratio: earth_rate_ratio(bias_stability),
-        verdict: flat_earth_verdict(bias_stability),
-        gyrocompass: gyrocompass_accuracy(bias_stability, anchor.origin.lat),
-    };
-
-    let end = config.end_time.unwrap_or(f64::INFINITY);
-    let mut previous = config.start_time;
-
-    for sample in imu {
-        let tow = sample.time.tow();
-        if tow < config.start_time {
-            previous = tow;
-            continue;
-        }
-        if tow > end {
-            break;
-        }
-        let dt = tow - previous;
-        previous = tow;
-        if !(dt > 0.0 && dt < 1.0) {
-            continue;
-        }
-
-        // KF-GINS files carry increments, the EqF wants rates, and
-        // `ImuSample::gyro`/`accel` already do that division — dividing again
-        // by `dt` scales the input by the sample rate, which at 200 Hz is a
-        // 200x error and diverges within seconds. It did.
-        let mut input = Input::new(sample.gyro(), sample.accel());
-        if compensate {
-            let st = filter.nav_state();
-            input = compensate_earth(
-                &input,
-                st.pose.rotation,
-                st.pose.velocity,
-                anchor.origin.lat,
-                anchor.origin.height,
-            );
-        }
-        filter.propagate(&input, dt, &noise);
-        report.processed += 1;
-
-        if next_fix < gnss.len() && gnss[next_fix].time.tow() <= tow {
-            let fix = gnss[next_fix];
-            next_fix += 1;
-
-            // Open-loop residual at the antenna, before the update — the same
-            // quantity `replay` reports, so the two are comparable.
-            let state = filter.nav_state();
-            let predicted = state.pose.position + state.pose.rotation * state.lever;
-            let measured = anchor.to_local(fix.position);
-            let residual = predicted - measured;
-
-            report.residual_north.push(residual.x);
-            report.residual_east.push(residual.y);
-            report.residual_down.push(residual.z);
-            report.horizontal.push(residual.x.hypot(residual.y));
-            report.max_range = report.max_range.max(measured.x.hypot(measured.y));
-
-            let index = report.epochs.len();
-            report.epochs.push(Epoch {
-                tow,
-                ned: (predicted.x, predicted.y, predicted.z),
-                residual: (residual.x, residual.y, residual.z),
-                nis: None,
-            });
-
-            let sigma = fix.position_std;
-            let r = Mat3::from_diagonal(&[sigma.x * sigma.x, sigma.y * sigma.y, sigma.z * sigma.z]);
-            if let Some(nis) = filter.update_position(measured, &r) {
-                report.nis.push(nis);
-                report.epochs[index].nis = Some(nis);
-                report.applied += 1;
-            }
-
-            // The instantaneous residual, not the running RMS: on this dataset
-            // the two say completely different things, because the run is a
-            // long convergence and the RMS keeps the transient forever.
-            report.final_residual = residual.norm();
-            if !quiet && report.applied.is_multiple_of(600) {
-                let st = filter.nav_state();
-                eprintln!(
-                    "  t={:5.0} s  residual {:9.3e} m  lever [{:+.3}, {:+.3}, {:+.3}]",
-                    tow - config.start_time,
-                    residual.norm(),
-                    st.lever.x,
-                    st.lever.y,
-                    st.lever.z,
-                );
-            }
-        }
-    }
-
-    report.lever = filter.nav_state().lever;
-    report.curvature_error = anchor.curvature_error(report.max_range);
-    report
-}
-
-/// Initial covariance, from the same YAML the ESKF reads.
-///
-/// The six states the two filters do not share get their own priors: the lever
-/// arm starts at zero with a metre of uncertainty, because that is the claim
-/// being tested, and the magnetometer calibration is unobservable here — there
-/// is no magnetometer in this dataset — so it keeps its prior and never moves.
-fn initial_covariance(config: &kfgins::Config) -> Matrix<21, 21> {
+    alpha: Option<f64>,
+) -> EqfOptions {
     let o = &config.options;
-    let mut d = [0.0; 21];
-    let squared = |v: Vec3, i: usize| v.to_array()[i] * v.to_array()[i];
-    for i in 0..3 {
-        d[i] = squared(o.initial_attitude_std, i);
-        d[3 + i] = squared(o.initial_velocity_std, i);
-        d[6 + i] = squared(o.initial_position_std, i);
-        d[9 + i] = squared(o.initial_gyro_bias_std, i);
-        d[12 + i] = squared(o.initial_accel_bias_std, i);
-        d[15 + i] = 1.0;
-        d[18 + i] = 1e-6;
+    let anchor = gnss
+        .iter()
+        .find(|f| f.time.tow() >= config.start_time)
+        .map(|f| f.position)
+        .unwrap_or(o.initial_state.position);
+    let mut process_noise = ProcessNoise::from_imu_noise(&o.imu_noise);
+    // A lever arm that may drift by a fraction of a millimetre over the hour,
+    // so the filter never becomes certain enough to stop listening.
+    process_noise.lever = Vec3::splat(1e-10);
+    EqfOptions {
+        initial_state: o.initial_state,
+        anchor: Some(anchor),
+        initial_gyro_bias: o.initial_imu_error.gyro_bias,
+        initial_accel_bias: o.initial_imu_error.accel_bias,
+        initial_lever_arm: Vec3::ZERO,
+        initial_position_std: o.initial_position_std,
+        initial_velocity_std: o.initial_velocity_std,
+        initial_attitude_std: o.initial_attitude_std,
+        initial_gyro_bias_std: o.initial_gyro_bias_std,
+        initial_accel_bias_std: o.initial_accel_bias_std,
+        initial_lever_arm_std: Vec3::splat(1.0),
+        initial_mag_std: Vec3::splat(1e-3),
+        process_noise,
+        compensate_earth: compensate,
+        gcu_alpha: alpha,
+        ..EqfOptions::default()
     }
-    Matrix::from_diagonal(&d)
+    .with_accel_scale_factor(o.initial_accel_scale_std, &o.imu_noise)
 }
 
-/// Process noise, translated from the ESKF's `imunoise` block.
-fn process_noise(config: &kfgins::Config) -> ProcessNoise {
-    let n = &config.options.imu_noise;
-    let square = |v: Vec3| Vec3::new(v.x * v.x, v.y * v.y, v.z * v.z);
-    ProcessNoise {
-        gyro: square(n.gyro_arw),
-        accel: square(n.accel_vrw),
-        // Gauss-Markov in the ESKF, a random walk here: 2σ²/τ is the matching
-        // spectral density, and it is the same approximation the ESKF's own
-        // discretisation makes over one step.
-        gyro_bias: square(n.gyro_bias_std) * (2.0 / n.correlation_time),
-        accel_bias: square(n.accel_bias_std) * (2.0 / n.correlation_time),
-        lever: Vec3::splat(1e-10),
-        mag: Vec3::ZERO,
+/// The EqF configured for a GSDC phone trace, from the same IMU noise model
+/// and the same coarse alignment the ESKF is given.
+///
+/// Phone-grade priors: metres of position, tens of degrees of heading. The
+/// heading number is not pessimism — a coarse alignment from two seconds of
+/// levelling fixes roll and pitch and says almost nothing about yaw. The lever
+/// arm starts at zero with 10 cm of doubt: the phone has no antenna offset worth
+/// speaking of, so converging to near zero is the correct answer rather than a
+/// null result.
+///
+/// `compensate` is decided by [`EarthModel`] like every replay's; by grade it
+/// is off. A phone gyro drifts at about 20 °/h, so Earth rate is 0.75× its
+/// noise floor: the paper's flat-Earth assumption is the right one for this
+/// hardware, which keeps this a test of the filter as published.
+///
+/// `accel_scale_std` is the scale-factor prior the ESKF is given, carried as
+/// bias as on KF-GINS. At 1000 ppm and 1 g it is 1 % of this prior's 0.1 m/s².
+pub fn gsdc_options(
+    origin: Lla,
+    attitude: Euler,
+    noise: &ImuNoise,
+    accel_scale_std: Vec3,
+    compensate: bool,
+    alpha: Option<f64>,
+) -> EqfOptions {
+    let mut process_noise = ProcessNoise::from_imu_noise(noise);
+    process_noise.lever = Vec3::splat(1e-12);
+    EqfOptions {
+        initial_position_std: Vec3::splat(5.0),
+        initial_velocity_std: Vec3::splat(2.0),
+        // 5.1°, 5.1° and 31° — the variances the replay used before it moved
+        // onto the engine, now stated as the sigmas they are.
+        initial_attitude_std: Vec3::new(0.008_f64.sqrt(), 0.008_f64.sqrt(), 0.30_f64.sqrt()),
+        initial_gyro_bias_std: Vec3::splat(1e-3),
+        initial_accel_bias_std: Vec3::splat(0.1),
+        initial_lever_arm_std: Vec3::splat(0.1),
+        initial_mag_std: Vec3::splat(1e-3),
+        process_noise,
+        compensate_earth: compensate,
+        gcu_alpha: alpha,
+        ..EqfOptions::default()
+    }
+    .with_initial_state(origin, drifters_core::frames::Ned::ZERO, attitude)
+    .with_accel_scale_factor(accel_scale_std, noise)
+}
+
+/// `--alpha`: a rate in `[0, 1]`, or `off` for no GCU inflation at all.
+/// Absent, the engine's default, `0`.
+///
+/// `off` is not `0`. At `0` the inflation factor `β` still doubles the state's
+/// share of the innovation covariance for most fixes; see `drifters_eqf::gcu`.
+pub fn parse_alpha(value: Option<&str>) -> Result<Option<f64>, String> {
+    match value {
+        None => Ok(EqfOptions::default().gcu_alpha),
+        Some("off") => Ok(None),
+        Some(text) => {
+            let alpha: f64 = text
+                .parse()
+                .map_err(|_| format!("--alpha takes a rate in [0, 1] or `off`, not `{text}`"))?;
+            if (0.0..=1.0).contains(&alpha) {
+                Ok(Some(alpha))
+            } else {
+                Err(format!(
+                    "--alpha must lie in [0, 1], or be `off`: got {alpha}"
+                ))
+            }
+        }
     }
 }
 
-impl EqfReport {
-    /// Print the report, including the terms that are modelling error rather
-    /// than filter error.
-    pub fn print(&self) {
-        println!("\n--- EqF replay (flat-Earth, local tangent frame) ---");
-        println!("IMU samples processed : {}", self.processed);
-        println!("GNSS fixes applied    : {}", self.applied);
-        println!("warm start           : {}", self.warm_start.describe());
+/// How a GCU setting reads in a report.
+pub fn describe_alpha(alpha: Option<f64>) -> String {
+    match alpha {
+        Some(alpha) => format!("GCU convergence rate alpha = {alpha:.2}"),
+        None => "GCU off (no inflation)".to_string(),
+    }
+}
+
+/// The terms in an EqF result on KF-GINS that are modelling error, not filter
+/// error.
+pub struct ModelError {
+    /// Greatest horizontal range from the anchor, metres.
+    pub max_range: f64,
+    /// Tangent-plane error at that range, metres.
+    pub curvature_error: f64,
+    /// Whether Earth-rate compensation was applied to the gyro input.
+    pub earth_rate_compensated: bool,
+    /// Earth rate divided by this IMU's gyroscope bias stability.
+    pub earth_rate_ratio: f64,
+    /// Which Earth model that ratio calls for, per adr/0008.
+    pub verdict: FlatEarthVerdict,
+    /// Static heading accuracy this gyroscope could gyrocompass to, radians.
+    pub gyrocompass: f64,
+    /// The lever arm the ESKF was handed, for comparison with the estimate.
+    pub configured_lever: Vec3,
+}
+
+impl ModelError {
+    /// What a replay through `options` measured, set against the IMU the
+    /// config describes.
+    pub fn of(config: &kfgins::Config, options: &EqfOptions, report: &Report) -> Self {
+        // Bias stability is per-axis in the config; the ratio is a scalar
+        // property of the part, so take the largest axis as the
+        // representative figure.
+        let bias_stability = config.options.imu_noise.gyro_bias_std.amax();
+        let anchor = Anchor::new(options.anchor_or_initial());
+        Self {
+            max_range: report.max_range,
+            curvature_error: anchor.curvature_error(report.max_range),
+            earth_rate_compensated: options.compensate_earth,
+            earth_rate_ratio: earth_rate_ratio(bias_stability),
+            verdict: flat_earth_verdict(bias_stability),
+            gyrocompass: gyrocompass_accuracy(bias_stability, anchor.origin.lat),
+            configured_lever: config.options.antenna_lever_arm,
+        }
+    }
+
+    /// Print it after the replay's own summary.
+    pub fn print(&self, report: &Report) {
         println!(
-            "Earth-rate input compensation: {}",
+            "\nEarth-rate input compensation: {}",
             if self.earth_rate_compensated {
                 "on (a deviation from the paper)"
             } else {
@@ -586,28 +366,11 @@ impl EqfReport {
             }
         );
 
-        println!("\n=== open-loop antenna residual (metres) ===");
-        println!(
-            "horizontal RMS {:.4}   vertical RMS {:.4}   horizontal max {:.3}",
-            self.residual_north.rms().hypot(self.residual_east.rms()),
-            self.residual_down.rms(),
-            self.horizontal.max()
-        );
-        println!("residual at the last fix: {:.3} m", self.final_residual);
-        println!(
-            "NIS mean {:.3} over {} fixes (expected 3.0)",
-            self.nis.mean(),
-            self.nis.count()
-        );
-        println!(
-            "\nFor scale, the ESKF on this same data: 0.033 m horizontal, 0.018 m\n\
-             vertical. That gap is an Earth model, not an estimator — see below."
-        );
-
         println!("\n=== self-calibrated GNSS lever arm (metres, body frame) ===");
+        let lever = report.lever;
         println!(
             "estimated  [{:+.3}, {:+.3}, {:+.3}]   from a zero start",
-            self.lever.x, self.lever.y, self.lever.z
+            lever.x, lever.y, lever.z
         );
         println!(
             "configured [{:+.3}, {:+.3}, {:+.3}]   what the ESKF is handed",
@@ -615,7 +378,7 @@ impl EqfReport {
         );
         println!(
             "error       {:.3} m",
-            (self.lever - self.configured_lever).norm()
+            (lever - self.configured_lever).norm()
         );
 
         println!("\n=== modelling error, not filter error ===");
@@ -634,7 +397,10 @@ impl EqfReport {
             }
         );
         if !self.earth_rate_compensated && self.verdict != FlatEarthVerdict::Negligible {
-            println!("  ... and it is not compensated here, so expect divergence.");
+            println!(
+                "  ... and it is not compensated here: expect an error the covariance\n\
+                 \x20 knows nothing of, and divergence if GCU is on (alpha > 0)."
+            );
         }
         if self.verdict == FlatEarthVerdict::CompensateInput && self.earth_rate_compensated {
             println!(
@@ -644,223 +410,4 @@ impl EqfReport {
             );
         }
     }
-}
-
-/// Replay the EqF over a GSDC phone trace, scored against ground truth.
-///
-/// Takes the inputs already read by [`crate::run_gsdc`] rather than re-reading
-/// them, so the two estimators see byte-identical data on identical epochs.
-/// Anything less and the comparison would be measuring the reader.
-///
-/// # Why this is the fair venue and KF-GINS is not
-///
-/// The paper assumes a flat, non-rotating Earth. On the tactical-grade KF-GINS
-/// IMU that is fatal — Earth rate is 557× the gyro's own bias stability, and the
-/// filter diverges as `t³`. A phone gyro drifts at roughly 20 °/h, so Earth rate
-/// is **0.75×** its noise floor: below it, not above. The assumption the paper
-/// makes is the right one for the hardware the paper targets, and this trace is
-/// that hardware.
-///
-/// Earth compensation is therefore *not* applied here. It is not needed, and
-/// leaving it off keeps this a test of the paper's filter as written.
-pub struct GsdcEqf {
-    /// Position error against truth.
-    pub error: truth::ErrorStats,
-    /// Per-epoch trace for plotting.
-    pub epochs: Vec<Epoch>,
-    /// Normalised innovation squared, before GCU inflation.
-    pub nis: Running,
-    /// Every NIS value behind [`GsdcEqf::nis`], for order statistics.
-    pub nis_values: Vec<f64>,
-    /// The lever arm the filter converged to. The phone has no antenna offset
-    /// worth speaking of, so this converging to near zero is the correct answer
-    /// rather than a null result.
-    pub lever: Vec3,
-    /// Per-epoch horizontal error against truth, `(tow, metres)`.
-    pub horizontal: Vec<(f64, f64)>,
-}
-
-pub fn replay_gsdc_eqf(
-    imu: &[ImuSample],
-    fixes: &[GnssFix],
-    reference: &truth::Truth,
-    attitude: drifters_core::math::Euler,
-    imu_scale: f64,
-    alpha: f64,
-) -> GsdcEqf {
-    let first = fixes[0];
-    let anchor = Anchor::new(first.position);
-
-    let start = State {
-        pose: Se23::new(
-            drifters_core::math::Quat::from_euler(attitude.roll, attitude.pitch, attitude.yaw)
-                .to_dcm(),
-            Vec3::ZERO,
-            Vec3::ZERO,
-        ),
-        bias: Se3Tangent::ZERO,
-        lever: Vec3::ZERO,
-        mag: Mat3::identity(),
-    };
-
-    // Phone-grade priors: metres of position, tens of degrees of heading. The
-    // heading number is not pessimism — a coarse alignment from two seconds of
-    // levelling fixes roll and pitch and says almost nothing about yaw.
-    let mut d = [0.0; 21];
-    for i in 0..3 {
-        d[i] = if i == 2 { 0.30 } else { 0.008 };
-        d[3 + i] = 4.0;
-        d[6 + i] = 25.0;
-        d[9 + i] = 1.0e-6;
-        d[12 + i] = 1.0e-2;
-        d[15 + i] = 0.01;
-        d[18 + i] = 1.0e-6;
-    }
-    let mut filter = EqFilter::new(&start, Matrix::from_diagonal(&d), anchor.gravity);
-    filter.alpha = alpha;
-
-    // The same datasheet-class phone figures the ESKF uses, and the same
-    // `--imu-scale` applied to them. That flag is not a fudge for one estimator:
-    // a phone IMU's real error is dominated by unmodelled vibration and
-    // quantisation, not by its datasheet noise density, and both filters need
-    // to be told so. Handing it to one and not the other would make this a
-    // comparison of tuning.
-    let s2 = |v: f64| Vec3::splat((imu_scale * v).powi(2));
-    let noise = ProcessNoise {
-        gyro: s2(0.3 * drifters_core::math::DEG_TO_RAD / 60.0),
-        accel: s2(0.2 / 60.0),
-        gyro_bias: s2(20.0 * drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC) * (2.0 / 3600.0),
-        accel_bias: s2(2000.0 * drifters_core::math::MGAL_TO_M_S2) * (2.0 / 3600.0),
-        lever: Vec3::splat(1e-12),
-        mag: Vec3::ZERO,
-    };
-
-    let mut out = GsdcEqf {
-        error: truth::ErrorStats::new(),
-        epochs: Vec::new(),
-        nis: Running::new(),
-        nis_values: Vec::new(),
-        lever: Vec3::ZERO,
-        horizontal: Vec::new(),
-    };
-
-    let mut next = 0usize;
-    for sample in imu {
-        let t = sample.time.tow();
-        if t < first.time.tow() {
-            continue;
-        }
-        // `sample.dt` and not a timestamp difference: `gyro()` and `accel()`
-        // divide the increments by `sample.dt`, so integrating over anything
-        // else silently rescales the input. The phone trace has irregular
-        // sampling, which is exactly where the two disagree.
-        let dt = sample.dt;
-        if !(dt > 0.0 && dt < 1.0) {
-            continue;
-        }
-        filter.propagate(&Input::new(sample.gyro(), sample.accel()), dt, &noise);
-
-        if next < fixes.len() && fixes[next].time.tow() <= t {
-            let fix = fixes[next];
-            next += 1;
-
-            let state = filter.nav_state();
-            let predicted = state.pose.position + state.pose.rotation * state.lever;
-            let measured = anchor.to_local(fix.position);
-            let residual = predicted - measured;
-
-            let s = fix.position_std;
-            let r = Mat3::from_diagonal(&[s.x * s.x, s.y * s.y, s.z * s.z]);
-            let nis = filter.update_position(measured, &r);
-
-            // GNSS velocity is what made heading observable for the ESKF on
-            // this trace (a 1.7% gain became 34.7%). The EqF gets the same
-            // measurement or the comparison is about inputs, not estimators.
-            // Which solve produced it is [`gsdc::VelocitySource`]'s business;
-            // an epoch without one simply carries `None`.
-            if let Some(v) = fix.velocity {
-                let sv = fix.velocity_std;
-                let rv = Mat3::from_diagonal(&[sv.x * sv.x, sv.y * sv.y, sv.z * sv.z]);
-                filter.update_velocity(Vec3::new(v.n, v.e, v.d), sample.gyro(), &rv);
-            }
-
-            if let Some(nis) = nis {
-                out.nis.push(nis);
-                out.nis_values.push(nis);
-            }
-            let solved = filter.nav_state();
-            let geodetic = anchor.to_geodetic(solved.pose.position);
-            out.error.push(reference, t, geodetic);
-            if let Some(r) = reference.at(t) {
-                out.horizontal
-                    .push((t, geodetic.ned_from(r).horizontal_norm()));
-            }
-            out.epochs.push(Epoch {
-                tow: t,
-                ned: (predicted.x, predicted.y, predicted.z),
-                residual: (residual.x, residual.y, residual.z),
-                nis,
-            });
-            if std::env::var("DRIFTERS_EQF_TRACE").is_ok() && out.epochs.len().is_multiple_of(60) {
-                let geo = anchor.to_geodetic(solved.pose.position);
-                let e = reference
-                    .at(t)
-                    .map(|r| geo.ned_from(r).horizontal_norm())
-                    .unwrap_or(f64::NAN);
-                eprintln!(
-                    "  n={:5}  range={:8.0} m  horiz_err={:9.2} m  nis={:8.2}",
-                    out.epochs.len(),
-                    measured.x.hypot(measured.y),
-                    e,
-                    nis.unwrap_or(f64::NAN)
-                );
-            }
-        }
-    }
-    out.lever = filter.nav_state().lever;
-    out
-}
-
-/// One row of a process-noise sweep.
-pub struct TuneRow {
-    /// Multiplier applied to every IMU noise density.
-    pub scale: f64,
-    /// Mean NIS of the ESKF, and its horizontal RMS error against truth.
-    pub eskf_nis: f64,
-    /// Median NIS of the ESKF.
-    pub eskf_nis_median: f64,
-    /// Median NIS of the EqF.
-    pub eqf_nis_median: f64,
-    /// See [`TuneRow::eskf_nis`].
-    pub eskf_rms: f64,
-    /// Mean NIS of the EqF, and its horizontal RMS error against truth.
-    pub eqf_nis: f64,
-    /// See [`TuneRow::eqf_nis`].
-    pub eqf_rms: f64,
-}
-
-/// The scale at which mean NIS crosses `target`, by log-linear interpolation.
-///
-/// NIS falls monotonically as the assumed process noise rises, so the crossing
-/// is unique when it exists. Returns `None` when the sweep does not bracket it,
-/// which is itself informative: the sweep was too narrow.
-pub fn nis_crossing(rows: &[TuneRow], nis: impl Fn(&TuneRow) -> f64, target: f64) -> Option<f64> {
-    for pair in rows.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        let (na, nb) = (nis(a), nis(b));
-        if (na - target) * (nb - target) <= 0.0 && (na - nb).abs() > f64::EPSILON {
-            let t = (na - target) / (na - nb);
-            let (la, lb) = (a.scale.ln(), b.scale.ln());
-            return Some((la + t * (lb - la)).exp());
-        }
-    }
-    None
-}
-
-/// The scale with the lowest horizontal RMS in the sweep.
-pub fn best_rms(rows: &[TuneRow], rms: impl Fn(&TuneRow) -> f64) -> Option<f64> {
-    rows.iter()
-        .filter(|r| rms(r).is_finite())
-        .min_by(|a, b| rms(a).total_cmp(&rms(b)))
-        .map(|r| r.scale)
 }

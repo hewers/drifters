@@ -6,6 +6,7 @@
 //! inside a replay harness on a workstation.
 
 use drifters_core::earth::Wgs84;
+use drifters_core::estimator::{place, Estimator, Placement, PvaStd, EPOCH_TOLERANCE};
 use drifters_core::frames::Ned;
 use drifters_core::math::Quat;
 use drifters_core::math::{Mat3, Matrix, Vec3};
@@ -23,51 +24,11 @@ use crate::state::{StateVector, BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SA_ID, SG_ID};
 
-/// How a GNSS epoch relates to the IMU interval being processed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GnssPlacement {
-    /// No fix pending, or it is ahead of this interval and waits for a later
-    /// one.
-    None,
-    /// The fix coincides with the start of the interval: update, then
-    /// propagate.
-    AtStart,
-    /// The fix coincides with the end of the interval: propagate, then update.
-    AtEnd,
-    /// The fix falls strictly inside: split the IMU sample at the fix.
-    Inside,
-    /// The fix is behind this interval. No later interval can contain it, so
-    /// it is dropped and counted rather than left to rot in the slot.
-    Stale,
-}
-
 /// What [`GinsEngine::add_gnss`] did with a fix.
 ///
-/// Only the first two arms queue anything. The other two are the cases a
-/// caller on real hardware must be able to see: a receiver that reports its
-/// fixes late enough to be stale is the normal failure, not an exotic one, and
-/// a `bool` could not say which of the two it was.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use = "a Stale or Invalid fix was not queued"]
-#[non_exhaustive]
-pub enum GnssQueued {
-    /// Queued, to be applied by the next IMU interval that contains it.
-    Queued,
-    /// Queued, and the fix that was already waiting has been discarded.
-    ///
-    /// The engine holds one pending fix. Two queued before an IMU sample
-    /// consumes the first means the IMU stream is lagging the receiver; the
-    /// newer fix is kept because it is the one the stream has not passed.
-    Replaced,
-    /// The epoch is already behind the engine's current time, so no IMU
-    /// interval can ever contain it. Not queued; counted in
-    /// [`GinsEngine::stale_fix_count`]. Apply it through
-    /// [`crate::rewind::RewindEngine`] instead.
-    Stale,
-    /// Failed [`GnssFix::is_valid`]: a non-finite position or a zero sigma,
-    /// which would make the innovation covariance singular. Not queued.
-    Invalid,
-}
+/// Shared with the equivariant filter's engine, so it is defined beside the
+/// [`Estimator`] trait and re-exported here, where it has always been found.
+pub use drifters_core::estimator::GnssQueued;
 
 /// A loosely-coupled GNSS/INS engine over the 21-state error model.
 #[derive(Clone, Copy, Debug)]
@@ -79,8 +40,8 @@ pub struct GinsEngine {
     previous_imu: ImuSample,
     pending_gnss: Option<GnssFix>,
     initialised: bool,
-    /// Half the IMU interval; a fix closer than this to a boundary is treated
-    /// as coincident with it rather than split.
+    /// A fix closer than this to a boundary is treated as coincident with it
+    /// rather than split. See [`EPOCH_TOLERANCE`].
     epoch_tolerance: F,
     consecutive_rejections: u32,
     inflations: u32,
@@ -148,7 +109,7 @@ impl GinsEngine {
             previous_imu: ImuSample::default(),
             pending_gnss: None,
             initialised: false,
-            epoch_tolerance: 1.0e-4,
+            epoch_tolerance: EPOCH_TOLERANCE,
             consecutive_rejections: 0,
             inflations: 0,
             stale_fixes: 0,
@@ -175,6 +136,27 @@ impl GinsEngine {
     #[inline]
     pub fn std_deviations(&self) -> [F; N_STATE] {
         self.filter.std_deviations()
+    }
+
+    /// One-sigma uncertainty of position, velocity and attitude.
+    ///
+    /// The first nine of [`GinsEngine::std_deviations`], named. The error
+    /// state is already in NED metres, m/s and radians about the navigation
+    /// axes, so nothing is converted.
+    pub fn pva_std(&self) -> PvaStd {
+        let sigma = self.filter.std_deviations();
+        let block = |i: usize| Vec3::new(sigma[i], sigma[i + 1], sigma[i + 2]);
+        PvaStd {
+            position: block(P_ID),
+            velocity: block(V_ID),
+            attitude: block(PHI_ID),
+        }
+    }
+
+    /// True when the navigation state and the covariance are both finite.
+    #[inline]
+    pub fn is_healthy(&self) -> bool {
+        self.filter.is_healthy() && self.state.is_finite()
     }
 
     /// The timestamp of the most recently processed IMU sample.
@@ -260,10 +242,10 @@ impl GinsEngine {
 
         let imu = self.state.imu_error.compensate(&raw);
         match self.classify_gnss(&imu) {
-            GnssPlacement::None => {
+            None | Some(Placement::Ahead) => {
                 self.propagate(&imu);
             }
-            GnssPlacement::Stale => {
+            Some(Placement::Stale) => {
                 // Queued before the first sample fixed the time origin, or the
                 // stream jumped. Either way it is unusable, and a slot that
                 // holds it would present the next `add_gnss` as a replacement
@@ -272,15 +254,15 @@ impl GinsEngine {
                 self.stale_fixes = self.stale_fixes.saturating_add(1);
                 self.propagate(&imu);
             }
-            GnssPlacement::AtStart => {
+            Some(Placement::AtStart) => {
                 self.apply_pending_gnss()?;
                 self.propagate(&imu);
             }
-            GnssPlacement::AtEnd => {
+            Some(Placement::AtEnd) => {
                 self.propagate(&imu);
                 self.apply_pending_gnss()?;
             }
-            GnssPlacement::Inside => {
+            Some(Placement::Inside) => {
                 let fix_time = self.pending_gnss.expect("placement implies a fix").time;
                 let (before, after) = imu.split_at(fix_time);
                 if let Some(before) = before {
@@ -297,11 +279,11 @@ impl GinsEngine {
         Ok(())
     }
 
-    fn classify_gnss(&self, imu: &ImuSample) -> GnssPlacement {
-        match self.pending_gnss {
-            Some(fix) => place(fix.time, imu, self.epoch_tolerance),
-            None => GnssPlacement::None,
-        }
+    /// Where the pending fix falls in the interval `imu` covers, or `None`
+    /// when no fix is pending.
+    fn classify_gnss(&self, imu: &ImuSample) -> Option<Placement> {
+        self.pending_gnss
+            .map(|fix| place(fix.time, imu, self.epoch_tolerance))
     }
 
     /// Mechanize one interval and propagate the covariance across it.
@@ -635,28 +617,66 @@ impl GinsEngine {
     }
 }
 
-/// Where an epoch falls relative to the interval an IMU sample covers.
+/// The interface shared with the equivariant filter's engine.
 ///
-/// A free function of the sample's own time and length, and nothing of the
-/// engine's state, so that [`crate::rewind`] can ask the question of a sample
-/// in its ring and get the answer the engine will give when that sample is
-/// pushed again. Two copies of this rule would be two rules.
-pub(crate) fn place(epoch: GpsTime, imu: &ImuSample, tolerance: F) -> GnssPlacement {
-    let start = imu.time.add_seconds(-imu.dt);
-    let from_start = epoch.seconds_since(start);
-    let from_end = epoch.seconds_since(imu.time);
-    if from_start.abs() <= tolerance {
-        GnssPlacement::AtStart
-    } else if from_end.abs() <= tolerance {
-        GnssPlacement::AtEnd
-    } else if from_start > 0.0 && from_end < 0.0 {
-        GnssPlacement::Inside
-    } else if from_start < 0.0 {
-        // Behind the interval, and intervals only move forward.
-        GnssPlacement::Stale
-    } else {
-        // Ahead of the interval: hold it for a later sample.
-        GnssPlacement::None
+/// Every method is the inherent one of the same name, so code written against
+/// [`GinsEngine`] directly and code written against the trait cannot see
+/// different behaviour. What the trait leaves out is in
+/// [`drifters_core::estimator`].
+impl Estimator for GinsEngine {
+    #[inline]
+    fn add_imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
+        GinsEngine::add_imu(self, sample)
+    }
+
+    #[inline]
+    fn add_gnss(&mut self, fix: GnssFix) -> GnssQueued {
+        GinsEngine::add_gnss(self, fix)
+    }
+
+    #[inline]
+    fn nav_state(&self) -> NavState {
+        GinsEngine::nav_state(self)
+    }
+
+    #[inline]
+    fn timestamp(&self) -> GpsTime {
+        GinsEngine::timestamp(self)
+    }
+
+    #[inline]
+    fn antenna_position(&self) -> drifters_core::frames::Lla {
+        GinsEngine::antenna_position(self)
+    }
+
+    #[inline]
+    fn pva_std(&self) -> PvaStd {
+        GinsEngine::pva_std(self)
+    }
+
+    #[inline]
+    fn last_nis(&self) -> Option<F> {
+        GinsEngine::last_nis(self)
+    }
+
+    #[inline]
+    fn consecutive_rejections(&self) -> u32 {
+        GinsEngine::consecutive_rejections(self)
+    }
+
+    #[inline]
+    fn inflation_count(&self) -> u32 {
+        GinsEngine::inflation_count(self)
+    }
+
+    #[inline]
+    fn stale_fix_count(&self) -> u32 {
+        GinsEngine::stale_fix_count(self)
+    }
+
+    #[inline]
+    fn is_healthy(&self) -> bool {
+        GinsEngine::is_healthy(self)
     }
 }
 
@@ -972,7 +992,7 @@ mod tests {
         let _ = e.add_gnss(fix);
         assert_eq!(
             e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
-            GnssPlacement::Inside
+            Some(Placement::Inside)
         );
         e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
         assert!(e.pending_gnss.is_none());
@@ -990,7 +1010,7 @@ mod tests {
         e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
         assert_eq!(
             e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
-            GnssPlacement::Stale
+            Some(Placement::Stale)
         );
         e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
         assert!(e.pending_gnss.is_none(), "a stale fix must leave the slot");

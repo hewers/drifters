@@ -14,6 +14,36 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **`EqfOptions::gcu_alpha` and `EqFilter::alpha` are `Option<F>`.** Breaking.
+  `None` turns GCU off; `Some(0.0)` does not, since `β` still doubles the
+  state's share of the innovation covariance for about four position fixes in
+  five, and nothing could express "off" before. The default stays
+  `Some(0.0)`, measured best of the settings on seven of eight phone
+  trace/tuning combinations, with off the worst on all eight. `EqFilter::new`
+  starts at `Some(0.0)` too, where it started at `0.5` — the value a replay
+  that never set it ran at unawares. The CLI's `--alpha` takes `off`.
+- **A replay picks the EqF's Earth model by the gyroscope's grade**, as
+  adr/0008 decides: compensated on KF-GINS, flat on a phone, and a refusal to
+  choose for a navigation-grade part. `--earth-rate` and the new
+  `--flat-earth` override it. `FlatEarthVerdict::compensates_input` gives the
+  setting to library users; `EqfOptions::compensate_earth` still defaults off,
+  as the paper has it.
+- **The KF-GINS replay reports a stale fix as stale.** The window opens on a
+  fix 4.4 ms before the first IMU sample, which both engines refuse and
+  count; the report called it "rejected by the gate".
+- **Every replay in `drifters-cli` runs whichever engine `--engine` selects,
+  through one loop.** `replay`, `plot`, `gsdc` and `tune` take
+  `--engine eskf`, `eqf` or `eskf,eqf`; `eqf` is `replay --engine eqf`. The
+  EqF's replays used to drive `EqFilter` in loops of their own, applying each
+  fix at the end of the sample it fell in. They now go through `EqfEngine`,
+  and the loops are generic over `Estimator` with a CLI-local `ReplayEngine`
+  for the ESKF-only parts: tight coupling and the RTS record, which a replay
+  refuses rather than ignores when the engine lacks them. The ESKF's results
+  are bit-identical — output files, every GSDC table row on four traces under
+  five configurations, the tune sweeps, per-epoch position and NIS. The EqF's
+  moved; see Fixed. An EqF replay over KF-GINS now writes its own output files,
+  `drifters_eqf_*.txt`, beside the ESKF's. The `--warm-start` reverse pass,
+  which the CLI already refused, is removed with the loop it lived in.
 - **`GinsEngine::add_gnss` returns `GnssQueued`, not `bool`** — `Queued`,
   `Replaced`, `Stale` or `Invalid`. Breaking. A fix whose epoch the engine has
   already passed is refused at ingest and counted in `stale_fix_count`, where it
@@ -21,9 +51,76 @@ breaking wire change becomes `v2` rather than a crate version bump.
   behind the stream inside `add_imu` is dropped and counted the same way. `true`
   was the first two arms and `false` the last. The enum is `#[must_use]`, so a
   call site that ignored the `bool` now has to say that it means to.
+- **`GnssQueued`, `FilterError` and `eskf::chi_squared` are defined in
+  `drifters-core::estimator`** and re-exported from `drifters-filter` under the
+  paths they have always had. Not breaking: both enums were already
+  `#[non_exhaustive]`, so no downstream `match` was exhaustive to begin with.
+  They moved because the equivariant filter's engine needs the same three, and
+  neither estimator crate depends on the other.
+- **`RewindEngine` is a wrapper over `drifters-core::rewind::Rewind`**, the
+  same machinery now applied to the equivariant filter. Its public API is
+  unchanged and its tests passed against the move unchanged; `FixOutcome` is
+  defined in `drifters-core` and re-exported where it was. New: `rewind::Aid`,
+  the five aiding calls as values; `RewindEngine::aid`, which takes one;
+  `history`, the record a replay works from; and `rewind`, the generic layer
+  underneath. The footprint is unchanged, 21 312 bytes at `<120, 32>`.
+- **The ESKF's peak stack includes a late fix**, now that the harness measures
+  one: 19 120 bytes at 21 states, 18 208 with `f32-covariance`, 10 688 at 15.
+  The replay costs 152 bytes of frame over the held-state ZUPT it repeats,
+  which was the deepest path already. Inside every CI ceiling.
+- **`EqFilter` is `Copy`**, like every other type on the data path. A snapshot
+  of it is an assignment, which is what a rewind layer over it will need.
+- **The equivariant filter's covariance arithmetic runs in place.** Propagation,
+  the Joseph update and the reset's transport each use two `21 × 21` buffers
+  where the expression forms kept six alive. Peak stack on Cortex-M4 goes from
+  28 852 bytes to **13 488**. Every result is bit-identical: the expression
+  forms are kept under `#[cfg(test)]` and compared element for element.
 
 ### Fixed
 
+- **GCU's covariance update is the paper's.** The paper inflates the
+  innovation covariance and then updates as the EqF paper does,
+  `Σ⁺ = (I − KC*)Σ`, which counts the inflation as measurement noise. This
+  filter ran its Joseph form with the sensor's own `R`, under-reporting the
+  posterior by `K(S' − S)Kᵀ` on every inflated update: a correction partly
+  applied and wholly recorded. It now runs the Joseph form with
+  `R' = S' − C*ΣC*ᵀ`, from the new `gcu::effective_noise`. On the phone traces
+  that reverses most of what was recorded against GCU — α = 0.5 on trace A at
+  ×300 goes from 19.7 m to 3.80 m, ahead of the ESKF — and the EqF's
+  A-fitted tuning moves to ×36, where it leads the ESKF on all four traces by
+  21 to 40 % and beats the phone's GNSS on all four. α above zero still does
+  not survive the held-out traces, so the default stays 0. The docs had the
+  direction of α backwards; the paper says "the lower, the faster".
+- **The EqF on KF-GINS: three things the Earth was blamed for.** First the
+  flat-Earth divergence was put down to Earth rate, then to GCU at the 0.5 the
+  replay never overrode. With compensation, every α above zero still diverged
+  — 2.78, 29.2 and 216 m — and that was neither: the IMU's −260 ppm vertical
+  accelerometer scale factor, which the ESKF estimates and the EqF has no
+  state for, reached it as a 250 mGal bias seventeen sigma outside its 15 mGal
+  prior; and the covariance update above. The new
+  `EqfOptions::with_accel_scale_factor` carries the scale-factor prior the
+  ESKF is given in the bias prior, and with both fixed every α converges —
+  0.053, 0.106 and 0.73 m — in the paper's order. At α = 0 the compensated
+  filter is **0.035 m** against the ESKF's 0.033, NIS 1.55 against 1.46; flat,
+  0.943 m with a NIS of 6 718, and still diverging above α = 0, which is the
+  part of the Earth-rate account that stands. The old loop's 14.7 m against
+  the engine's 29.2 at α = 0.5 was fix timing — the old loop applied each fix
+  4.4 ms late — acting on one divergence.
+- **The KF-GINS configuration's lever arm is 2.6 cm short along the vehicle,
+  and the EqF found it.** Its estimate is `[+0.163, −0.305]` horizontally
+  against a configured `[+0.136, −0.301]`. The ESKF, handed the configured
+  value, shows a mean along-track residual of −2.58 cm and none across, not
+  scaling with speed; handed the EqF's, it improves from 0.0330 to 0.0325 m.
+  The vertical component is unobservable on this drive.
+- **The NEES harness turned GCU "off" by setting α = 0, which does not.** It
+  now sets `None` and reads 21.102, consistent, at every range from the
+  anchor. Under the corrected update α = 0 reads 18.43, conservative, which is
+  what counting the inflation as noise should do.
+- **The GSDC replay's "1-second dead-reckoning residual" was taken after the
+  update.** It was the fix's own error, near enough — 6.24 m against the
+  phone's 6.21. It is now the predicted antenna position before the epoch's
+  update, as the KF-GINS replay always measured it, and is labelled a
+  prediction residual.
 - **A GNSS fix that arrives after its epoch is no longer lost in silence.** A
   receiver reports each fix after the epoch it describes, so on hardware every
   fix is late; the engine took each one, held it, and applied none, with no
@@ -32,8 +129,32 @@ breaking wire change becomes `v2` rather than a crate version bump.
   iterating `[1, 2]` for the Jacobian's body-axis rows. The panic audit had
   never linked that function. It does now, with every aiding call and the
   rewind layer. Same arithmetic, and no result moves.
+- **Every instruction count this project has quoted was in the wrong unit, and
+  those from the default and 15-state builds were aliased as well.** The
+  bare-metal harness timed `add_imu` with SysTick under
+  `qemu -icount` and printed the result as instructions. SysTick counts the
+  25 MHz core clock, so each tick is forty instructions; and the counter is
+  24 bits, so the five-hundred-step batch it timed wrapped it twice in the
+  default build and once in the 15-state one. A 21-state `add_imu` retires
+  **3.54 million** instructions, not 21 398. The harness now times one step at
+  a time, refuses an interval that wrapped, and calibrates its unit against a
+  loop of known length. What follows from the corrected figures:
+  - `f32-covariance` removes **87 %** of the work per `add_imu`, where 45 % was
+    recorded. With it: 473 thousand instructions at 21 states, 271 thousand
+    at 15.
+  - The 15-state build without it is 1.58 million, over three times the
+    21-state build with it, and not the cheapest configuration.
+  - At an instruction per cycle, the best a Cortex-M4 does, the default build
+    needs at least 21 ms per IMU sample at 168 MHz. **It cannot follow a
+    100 Hz IMU on that part.** With `f32-covariance` the floor is 2.8 ms.
+  - Figures measured within the `f32-covariance` build were ticks but were not
+    aliased, so their ratios stand, the two below included.
+
+  [`docs/testing.md`](docs/testing.md), Layer 9, has the account and a table of
+  what each recorded figure should have been.
 - **The equivariant filter's covariance measures as consistent**, 21.007 against
-  an expected 21, where it had measured 23.6. The fault was the Monte-Carlo
+  an expected 21, where it had measured 23.6 (21.102 with GCU truly off; see
+  above). The fault was the Monte-Carlo
   harness's prior: it drew initial errors independently in physical coordinates
   and handed the filter `diag(σ²)` as an ε-coordinate covariance, which the two
   are only at the anchor with no velocity. Nothing in the filter changed, and no
@@ -41,6 +162,64 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`drifters-eqf::engine`** — `EqfEngine`, the equivariant filter as something
+  an application can drive, and the counterpart of `GinsEngine` in every
+  respect the two models allow. Sans-IO: `ImuSample`s and `GnssFix`es in, a
+  geodetic `NavState` out. A fix is applied inside the IMU interval that
+  contains it, splitting the sample at the epoch. Position, velocity and
+  magnetometer updates each have a chi-squared gate, and a run of rejections
+  inflates the covariance rather than leaving the filter locked out. Driven
+  with no gate it is `EqFilter` called in a loop, bit for bit, which a test
+  holds it to. 4 672 bytes; 13 568 bytes of stack on Cortex-M4, under the
+  ESKF's ceiling in CI; and no panic machinery linked.
+
+  It refuses a fix that arrives after its epoch, as `GinsEngine` does, and
+  `EqfRewindEngine`, below, applies one anyway. On a
+  Cortex-M4F it is 5.08 million instructions per sample with no
+  single-precision form: at least 30 ms at 168 MHz, however the cycles fall.
+  Today this is the engine for a host, or for a part with a double-precision
+  FPU.
+- **`drifters-eqf::rewind`** — `EqfRewindEngine`, which applies a GNSS fix to
+  the equivariant filter after its epoch has passed, bit-identically to
+  on-time delivery, by the same machinery as the ESKF's `RewindEngine`. Its
+  tests run with Earth compensation on, magnetometer readings between samples
+  and velocity fixes the gate rejects, and compare the observer state and all
+  441 covariance elements exactly. 25 608 bytes at `<120, 32>`; the late-fix
+  path is 13 568 bytes of stack on Cortex-M4, the same as the engine's own
+  peak, and links no panic machinery.
+- **`drifters-core::rewind`** — `Rewind<E>`, the rewind layer as a generic
+  over any engine implementing `Rewindable`: an `Estimator` that is `Copy`,
+  names its aiding calls as an `Aid` type, and reports whether it has a time
+  origin. Moved here from `drifters-filter` line for line. Tested against an
+  engine that does no arithmetic and hashes every call it is made, so that a
+  replay matching on-time delivery is an equality of two integers; three
+  deliberate breakages of the replay each fail in this crate and in both
+  estimator crates. A contract test runs it over both real engines.
+- **`drifters-eqf::config`** — `EqfOptions`, validated at construction. Every
+  initial uncertainty is a one-sigma value in physical units, the same ones
+  `GinsOptions` takes; `with_imu_noise` fills the process noise from the same
+  datasheet model. The lever arm is a first guess with a sigma rather than a
+  constant, because here it is a state.
+- **`drifters-eqf::physical`** — the map between the filter's normal
+  coordinates and physical errors, in both directions: `covariance_from_std`
+  builds the `Σ` that independent physical sigmas describe, and `variances`
+  reads a `Σ` back in metres and radians. It is the correction the Monte-Carlo
+  harness needed, below, moved to where the engine cannot construct a filter
+  without it. The Jacobian is checked against a numerical one at an observer
+  state with no zero blocks.
+- **`drifters-core::estimator`** — the interface the two engines share,
+  extracted from them rather than designed ahead of them: the `Estimator`
+  trait, object safe, covering ingest, the navigation solution, the antenna
+  position, position/velocity/attitude sigmas in common units, and the health
+  counters; `place`, the rule for where a GNSS epoch falls in an IMU interval,
+  which was private to `drifters-filter` and is now the one copy both use; and
+  `EPOCH_TOLERANCE`. Construction, the covariance and aiding are not in the
+  trait, and its documentation says why each is not. One contract test, generic
+  over the trait, runs against both engines.
+- **`GinsEngine::pva_std` and `GinsEngine::is_healthy`**, the two things the
+  trait asks for that the engine did not already have.
+- **`EqFilter::update_gated`**, with `Verdict`; `EqFilter::inflate` and
+  `is_healthy`; `ProcessNoise::from_imu_noise`.
 - **`drifters-filter::rewind`** — `RewindEngine`, which applies a GNSS fix after
   the engine has propagated past its epoch. Two snapshots of the engine and a
   ring of the IMU samples and aiding calls since; a late fix restores the
@@ -55,7 +234,8 @@ breaking wire change becomes `v2` rather than a crate version bump.
   of curvature from a single `sin_cos`. The free functions on `Wgs84` each
   compute their own, and the mechanization calls them about twelve times per
   IMU sample. Bit-identical results, and 10.4 % off the instructions retired per
-  `add_imu` on Cortex-M4.
+  `add_imu` on Cortex-M4 with `f32-covariance`. Without it the same saving is
+  1.1 %, of a build over seven times the size.
 - **`drifters-core::local`** — `LocalFrame`, a local Cartesian frame in NED
   metres about an explicit geodetic origin, with exact conversions through ECEF
   and the rotation between two frames. Groundwork for

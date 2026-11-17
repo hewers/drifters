@@ -430,6 +430,11 @@ nothing to keep at 200 Hz.
 
 **The win is larger on the target.** x86 vectorises; a Cortex-M4F does not, and
 carries `f64` in software. Instructions retired per `add_imu` on `mps2-an386`,
-under `qemu -icount shift=0`: 22 415 in double precision, **13 238** with
-`f32-covariance`, which the factorisation is what allows. Cycles still need a
-board, since QEMU models no pipeline.
+under `qemu -icount shift=0`: 3.58 million in double precision, **530 thousand**
+with `f32-covariance`, which the factorisation is what allows. Cycles still need
+a board, since QEMU models no pipeline.
+
+(First recorded as 22 415 against 13 238. Those were SysTick ticks of forty
+instructions, and the double-precision one had wrapped the 24-bit counter
+twice: it was 89 524. So the win on the target is a factor of 6.8, not 1.7.
+See [testing.md](../testing.md), Layer 9.)

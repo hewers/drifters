@@ -166,36 +166,43 @@ Refitting, on trace A only:
 - sigmas set from trace A's measured per-axis GNSS error, N 3.79 / E 1.99 /
   D 7.96 m. The replay now prints this line, which turns setting them from a
   fit into a measurement and makes staleness visible.
-- process-noise scale swept on trace A: the ESKF wants ×600, the EqF ×200.
+- process-noise scale swept on trace A: the ESKF wants ×600, the EqF ×60.
 
 That the two disagree is itself a result. Below its optimum the ESKF degrades
-steeply — ×150 costs it 74 % — while the EqF is flat from ×200 to ×300 and
+steeply — ×150 costs it 74 % — while the EqF is flat from ×50 to ×100 and
 falls away gently either side. The EqF extracts usable information from the IMU
-at a lower process noise than the ESKF can tolerate.
+at a tenth of the process noise the ESKF can tolerate.
 
 Trace A's tuning applied unchanged to B, C and D:
 
-| trace | GNSS alone | ESKF ×600 | EqF ×200 |
+| trace | GNSS alone | ESKF ×600 | EqF ×60 |
 |---|---|---|---|
-| A *(fitted)* | 4.577 | 3.195 | **3.142** |
-| B | 4.686 | 4.245 | **4.212** |
-| C | 3.097 | **2.304** | 2.357 |
-| D | 3.243 | 2.426 | **2.332** |
-| **mean** | **3.901** | 3.042 | **3.011** |
-| **mean, B/C/D only** | **3.675** | 2.992 | **2.967** |
+| A *(fitted)* | 4.577 | 3.195 | **2.981** |
+| B | 4.686 | **4.245** | 4.309 |
+| C | 3.097 | 2.304 | **2.286** |
+| D | 3.243 | 2.426 | **2.380** |
+| **mean** | **3.901** | 3.042 | **2.989** |
+| **mean, B/C/D only** | **3.675** | 2.992 | 2.992 |
 
 Competition score, metres. Trace A is in-sample; the honest figure is the
-B/C/D row, where fusion is worth −19.3 % over the raw-range GNSS solution.
+B/C/D row, where fusion is worth −18.6 % over the raw-range GNSS solution.
 
 Both filters now beat GNSS alone on every trace, which was not true before —
 under the stale tuning the ESKF lost to raw GNSS on two of the four. End to
-end the chain runs 4.99 → 3.01 m, −40 %, of which the solver is worth −22 %
+end the chain runs 4.99 → 2.99 m, −40 %, of which the solver is worth −22 %
 and the refit the rest.
 
-The two filters are within 1 % of each other pooled, which is inside the spread
-between traces and is not a result. The EqF winning three of four traces is
-weak evidence at best. What is not weak is the sensitivity difference: the ESKF
-needed three times the process noise to work at all.
+The two filters are level out of sample, to the third decimal, which is inside
+the spread between traces and is not a result. What is not weak is the
+sensitivity difference: the ESKF needed ten times the process noise to work at
+all.
+
+The EqF columns on this page were re-measured on 2026-11-17, after its GCU
+covariance update was corrected to the paper's
+([eqf.md](eqf.md#gcu-measured-on-four-traces)); its optimum on trace A moved
+from ×200 to ×60 and the rows moved with it. The ESKF's Doppler rows are
+unchanged. Its carrier rows had drifted from what was first recorded before
+that change, by up to 0.1, and are the current figures too.
 
 ## Carrier phase: the other observable in the same file
 
@@ -288,15 +295,15 @@ Trace A's tuning applied unchanged to B, C and D, competition score in metres:
 
 | trace | GNSS alone | ESKF, Doppler | ESKF, carrier | EqF, Doppler | EqF, carrier |
 |---|---|---|---|---|---|
-| A *(fitted)* | 4.577 | 3.195 | 3.213 | 3.142 | **3.074** |
-| B | 4.686 | 4.245 | 3.949 | 4.212 | **3.847** |
-| C | 3.097 | 2.304 | **1.942** | 2.357 | 2.002 |
-| D | 3.243 | 2.426 | 2.294 | 2.332 | **2.210** |
-| **mean** | 3.901 | 3.042 | 2.849 | 3.011 | **2.783** |
-| **mean, B/C/D** | 3.675 | 2.992 | 2.728 | 2.967 | **2.686** |
+| A *(fitted)* | 4.577 | 3.195 | 3.231 | 2.981 | **2.987** |
+| B | 4.686 | 4.245 | 4.024 | 4.309 | **3.715** |
+| C | 3.097 | 2.304 | 2.039 | 2.286 | **1.821** |
+| D | 3.243 | 2.426 | 2.376 | 2.380 | **2.222** |
+| **mean** | 3.901 | 3.042 | 2.918 | 2.989 | **2.686** |
+| **mean, B/C/D** | 3.675 | 2.992 | 2.813 | 2.992 | **2.586** |
 
-Carrier velocity is worth −8.8 % to the ESKF and −9.5 % to the EqF out of
-sample. End to end the chain now runs **4.99 → 2.78 m, −44 %**.
+Carrier velocity is worth −6.0 % to the ESKF and −13.6 % to the EqF out of
+sample. End to end the chain now runs **4.99 → 2.69 m, −46 %**.
 
 ## Fitting the two observables together, instead of choosing
 
@@ -331,11 +338,11 @@ Competition score, trace A's tuning applied unchanged to B, C and D:
 
 | trace | GNSS alone | ESKF | EqF | **batch fit** |
 |---|---|---|---|---|
-| A *(fitted)* | 4.577 | 3.243 | 3.121 | **2.799** |
-| B | 4.686 | 3.950 | 3.847 | **3.394** |
-| C | 3.097 | 1.944 | 2.008 | **1.617** |
-| D | 3.243 | 2.294 | 2.210 | **2.071** |
-| **mean** | 3.901 | 2.858 | 2.797 | **2.470** |
+| A *(fitted)* | 4.577 | 3.231 | 2.987 | **2.799** |
+| B | 4.686 | 4.024 | 3.715 | **3.394** |
+| C | 3.097 | 2.039 | 1.821 | **1.617** |
+| D | 3.243 | 2.376 | 2.222 | **2.071** |
+| **mean** | 3.901 | 2.918 | 2.686 | **2.470** |
 
 **The batch fit uses no IMU and beats both filters on every trace.** That is
 worth stating plainly rather than burying: on a 1 Hz phone trace, fitting the

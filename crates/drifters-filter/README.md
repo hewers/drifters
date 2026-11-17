@@ -12,14 +12,16 @@ constraints, odometer, barometric height and magnetometer heading.
 
 Sans-IO: push samples in, pull state out. It never allocates, blocks, reads a
 clock or touches a file, so the same code runs inside an interrupt handler and
-inside a replay harness.
+inside a replay harness. `GinsEngine` implements `drifters_core`'s `Estimator`
+trait, the interface it shares with the equivariant filter's engine.
 
 A GNSS fix reaches a device after the epoch it describes, by which time the IMU
 stream has passed it. `RewindEngine` applies it anyway: it restores a snapshot
 from before the epoch and replays the samples since, in a fixed-size ring, with
-a result bit-identical to on-time delivery.
+a result bit-identical to on-time delivery. The machinery is
+`drifters_core::rewind`, which the equivariant filter's engine uses too.
 
-Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 10.2 KiB peak
+Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 10.4 KiB peak
 stack on Cortex-M4 in the 15-state configuration; the data path links no panic
 machinery.
 
@@ -27,7 +29,10 @@ Features:
 
 - `reduced-state` — drops the scale factors for a 15-state filter.
 - `f32-covariance` — carries the covariance factors in single precision, which
-  on a Cortex-M4F is the difference between the FPU and soft-float.
+  on a Cortex-M4F is the difference between the FPU and soft-float: 473
+  thousand instructions per IMU sample against 3.5 million. On that core the
+  default build cannot keep up with a 100 Hz IMU, and this one is the
+  configuration to use.
 - `smoothing` — records what an RTS backward pass needs from the forward one.
 
 The first two are not additive. Each changes what the filter computes, so

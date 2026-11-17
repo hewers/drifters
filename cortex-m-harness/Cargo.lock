@@ -40,6 +40,7 @@ dependencies = [
  "cortex-m-rt",
  "cortex-m-semihosting",
  "drifters-core",
+ "drifters-eqf",
  "drifters-filter",
  "panic-semihosting",
 ]
@@ -95,6 +96,13 @@ name = "drifters-core"
 version = "0.1.0"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "drifters-eqf"
+version = "0.1.0"
+dependencies = [
+ "drifters-core",
 ]
 
 [[package]]

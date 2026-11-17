@@ -26,9 +26,9 @@
 //! - **Transition matrix** `I + A dt + ½(A dt)²`. `A` carries `g^`, so `A dt` is
 //!   order `10⁻¹` at 100 Hz and the second-order term is not negligible. The
 //!   third is.
-//! - **The reset does not transport the covariance.** `ε_new = ε − Δ` holds to
-//!   first order, the reset Jacobian being `I − ½ ad_Δ + …`. This is the same
-//!   term an EKF drops at its own reset.
+//! - **The reset transports the covariance to first order**, through
+//!   `I + ½ ad_Δ` rather than the exact `Ad_{exp(Δ)} J_r(Δ)`. See
+//!   [`EqFilter::update_gated`].
 //! - **`A` and `Λ` are evaluated at the interval midpoint**, not the left edge.
 //!   See [`EqFilter::propagate`].
 //!
@@ -36,6 +36,7 @@
 //! origin remains fixed at `ξ°`.
 
 use drifters_core::math::{Cholesky, Mat3, Matrix, Vec3, Vector};
+use drifters_core::types::ImuNoise;
 use drifters_core::F;
 
 use crate::gcu;
@@ -44,8 +45,13 @@ use crate::lie::Se3Tangent;
 use crate::lift::{lift, Input};
 use crate::linear::{
     direction_output_matrix, position_output_matrix, state_matrix, transported_direction,
-    transported_position, transported_velocity, velocity_output_matrix, OutputMatrix, DIM,
+    transported_position, transported_velocity, velocity_output_matrix, OutputMatrix, StateMatrix,
+    DIM,
 };
+
+/// How many independent noise channels drive the filter: three axes each of
+/// the six sources in [`ProcessNoise`].
+pub const NOISE: usize = 18;
 
 /// Continuous-time process noise, as power spectral densities per axis.
 ///
@@ -67,12 +73,75 @@ pub struct ProcessNoise {
     pub mag: Vec3,
 }
 
+impl ProcessNoise {
+    /// The eighteen densities in channel order: gyroscope, accelerometer,
+    /// gyroscope bias, accelerometer bias, lever arm, magnetometer.
+    pub fn to_array(&self) -> [F; NOISE] {
+        [
+            self.gyro.x,
+            self.gyro.y,
+            self.gyro.z,
+            self.accel.x,
+            self.accel.y,
+            self.accel.z,
+            self.gyro_bias.x,
+            self.gyro_bias.y,
+            self.gyro_bias.z,
+            self.accel_bias.x,
+            self.accel_bias.y,
+            self.accel_bias.z,
+            self.lever.x,
+            self.lever.y,
+            self.lever.z,
+            self.mag.x,
+            self.mag.y,
+            self.mag.z,
+        ]
+    }
+
+    /// The densities matching a datasheet-style [`ImuNoise`], which is how the
+    /// ESKF is configured.
+    ///
+    /// The random walks square directly. The biases do not have a counterpart
+    /// to square: the ESKF models them as first-order Gauss-Markov processes
+    /// of standard deviation `σ` and correlation time `τ`, and this filter as
+    /// random walks. `2σ²/τ` is the spectral density at which the two agree
+    /// over a step short against `τ`, which is the same approximation the
+    /// ESKF's own discretisation makes.
+    ///
+    /// The lever arm and the magnetometer calibration get no process noise;
+    /// set them afterwards if the installation moves.
+    pub fn from_imu_noise(noise: &ImuNoise) -> Self {
+        Self {
+            gyro: noise.gyro_arw.squared(),
+            accel: noise.accel_vrw.squared(),
+            gyro_bias: noise.gyro_bias_std.squared() * (2.0 / noise.correlation_time),
+            accel_bias: noise.accel_bias_std.squared() * (2.0 / noise.correlation_time),
+            lever: Vec3::ZERO,
+            mag: Vec3::ZERO,
+        }
+    }
+}
+
+/// What [`EqFilter::update_gated`] did with a measurement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Verdict {
+    /// Applied. Carries the NIS, before any inflation.
+    Applied(F),
+    /// Failed its gate and was discarded, leaving the filter untouched.
+    /// Carries the NIS that failed.
+    Rejected(F),
+    /// The innovation covariance was not positive definite. Nothing was
+    /// applied.
+    Singular,
+}
+
 /// The equivariant filter.
 ///
 /// Carries a group element and a covariance rather than a state; the estimate
 /// is [`nav_state`](Self::nav_state), recovered by acting on the fixed origin.
 /// This is what keeps the linearisation point stationary.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct EqFilter {
     /// The observer state `X̂ ∈ G`.
     pub x: Symmetry,
@@ -80,8 +149,11 @@ pub struct EqFilter {
     pub sigma: Matrix<DIM, DIM>,
     /// The constant global gravity vector `ᴳg`.
     pub gravity: Vec3,
-    /// GCU convergence rate `α ∈ [0, 1]`. See [`crate::gcu`].
-    pub alpha: F,
+    /// GCU convergence rate `α ∈ [0, 1]`, or `None` for no inflation at all.
+    ///
+    /// `Some(0.0)` is not off: `β` still doubles the state's share of the
+    /// innovation covariance for most measurements. See [`crate::gcu`].
+    pub alpha: Option<F>,
 }
 
 impl EqFilter {
@@ -90,12 +162,17 @@ impl EqFilter {
     /// The paper initialises `lever` at zero and `mag` at the identity and lets
     /// both self-calibrate; `the_lever_arm_converges_from_zero` reproduces
     /// that.
+    ///
+    /// GCU starts at `α = 0`, the engine's default. It used to start at `0.5`,
+    /// and a replay that built this directly and never set it ran there
+    /// unawares; the divergence it recorded was then attributed to the Earth
+    /// model. See docs/eqf.md.
     pub fn new(initial: &State, sigma: Matrix<DIM, DIM>, gravity: Vec3) -> Self {
         Self {
             x: Symmetry::from_state(initial),
             sigma,
             gravity,
-            alpha: 0.5,
+            alpha: Some(0.0),
         }
     }
 
@@ -140,16 +217,80 @@ impl EqFilter {
 
         // The transition matrix is centred for the same reason, and the
         // midpoint observer state has already been computed.
-        let a = state_matrix(&half, u, self.gravity);
-        let a_dt = a * dt;
-        let phi = Matrix::<DIM, DIM>::identity() + a_dt + a_dt.matmul(&a_dt) * 0.5;
-        let noise = self.process_noise(&estimate, q);
+        self.propagate_covariance(&half, u, dt);
         // |dt|, not dt: see the note on negative dt above.
-        self.sigma = phi.matmul(&self.sigma).mul_transpose(&phi) + noise * dt.abs();
+        self.add_process_noise(&estimate, q, dt.abs());
         self.sigma.symmetrize();
     }
 
-    /// `G Q Gᵀ`, the process noise mapped into normal coordinates.
+    /// `Σ ← Φ Σ Φᵀ`, with `Φ = I + A dt + ½(A dt)²`.
+    ///
+    /// # Two buffers, and why it is written this way
+    ///
+    /// As one expression this is `phi.matmul(&sigma).mul_transpose(&phi)` over
+    /// a `Φ` built from `identity() + a_dt + a_dt.matmul(&a_dt) * 0.5`, and
+    /// that is how it was first written. Every operator in it returns a
+    /// `21 × 21` by value, 3 528 bytes each, and on Cortex-M4 the step peaked
+    /// at 28 852 bytes of stack: more than the ESKF has ever been allowed.
+    ///
+    /// The same arithmetic needs two matrices. `A dt` is scaled in place, its
+    /// square goes into the second buffer, `Φ` is assembled over the square,
+    /// and the buffer that held `A dt` is free again by the time `Φ Σ` wants
+    /// somewhere to go. `Σ` itself is the destination of the second product,
+    /// since by then nothing reads it.
+    ///
+    /// Every element is computed by the same operations in the same order as
+    /// the expression form, so the result is bit-identical, and
+    /// `the_in_place_forms_match_the_expressions_bit_for_bit` keeps the
+    /// expression form around to hold it to that.
+    ///
+    /// Not inlined, so the two buffers are gone before
+    /// [`add_process_noise`](Self::add_process_noise) brings its own.
+    #[inline(never)]
+    fn propagate_covariance(&mut self, half: &Symmetry, u: &Input, dt: F) {
+        // A dt.
+        let mut work = state_matrix(half, u, self.gravity);
+        for row in work.data.iter_mut() {
+            for value in row.iter_mut() {
+                *value *= dt;
+            }
+        }
+        // (A dt)², then Φ over it: (I + A dt) + ½(A dt)², element by element.
+        let mut phi = StateMatrix::zeros();
+        work.matmul_into(&work, &mut phi);
+        for i in 0..DIM {
+            for j in 0..DIM {
+                let unit = if i == j { 1.0 } else { 0.0 };
+                phi.data[i][j] = (unit + work.data[i][j]) + phi.data[i][j] * 0.5;
+            }
+        }
+        phi.matmul_into(&self.sigma, &mut work);
+        work.mul_transpose_into(&phi, &mut self.sigma);
+    }
+
+    /// `Σ ← Σ + G Q Gᵀ dt`, the process noise mapped into normal coordinates.
+    ///
+    /// `Q` is diagonal, so `G Q Gᵀ` is a sum over eighteen noise channels of
+    /// one column of `G` against itself, and it is accumulated straight into
+    /// `Σ`. Forming `G Q` and then `(G Q) Gᵀ` as matrices, as the expression
+    /// does, is the same sum with two more `21 × 18`s and a `21 × 21` on the
+    /// stack to hold it.
+    #[inline(never)]
+    fn add_process_noise(&mut self, estimate: &State, q: &ProcessNoise, dt: F) {
+        let g = self.noise_mapping(estimate);
+        let psd = q.to_array();
+        for i in 0..DIM {
+            for j in 0..DIM {
+                let mut acc = 0.0;
+                for ((a, b), density) in g.data[i].iter().zip(&g.data[j]).zip(&psd) {
+                    acc += (a * density) * b;
+                }
+                self.sigma.data[i][j] += acc * dt;
+            }
+        }
+    }
+
+    /// `G`, which carries the eighteen noise channels into normal coordinates.
     ///
     /// Two mechanisms, injecting differently:
     ///
@@ -162,8 +303,8 @@ impl EqFilter {
     ///   `ν = (0, −w_b, −w_t, w_S)`, which `Ad_X̂` reduces to `−Ad_B̂ w_b`,
     ///   `−Â w_t` and `Ê w_S` on their own blocks. Signs are carried through
     ///   even though `G Q Gᵀ` is insensitive to them.
-    fn process_noise(&self, estimate: &State, q: &ProcessNoise) -> Matrix<DIM, DIM> {
-        let mut g = Matrix::<DIM, 18>::zeros();
+    fn noise_mapping(&self, estimate: &State) -> Matrix<DIM, NOISE> {
+        let mut g = Matrix::<DIM, NOISE>::zeros();
         let quiet = lift(estimate, &Input::default(), self.gravity);
 
         for axis in 0..6 {
@@ -207,28 +348,7 @@ impl EqFilter {
             }
         }
 
-        let psd = [
-            q.gyro.x,
-            q.gyro.y,
-            q.gyro.z,
-            q.accel.x,
-            q.accel.y,
-            q.accel.z,
-            q.gyro_bias.x,
-            q.gyro_bias.y,
-            q.gyro_bias.z,
-            q.accel_bias.x,
-            q.accel_bias.y,
-            q.accel_bias.z,
-            q.lever.x,
-            q.lever.y,
-            q.lever.z,
-            q.mag.x,
-            q.mag.y,
-            q.mag.z,
-        ];
-        g.matmul(&Matrix::<18, 18>::from_diagonal(&psd))
-            .mul_transpose(&g)
+        g
     }
 
     /// Fuse a GNSS antenna position `ᴳπ`.
@@ -265,14 +385,63 @@ impl EqFilter {
     /// Returns the NIS before inflation, or `None` when the innovation
     /// covariance is not positive definite and nothing was applied.
     pub fn update(&mut self, c: &OutputMatrix, innovation: Vec3, noise: &Mat3) -> Option<F> {
+        match self.update_gated(c, innovation, noise, None) {
+            Verdict::Applied(nis) => Some(nis),
+            Verdict::Rejected(_) | Verdict::Singular => None,
+        }
+    }
+
+    /// [`EqFilter::update`] behind a chi-squared gate.
+    ///
+    /// The gate is on the NIS **before** GCU inflation, `ỹᵀ S⁻¹ ỹ`, against
+    /// `gate`; `None` accepts unconditionally. A rejected measurement leaves
+    /// the filter exactly as it was.
+    ///
+    /// The paper does not gate: Sec. VI replaces rejection with inflation, and
+    /// [`crate::gcu`] says why. The two are not exclusive, though. Inflation
+    /// decides how much weight a surprising measurement gets, and at `α = 0`
+    /// that is never less than half of what it asked for. A gate is for the
+    /// measurement that should get none: the one that is not a measurement of
+    /// this state at all. Thresholds are in
+    /// [`drifters_core::estimator::chi_squared`].
+    ///
+    /// # What GCU changes
+    ///
+    /// With [`alpha`](Self::alpha) set, the measurement is fused with the
+    /// inflated noise `R'` of [`gcu::effective_noise`] — in the gain **and**
+    /// in the Joseph form. That is the paper's `Σ⁺ = (I − KC*)Σ` with
+    /// `K = ΣC*ᵀS'⁻¹`. Running the Joseph form on the sensor's own `R`
+    /// instead, as this filter first did, under-reports the posterior by
+    /// `K(S' − S)Kᵀ` each time; [`crate::gcu`] has what that cost.
+    pub fn update_gated(
+        &mut self,
+        c: &OutputMatrix,
+        innovation: Vec3,
+        noise: &Mat3,
+        gate: Option<F>,
+    ) -> Verdict {
         let y = Vector::<3>::from(innovation);
         let c_sigma = c.matmul(&self.sigma); // 3 × 21
         let projected = c_sigma.mul_transpose(c); // 3 × 3
-        let raw = Cholesky::new(&(projected + *noise))?;
+        let Some(raw) = Cholesky::new(&(projected + *noise)) else {
+            return Verdict::Singular;
+        };
         let nis = dot(&y, &raw.solve(&y));
+        if gate.is_some_and(|threshold| nis > threshold) {
+            return Verdict::Rejected(nis);
+        }
 
-        let s = gcu::inflate(&y, &projected, noise, self.alpha);
-        let chol = Cholesky::new(&s)?;
+        // Without GCU, S is the raw innovation covariance already factorised.
+        let (noise, chol) = match self.alpha {
+            None => (*noise, raw),
+            Some(alpha) => {
+                let inflated = gcu::effective_noise_at(nis, &y, &projected, noise, alpha);
+                let Some(chol) = Cholesky::new(&(projected + inflated)) else {
+                    return Verdict::Singular;
+                };
+                (inflated, chol)
+            }
+        };
         // K = Σ C*ᵀ S⁻¹, obtained as (S⁻¹ C* Σ)ᵀ so it is a solve and not an
         // inverse — S is symmetric, so the transpose is free.
         let gain = chol.solve(&c_sigma).transpose(); // 21 × 3
@@ -284,22 +453,95 @@ impl EqFilter {
         let step = Algebra::from_array(&correction);
         self.x = Symmetry::exp(step).compose(&self.x);
 
-        let ikc = Matrix::<DIM, DIM>::identity() - gain.matmul(c);
-        self.sigma =
-            ikc.matmul(&self.sigma).mul_transpose(&ikc) + gain.matmul(noise).mul_transpose(&gain);
-
-        // Transport the covariance through the reset. The Joseph form above
-        // leaves Σ describing ε about Δ; the reset moves that origin to zero and
-        // the coordinates move with it.
-        //
-        // With ε_new = log(exp(ε) exp(−Δ)), the Jacobian at ε = Δ is
-        // Ad_{exp(Δ)} J_r(Δ), whose first-order expansion is I + ½ ad_Δ.
-        // Omitting it cost about 14 % of NEES, concentrated in the rotational
-        // states — see `drifters nees` and docs/eqf.md.
-        let reset = Matrix::<DIM, DIM>::identity() + step.ad() * 0.5;
-        self.sigma = reset.matmul(&self.sigma).mul_transpose(&reset);
+        self.joseph(c, &gain, &noise);
+        self.transport(step);
         self.sigma.symmetrize();
-        Some(nis)
+        Verdict::Applied(nis)
+    }
+
+    /// `Σ ← (I − K C) Σ (I − K C)ᵀ + K R Kᵀ`, in two buffers.
+    ///
+    /// Bit-identical to the expression it replaces, for the reason given on
+    /// [`propagate_covariance`](Self::propagate_covariance), and not inlined
+    /// for the same one: the buffers here are gone before
+    /// [`transport`](Self::transport) asks for its own.
+    #[inline(never)]
+    fn joseph(&mut self, c: &OutputMatrix, gain: &Matrix<DIM, 3>, noise: &Mat3) {
+        let mut ikc = StateMatrix::zeros();
+        gain.matmul_into(c, &mut ikc);
+        for i in 0..DIM {
+            for j in 0..DIM {
+                let unit = if i == j { 1.0 } else { 0.0 };
+                ikc.data[i][j] = unit - ikc.data[i][j];
+            }
+        }
+        let mut work = StateMatrix::zeros();
+        ikc.matmul_into(&self.sigma, &mut work);
+        work.mul_transpose_into(&ikc, &mut self.sigma);
+
+        // + K R Kᵀ. K R is 21 × 3, and the outer product goes straight in.
+        let gain_noise = gain.matmul(noise);
+        for i in 0..DIM {
+            for j in 0..DIM {
+                let mut acc = 0.0;
+                for k in 0..3 {
+                    acc += gain_noise.data[i][k] * gain.data[j][k];
+                }
+                self.sigma.data[i][j] += acc;
+            }
+        }
+    }
+
+    /// Transport the covariance through the reset.
+    ///
+    /// The Joseph form leaves `Σ` describing `ε` about `Δ`; the reset moves
+    /// that origin to zero and the coordinates move with it.
+    ///
+    /// With `ε_new = log(exp(ε) exp(−Δ))`, the Jacobian at `ε = Δ` is
+    /// `Ad_{exp(Δ)} J_r(Δ)`, whose first-order expansion is `I + ½ ad_Δ`.
+    /// Omitting it cost about 14 % of NEES, concentrated in the rotational
+    /// states — see `drifters nees` and docs/eqf.md.
+    #[inline(never)]
+    fn transport(&mut self, step: Algebra) {
+        let mut reset = step.ad();
+        for i in 0..DIM {
+            for j in 0..DIM {
+                let unit = if i == j { 1.0 } else { 0.0 };
+                reset.data[i][j] = unit + reset.data[i][j] * 0.5;
+            }
+        }
+        let mut work = StateMatrix::zeros();
+        reset.matmul_into(&self.sigma, &mut work);
+        work.mul_transpose_into(&reset, &mut self.sigma);
+    }
+
+    /// Scale the whole covariance by `factor`.
+    ///
+    /// The recovery for a filter that has become confident and wrong, and
+    /// rejects the measurements that would correct it. Scaling keeps symmetry,
+    /// positive definiteness and every correlation: it widens the uncertainty
+    /// ellipsoid without reshaping it, which is the conservative choice when
+    /// the direction of the error is exactly what is unknown.
+    pub fn inflate(&mut self, factor: F) {
+        debug_assert!(factor >= 1.0, "inflation must not shrink the covariance");
+        for row in self.sigma.data.iter_mut() {
+            for value in row.iter_mut() {
+                *value *= factor;
+            }
+        }
+    }
+
+    /// True when the observer state and the covariance are both finite.
+    pub fn is_healthy(&self) -> bool {
+        let x = &self.x;
+        self.sigma.is_finite()
+            && x.c.rotation.is_finite()
+            && x.c.velocity.is_finite()
+            && x.c.position.is_finite()
+            && x.gamma.omega.is_finite()
+            && x.gamma.nu.is_finite()
+            && x.delta.is_finite()
+            && x.e.is_finite()
     }
 }
 
@@ -516,6 +758,151 @@ mod tests {
         }
     }
 
+    /// The covariance arithmetic as it was first written: one expression per
+    /// equation, every operator returning a `21 × 21` by value.
+    ///
+    /// Kept verbatim, because it is the form a reader checks against the
+    /// paper, and because "the in-place rewrite computes the same thing" is a
+    /// claim about every bit of 441 numbers that only a comparison can make.
+    impl EqFilter {
+        fn propagate_as_an_expression(&mut self, u: &Input, dt: F, q: &ProcessNoise) {
+            let estimate = self.nav_state();
+
+            let start = lift(&estimate, u, self.gravity);
+            let half = self.x.compose(&Symmetry::exp(start.scaled(0.5 * dt)));
+            let midpoint = lift(&act_state(&half, &State::default()), u, self.gravity);
+            self.x = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
+
+            let a = state_matrix(&half, u, self.gravity);
+            let a_dt = a * dt;
+            let phi = Matrix::<DIM, DIM>::identity() + a_dt + a_dt.matmul(&a_dt) * 0.5;
+            let g = self.noise_mapping(&estimate);
+            let noise = g
+                .matmul(&Matrix::<NOISE, NOISE>::from_diagonal(&q.to_array()))
+                .mul_transpose(&g);
+            self.sigma = phi.matmul(&self.sigma).mul_transpose(&phi) + noise * dt.abs();
+            self.sigma.symmetrize();
+        }
+
+        fn update_as_an_expression(
+            &mut self,
+            c: &OutputMatrix,
+            innovation: Vec3,
+            noise: &Mat3,
+        ) -> Option<F> {
+            let y = Vector::<3>::from(innovation);
+            let c_sigma = c.matmul(&self.sigma);
+            let projected = c_sigma.mul_transpose(c);
+            let raw = Cholesky::new(&(projected + *noise))?;
+            let nis = dot(&y, &raw.solve(&y));
+
+            let (noise, chol) = match self.alpha {
+                None => (*noise, raw),
+                Some(alpha) => {
+                    let inflated = gcu::effective_noise_at(nis, &y, &projected, noise, alpha);
+                    (inflated, Cholesky::new(&(projected + inflated))?)
+                }
+            };
+            let noise = &noise;
+            let gain = chol.solve(&c_sigma).transpose();
+
+            let delta = gain.matmul(&y);
+            let mut correction = [0.0; DIM];
+            correction.copy_from_slice(&delta.to_column());
+            let step = Algebra::from_array(&correction);
+            self.x = Symmetry::exp(step).compose(&self.x);
+
+            let ikc = Matrix::<DIM, DIM>::identity() - gain.matmul(c);
+            self.sigma = ikc.matmul(&self.sigma).mul_transpose(&ikc)
+                + gain.matmul(noise).mul_transpose(&gain);
+
+            let reset = Matrix::<DIM, DIM>::identity() + step.ad() * 0.5;
+            self.sigma = reset.matmul(&self.sigma).mul_transpose(&reset);
+            self.sigma.symmetrize();
+            Some(nis)
+        }
+    }
+
+    /// The in-place forms are a change to where the arithmetic is kept and
+    /// not to the arithmetic: the same operations on the same operands in the
+    /// same order. So the two must agree exactly, and `assert_eq!` on floats
+    /// is the right assertion for once.
+    ///
+    /// Closed loop, from a wrong start, through all three kinds of update, so
+    /// every block of every matrix is non-trivial and a rounding difference
+    /// anywhere has sixty seconds to show up.
+    #[test]
+    fn the_in_place_forms_match_the_expressions_bit_for_bit() {
+        let north = Vec3::new(0.48, 0.0, 0.88).normalized();
+        let mut t = truth();
+        t.state.mag = rot(0.12, -0.08, 0.0);
+        let q = process_noise();
+        let dt = 0.01;
+
+        let mut shipped = EqFilter::new(&wrong_start(), initial_covariance(), GRAVITY);
+        let mut reference = shipped;
+
+        for k in 0..6_000 {
+            let u = t.imu();
+            shipped.propagate(&u, dt, &q);
+            reference.propagate_as_an_expression(&u, dt, &q);
+            assert_eq!(shipped.x, reference.x, "state diverged at step {k}");
+            assert_eq!(
+                shipped.sigma, reference.sigma,
+                "covariance diverged at step {k}"
+            );
+            t.step(dt);
+            t.steer();
+
+            if k % 100 == 99 {
+                let position_noise = Mat3::from_diagonal(&[0.04, 0.04, 0.09]);
+                let transported = transported_position(&shipped.x);
+                let c = position_output_matrix(t.antenna(), transported);
+                let got = shipped.update(&c, transported - t.antenna(), &position_noise);
+                let want = reference.update_as_an_expression(
+                    &c,
+                    transported - t.antenna(),
+                    &position_noise,
+                );
+                assert_eq!(got, want, "position NIS at step {k}");
+
+                let velocity_noise = Mat3::from_diagonal(&[0.01, 0.01, 0.02]);
+                let transported = transported_velocity(&shipped.x, t.omega);
+                let c = velocity_output_matrix(
+                    t.antenna_velocity(),
+                    transported,
+                    shipped.x.a() * t.omega,
+                );
+                let innovation = transported - t.antenna_velocity();
+                let got = shipped.update(&c, innovation, &velocity_noise);
+                let want = reference.update_as_an_expression(&c, innovation, &velocity_noise);
+                assert_eq!(got, want, "velocity NIS at step {k}");
+
+                let direction_noise = Mat3::from_diagonal(&[4e-4, 4e-4, 4e-4]);
+                let measured = crate::group::output_direction(&t.state, north);
+                let transported = transported_direction(&shipped.x, measured.normalized());
+                let c = direction_output_matrix(north, transported);
+                let innovation = north.skew() * transported;
+                let got = shipped.update(&c, innovation, &direction_noise);
+                let want = reference.update_as_an_expression(&c, innovation, &direction_noise);
+                assert_eq!(got, want, "direction NIS at step {k}");
+
+                assert_eq!(
+                    shipped.x, reference.x,
+                    "state diverged at the update of {k}"
+                );
+                assert_eq!(
+                    shipped.sigma, reference.sigma,
+                    "covariance diverged at the update of {k}"
+                );
+            }
+        }
+        // And the comparison was of two working filters, not of two broken
+        // ones that agree.
+        let error = (shipped.nav_state().pose.position - t.state.pose.position).norm();
+        assert!(error < 1.0, "position error {error:.3} m after 60 s");
+    }
+
     /// Propagating forward then backward over the same inputs must return the
     /// state to where it started. This is what a reverse pass depends on, and
     /// it is not free: `exp(dt Λ)` has to invert with the sign of `dt` and the
@@ -670,7 +1057,8 @@ mod tests {
             initial_covariance(),
             GRAVITY,
         );
-        f.alpha = 0.0;
+        // The plain update: this is about the reset, not about robustness.
+        f.alpha = None;
 
         // Scored on the antenna position, because that is what is measured.
         // Body position and lever arm are exactly degenerate at a single epoch
@@ -684,10 +1072,12 @@ mod tests {
             f.update_position(t.antenna(), &Mat3::from_diagonal(&[0.04, 0.04, 0.09]));
         }
         let after = observed(&f);
-        // 3.68 m -> 7.4 mm. The floor is the linearisation residual at a
-        // 0.25 rad attitude error, not the reset.
+        // 3.68 m -> 0.08 mm. Run with GCU's β in the loop, as this test first
+        // was, it stopped at 7.4 mm: most of the twelve updates applied about
+        // half their correction, and that was mistaken for a linearisation
+        // floor.
         assert!(
-            after < before * 0.005,
+            after < before * 1e-4,
             "repeated updates should collapse the innovation: {before:.4} -> {after:.4}"
         );
         // The estimate moved towards the truth, not merely to the measurement.

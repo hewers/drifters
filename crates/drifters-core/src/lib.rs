@@ -17,6 +17,13 @@
 //! - [`frames`] — geodetic/ECEF/local-level conversions and frame conventions.
 //! - [`time`] — GPS time of week arithmetic.
 //! - [`types`] — sensor samples and navigation state shared by every crate.
+//! - [`estimator`] — the interface the estimators share: the [`Estimator`]
+//!   trait, GNSS epoch placement, gate thresholds.
+//! - [`rewind`] — applying a GNSS fix after its epoch, for any engine that
+//!   implements [`Rewindable`].
+//!
+//! [`Estimator`]: estimator::Estimator
+//! [`Rewindable`]: rewind::Rewindable
 //!
 //! # Conventions
 //!
@@ -29,9 +36,11 @@
 #![deny(missing_docs)]
 
 pub mod earth;
+pub mod estimator;
 pub mod frames;
 pub mod local;
 pub mod math;
+pub mod rewind;
 pub mod time;
 pub mod types;
 
@@ -47,6 +56,7 @@ pub type F = f64;
 /// Frequently used items, re-exported for `use drifters_core::prelude::*;`.
 pub mod prelude {
     pub use crate::earth::Wgs84;
+    pub use crate::estimator::{Estimator, GnssQueued};
     pub use crate::frames::{Ecef, Lla, Ned};
     pub use crate::math::{Mat3, Matrix, Quat, Real, Vec3};
     pub use crate::time::GpsTime;

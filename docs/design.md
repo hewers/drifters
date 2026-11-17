@@ -9,7 +9,9 @@ The architecture follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS): a
 feedback correction after every measurement. GNSS enters either as a position
 and velocity fix or as per-satellite pseudoranges; the covariance is held
 factored as `U D Uᵀ`; and a second estimator, the equivariant filter in
-`drifters-eqf`, runs the same interface over an `SE₂(3)` symmetry. KF-GINS is a
+`drifters-eqf`, runs the same interface — literally: both engines implement one
+[`Estimator`](../crates/drifters-core/src/estimator.rs) trait — over an
+`SE₂(3)` symmetry. KF-GINS is a
 teaching-grade reference implementation and its structure is well documented,
 which makes it a good thing to be *comparable to* — see
 [testing.md](testing.md) for the regression plan against its demo dataset.
@@ -68,15 +70,16 @@ accidentally pull in a host-only dependency.
 ```
 drifters-core      no_std, no alloc, deps: libm
                    math (Matrix/Vec3/Quat), WGS-84 earth model, frames, local
-                   frame, time, sensor and state types
+                   frame, time, sensor and state types, and the Estimator
+                   trait with what the two engines share
         ▲
         ├────────────────────────┐
         │                        │
 drifters-filter            drifters-eqf
 no_std, no alloc           no_std, no alloc
 INS mechanization,         equivariant filter over SE2(3),
-21-state ESKF over a       self-calibrating lever arm
-U D Ut covariance, the
+21-state ESKF over a       self-calibrating lever arm,
+U D Ut covariance, the     the EqfEngine
 GinsEngine, tightly-
 coupled ranges, RTS
 smoothing
@@ -166,9 +169,12 @@ stream has passed it. `add_gnss` refuses such a fix as `GnssQueued::Stale` and
 counts it. It used to accept it into the pending slot and never apply it, with
 nothing to say so, which on hardware would have been every fix.
 
-[`rewind::RewindEngine`](../crates/drifters-filter/src/rewind.rs) is how a late
-fix gets applied. It wraps the engine with two earlier snapshots of it and a
-ring of the IMU samples and aiding calls since the older one. A late fix
+[`drifters_core::rewind`](../crates/drifters-core/src/rewind.rs) is how a late
+fix gets applied, to either estimator: `RewindEngine` in `drifters-filter` and
+`EqfRewindEngine` in `drifters-eqf` are the same `Rewind<E>` over each engine,
+with that engine's aiding calls under their own names. It wraps the engine with
+two earlier snapshots of it and a ring of the IMU samples and aiding calls since
+the older one. A late fix
 restores the snapshot before its epoch, queues the fix where it belonged, and
 pushes the ring through again, so the diagram above runs exactly as it would
 have on time, split interval included. The result is bit-identical to on-time
@@ -196,6 +202,60 @@ engine.covariance();       // current uncertainty
 That makes the same object usable from an interrupt handler, an RTOS task, a
 replay harness or a fuzz target, and makes the filter deterministic under test:
 the same sample sequence always produces the same output.
+
+### One interface, two engines
+
+`EqfEngine` in `drifters-eqf` exposes the same four calls and behaves the same
+way under them, and both implement
+[`Estimator`](../crates/drifters-core/src/estimator.rs):
+
+```rust
+fn step<E: Estimator>(estimator: &mut E, sample: ImuSample, fix: Option<GnssFix>) {
+    if let Some(fix) = fix {
+        let _ = estimator.add_gnss(fix);
+    }
+    let _ = estimator.add_imu(sample);
+}
+```
+
+The trait was extracted after the second engine existed, not written before
+it, and the difference shows in what it contains. It is the things both were
+already doing: ingest, the navigation solution, the antenna position a fix is
+compared against, the health counters. Beside it in `drifters-core` are the
+pieces of *implementation* the two turned out to share — `place`, the rule for
+where a GNSS epoch falls in an IMU interval, `GnssQueued`, `FilterError` and
+the chi-squared thresholds. The engines differ in everything numerical, and
+they place a fix by calling the same function.
+
+Three things are deliberately not in it.
+
+- **Construction.** `GinsOptions` is handed a lever arm and estimates scale
+  factors; `EqfOptions` estimates the lever arm and has no scale factors. A
+  shared constructor would be a shared options type, half ignored by each.
+- **The covariance.** They are not the same object in two sizes. The ESKF's is
+  over a navigation-frame error in metres and radians. The EqF's is over
+  coordinates in which a rotation about the *origin* and a translation are
+  separate, strongly anti-correlated terms, so its position block is not a
+  position uncertainty. `Estimator::pva_std` is the question both can answer
+  in one unit; `drifters_eqf::physical` is the map that lets the EqF answer.
+- **Aiding.** ZUPT, non-holonomic, wheel speed, height and heading on one
+  side; a magnetometer direction with its own calibration state on the other.
+
+What a trait cannot say is that two implementations *behave* alike, so
+`crates/drifters-cli/tests/estimator_contract.rs` is one set of tests, generic
+over `Estimator`, run against each engine: which fixes are refused at ingest
+and how they are counted, which sample consumes a fix, that a fix placed at
+`antenna_position` has no innovation, that a ten-sigma velocity is gated out.
+
+The rewind layer was the first thing built on top of the trait, and it is
+where the aiding question was settled. It needs nothing from an engine's
+aids except to record one and repeat it, so
+[`Rewindable`](../crates/drifters-core/src/rewind.rs) asks each engine for an
+`Aid` type and an `apply_aid` that takes one; the ESKF's has five variants and
+the EqF's one. `Estimator` itself still says nothing about aiding, for the
+reason above, and the rewind layer did not need it to. The last contract test
+runs the shared `Rewind` over each engine and requires a late fix to land
+exactly where it would have on time.
 
 ## Resource budget
 
@@ -232,7 +292,9 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
-`rewind::tests::the_wrapper_has_its_documented_footprint`. It is also the one
+`rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 608 bytes**: the
+rings are identical and the engines are larger. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
 
@@ -241,15 +303,62 @@ measurable besides: 356 µs for a fix 60 samples late, 80 samples replayed at
 4.45 µs each against an `add_imu` of 4.47. In steady state the layer adds less
 than the run-to-run noise.
 
-Its stack is **not measured**. The replay runs in place on the live engine, so
-it should add a small frame to `add_imu`'s and no engine-sized temporary — but
-the QEMU harness does not exercise it yet, and "should" is how the 11 000-byte
-estimate in the next section was arrived at.
+Its stack is measured, for both engines, by applying a fix fifteen samples
+late with an aid recorded every third sample. The replay runs nested inside
+`add_gnss`, in place on the live engine, and it costs what it was expected to:
+no engine-sized temporary, and a frame of its own of **152 bytes** over the
+ESKF's deepest path, the held-state ZUPT (160 with `f32-covariance`). That takes the ESKF's peak to
+19 120 bytes, 18 208 with `f32-covariance` and 10 688 at 15 states. The EqF's
+late fix measures 13 568, no deeper than its own fix step. All are inside
+their CI ceilings, and all are now part of the peak CI checks.
+
+It was unmeasured for a while, with a sentence here saying that it *should*
+add only a small frame. That was correct this time. It is still how the
+11 000-byte estimate in the next section was arrived at.
+
+### The equivariant filter
+
+| item | bytes |
+|---|---|
+| `Σ`, a dense `Matrix<21, 21>` | 3 528 |
+| `EqFilter` (observer state + `Σ` + gravity + GCU rate) | 3 832 |
+| `EqfOptions` | 648 |
+| `EqfEngine` total | **4 672** |
+
+Asserted by `engine::tests::the_engine_has_its_documented_footprint`. The
+covariance is dense where the ESKF's is factored, which is most of the
+difference from `GinsEngine`'s 3 240: 441 scalars against 231.
+
+Peak stack on Cortex-M4, by the same generic harness code that measures the
+ESKF:
+
+| operation | bytes |
+|---|---|
+| `add_imu` (propagate) | 9 856 |
+| `add_imu` with a GNSS fix, with or without velocity | 13 568 |
+| `apply_magnetometer` | 12 328 |
+| **peak** | **13 568** |
+
+Under the ESKF's own 19 120, and under the same 20 KiB ceiling in CI. A late
+fix through `EqfRewindEngine` measures the same 13 568. It was
+28 852 as first measured, and 13 488 until the GCU update took its inflated
+noise into the Joseph form; [testing.md](testing.md), Layer 9, has how it got
+here and why the result is bit-identical.
+
+Stack is not this engine's constraint on a small part. Work is: 5.08 million
+instructions per `add_imu` on Cortex-M4, against 473 thousand for the ESKF
+with `f32-covariance`. A dense `f64` covariance on a core whose FPU is single
+precision is soft-float throughout, and there is no single-precision form of
+it to switch to — the factorisation is what made that safe for the ESKF, and
+this filter does not have one. At an instruction per cycle that is at least
+30 ms a sample at 168 MHz. So the engine is `no_std` and allocation-free and
+fits, and on a Cortex-M4F it still cannot keep pace with an IMU. A factored
+`Σ` is the piece of work that would change that.
 
 ### Stack, measured on Cortex-M4
 
 Peak stack, from `cortex-m-harness` running under QEMU on `mps2-an386`. These
-are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 8".
+are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 9".
 
 | operation | bytes |
 |---|---|
@@ -307,15 +416,23 @@ filter to 15 states. Every matrix halves, and so does the stack:
 Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
-covariance was factored:
+covariance was factored, and again when the equivariant filter's engine joined
+the harness:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 528 | 18 904 | **18 904** |
-| 21-state, `f32-covariance` | 12 840 | 17 976 | **17 976** |
-| 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
+| 21-state, `f64` | 16 092 | 18 968 | **19 120** |
+| 21-state, `f32-covariance` | 12 428 | 18 048 | **18 208** |
+| 15-state (`reduced-state`) | 9 604 | 10 536 | **10 688** |
 
-`f32-covariance` takes 22 % off `add_imu`, because Thornton's working array is
+The peak is now a late fix through the rewind layer, which replays the ZUPT
+path with the rewind's own frame beneath it; see [above](#the-rewind-layer).
+
+(They had moved since they were first tabulated, down by a few hundred bytes
+on `add_imu` and up by 72 on the peak, without this table following. CI
+measures them on every run, and that is the number to trust over this one.)
+
+`f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
 the largest single object on that frame and it halves. It barely moves
 `apply_zupt`, because the held-state path works densely in `f64` regardless.
 

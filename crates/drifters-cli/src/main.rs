@@ -1,18 +1,26 @@
-//! Replay tool for the drifters GNSS/INS filter.
+//! Replay tool for the drifters GNSS/INS estimators.
 //!
-//! Reads the KF-GINS dataset formats, runs the filter, writes a navigation
-//! solution and reports filter consistency statistics.
+//! Reads the KF-GINS and GSDC dataset formats, runs whichever estimators are
+//! selected, writes a navigation solution and reports accuracy and
+//! consistency statistics.
 //!
 //! ```text
 //! drifters replay --config <kf-gins.yaml> [options]
 //!
-//!   --config <path>   configuration file (required)
-//!   --imu <path>      IMU data, overriding the config's path
-//!   --gnss <path>     GNSS data, overriding the config's path
-//!   --out <dir>       output directory (default: alongside the config)
-//!   --week <n>        GPS week number for the timestamps (default: 0)
-//!   --quiet           suppress progress output
+//!   --config <path>    configuration file (required)
+//!   --engine <list>    eskf, eqf, or both as `eskf,eqf` (default: eskf)
+//!   --imu <path>       IMU data, overriding the config's path
+//!   --gnss <path>      GNSS data, overriding the config's path
+//!   --out <dir>        output directory (default: alongside the config)
+//!   --week <n>         GPS week number for the timestamps (default: 0)
+//!   --earth-rate       EqF: compensate the input for Earth rotation
+//!   --flat-earth       EqF: do not (default: decided by the gyro's grade, adr/0008)
+//!   --alpha <a|off>    EqF: GCU convergence rate, or off (default: 0)
+//!   --compare <svg>    one figure of every engine run (default engines: both)
+//!   --quiet            suppress progress output
 //! ```
+//!
+//! `drifters eqf` is `drifters replay --engine eqf`.
 //!
 //! See `docs/testing.md` for how to obtain the demo dataset — it is not
 //! committed to this repository.
@@ -20,7 +28,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use drifters_cli::{eqf, kfgins, plot, replay, run_gsdc};
+use drifters_cli::{eqf, kfgins, plot, replay_with, run_gsdc, EngineKind, Report};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -35,14 +43,18 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: drifters <replay|plot> --config <path> [--imu <path>] [--gnss <path>]\n\
-         \x20         [--out <dir>] [--week <n>] [--quiet] [--figure <svg>] [--name <str>]\n\
+        "usage: drifters <replay|plot|eqf> --config <path> [--engine eskf,eqf]\n\
+         \x20         [--imu <path>] [--gnss <path>] [--out <dir>] [--week <n>] [--quiet]\n\
+         \x20         [--earth-rate | --flat-earth] [--alpha <a|off>]\n\
+         \x20         [--figure <svg>] [--compare <svg>]\n\
+         \x20      drifters <gsdc|tune> --dir <path> [--engine eskf,eqf] [...]\n\
          \n\
-         \x20 replay  run the ESKF and report statistics\n\
+         \x20 replay  run an estimator over a KF-GINS dataset (default: the ESKF)\n\
          \x20 plot    the same, and write an SVG figure\n\
-         \x20 eqf     run the equivariant filter on the same data\n\
-         \x20 gsdc    replay a GSDC phone trace against ground truth\n\
-         \x20 tune    sweep the IMU process noise and score every point"
+         \x20 eqf     replay --engine eqf\n\
+         \x20 gsdc    replay a GSDC phone trace against ground truth (default: both)\n\
+         \x20 tune    sweep the IMU process noise and score every point\n\
+         \x20 nees    Monte-Carlo consistency of the EqF, or of the ESKF with --eskf"
     );
 }
 
@@ -51,48 +63,108 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(index + 1).map(String::as_str)
 }
 
+/// `--earth-rate` or `--flat-earth`, or neither for the gyroscope's grade to
+/// decide.
+fn earth_model(args: &[String]) -> Result<eqf::EarthModel, String> {
+    eqf::EarthModel::from_switches(
+        args.iter().any(|a| a == "--earth-rate"),
+        args.iter().any(|a| a == "--flat-earth"),
+    )
+}
+
+/// The engines `--engine` names, or `default` when it is absent.
+fn engines(args: &[String], default: &[EngineKind]) -> Result<Vec<EngineKind>, String> {
+    match flag(args, "--engine") {
+        Some(list) => EngineKind::parse_list(list),
+        None => Ok(default.to_vec()),
+    }
+}
+
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if args.first().map(String::as_str) == Some("gsdc") {
-        return run_gsdc_command(args);
-    }
-    if args.first().map(String::as_str) == Some("eqf") {
-        return run_eqf_command(args);
-    }
-    if args.first().map(String::as_str) == Some("tune") {
-        return run_tune_command(args);
-    }
-    if args.first().map(String::as_str) == Some("nees") {
-        let runs: usize = flag(args, "--runs").unwrap_or("40").parse()?;
-        let seconds: f64 = flag(args, "--seconds").unwrap_or("120").parse()?;
-        let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
-        let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
-        let strength: f64 = flag(args, "--strength").unwrap_or("1").parse()?;
-        if args.iter().any(|a| a == "--eskf") {
-            let r = drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength);
-            drifters_cli::nees::eskf::print(&r);
-        } else {
-            drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
+    match args.first().map(String::as_str) {
+        Some("gsdc") => run_gsdc_command(args),
+        Some("tune") => run_tune_command(args),
+        Some("nees") => {
+            let runs: usize = flag(args, "--runs").unwrap_or("40").parse()?;
+            let seconds: f64 = flag(args, "--seconds").unwrap_or("120").parse()?;
+            let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
+            let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
+            let strength: f64 = flag(args, "--strength").unwrap_or("1").parse()?;
+            if args.iter().any(|a| a == "--eskf") {
+                let r = drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength);
+                drifters_cli::nees::eskf::print(&r);
+            } else {
+                drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
+            }
+            Ok(())
         }
-        return Ok(());
-    }
-    let make_figure = match args.first().map(String::as_str) {
-        Some("replay") => false,
         // `plot` is `replay` plus a figure: the diagnostics come from the run
         // itself, so re-deriving them from a file would be a second source of
         // truth to keep in sync.
-        Some("plot") => true,
+        Some("replay") => run_replay_command(args, &[EngineKind::Eskf], false),
+        Some("plot") => run_replay_command(args, &[EngineKind::Eskf], true),
+        Some("eqf") => run_replay_command(args, &[EngineKind::Eqf], false),
         _ => {
             usage();
-            return Err("expected the `replay` or `plot` subcommand".into());
+            Err("expected a subcommand".into())
         }
-    };
+    }
+}
 
+/// Replay a KF-GINS dataset through each engine selected.
+///
+/// One loop, `drifters_cli::replay_with`, whatever the engine, so a comparison
+/// between them is a comparison of engines. The EqF's report adds the terms
+/// that are modelling error rather than filter error, which the ESKF's has no
+/// counterpart for.
+fn run_replay_command(
+    args: &[String],
+    default: &[EngineKind],
+    make_figure: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // A comparison is of two things, so asking for one without naming the
+    // engines means both.
+    let default = if flag(args, "--compare").is_some() {
+        &EngineKind::ALL[..]
+    } else {
+        default
+    };
+    let engines = engines(args, default)?;
     let config_path = PathBuf::from(flag(args, "--config").ok_or("--config is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
     let week: u32 = flag(args, "--week").unwrap_or("0").parse()?;
+    let earth = earth_model(args)?;
+    let alpha = eqf::parse_alpha(flag(args, "--alpha"))?;
+
+    let warm = match flag(args, "--warm-start") {
+        Some(v) => {
+            eqf::WarmStart::parse(v).ok_or("--warm-start must be none, calibration or full")?
+        }
+        None => eqf::WarmStart::None,
+    };
+    if warm != eqf::WarmStart::None {
+        return Err(
+            "--warm-start needs a backward information filter, which does not \
+             exist yet. A covariance-form filter cannot be run with a negative dt: \
+             the transition becomes its own inverse and contracts the covariance \
+             faster than process noise restores it, so the gain collapses and the \
+             reverse pass free-runs. Measured on KF-GINS, the gyro-bias variance \
+             falls 170x while innovations grow to 18 km. See the WarmStart docs in \
+             crates/drifters-cli/src/eqf.rs."
+                .into(),
+        );
+    }
 
     let config = kfgins::Config::read(&config_path)?;
     let base = config_path.parent().unwrap_or(Path::new("."));
+    // Bias stability is per-axis in the config; the ratio is a property of
+    // the part, so the largest axis stands for it. Resolved only when the EqF
+    // runs, so that a gyroscope it refuses does not stop the ESKF.
+    let compensate = if engines.contains(&EngineKind::Eqf) {
+        earth.compensate(config.options.imu_noise.gyro_bias_std.amax())?
+    } else {
+        false
+    };
 
     // The config's own paths are relative to KF-GINS's working directory, which
     // is rarely ours, so resolve them next to the config file and let the
@@ -124,13 +196,98 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let report = replay(&config, &imu, &gnss, &out_dir, quiet)?;
-    report.print();
+    let mut reports: Vec<Report> = Vec::new();
+    for kind in &engines {
+        if !quiet {
+            eprintln!("running {}", kind.label());
+        }
+        let report = match kind {
+            EngineKind::Eskf => {
+                let engine = drifters_filter::GinsEngine::new(config.options)?;
+                let report = replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?;
+                report.print();
+                report
+            }
+            EngineKind::Eqf => {
+                let options = eqf::kfgins_options(&config, &gnss, compensate, alpha);
+                let engine = drifters_eqf::EqfEngine::new(options)?;
+                let report = replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?;
+                report.print();
+                println!("{}", eqf::describe_alpha(alpha));
+                eqf::ModelError::of(&config, &options, &report).print(&report);
+                report
+            }
+        };
+        reports.push(report);
+    }
 
-    if make_figure {
-        let figure = flag(args, "--figure").unwrap_or("docs/figures/kf-gins.svg");
+    let label = |kind: EngineKind| match kind {
+        EngineKind::Eskf => "drifters ESKF (Earth-referenced, 21 states)",
+        EngineKind::Eqf if compensate => {
+            "drifters EqF (flat Earth + input-side Earth compensation)"
+        }
+        EngineKind::Eqf => "drifters EqF (flat Earth, as the paper writes it)",
+    };
+
+    if let Some(figure) = flag(args, "--compare") {
+        let t0 = reports
+            .first()
+            .and_then(|r| r.epochs.first())
+            .map(|e| e.tow)
+            .unwrap_or(0.0);
+        let series = reports
+            .iter()
+            .map(|r| plot::Series {
+                label: label(r.engine),
+                colour: match r.engine {
+                    EngineKind::Eskf => plot::ESKF,
+                    EngineKind::Eqf => plot::EQF,
+                },
+                width: 1.8,
+                track: r.epochs.iter().map(|p| (p.ned.1, p.ned.0)).collect(),
+                error: r
+                    .epochs
+                    .iter()
+                    .map(|p| (p.tow - t0, p.residual.0.hypot(p.residual.1)))
+                    .collect(),
+                summary: match r.engine {
+                    EngineKind::Eskf => format!(
+                        "{:.3} m RMS",
+                        r.residual_north.rms().hypot(r.residual_east.rms())
+                    ),
+                    EngineKind::Eqf => format!(
+                        "{:.3} m RMS, {:.3} m at the last fix",
+                        r.residual_north.rms().hypot(r.residual_east.rms()),
+                        r.final_residual
+                    ),
+                },
+            })
+            .collect();
+        let comparison = plot::Comparison {
+            dataset: "KF-GINS demo — Leador-A15, 57 min of driving, RTK",
+            subtitle: if compensate {
+                "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF is twenty-seven times worse."
+            } else {
+                "Open-loop antenna residual before each fix. Tactical grade: the flat-Earth EqF cannot follow the horizontal Earth rate, and carries it as a metre of error."
+            },
+            error_label: "Horizontal residual, predicted antenna position vs fix (log scale)",
+            log_error: true,
+            error_floor: 1.0e-3,
+            series,
+        };
+        write_figure(figure, &plot::render_comparison(&comparison))?;
+    }
+
+    let figure = flag(args, "--figure").or(make_figure.then_some(match engines.first() {
+        Some(EngineKind::Eqf) => "docs/figures/kf-gins-eqf.svg",
+        _ => "docs/figures/kf-gins.svg",
+    }));
+    if let (Some(figure), Some(report)) = (figure, reports.first()) {
         let caption = plot::Caption {
-            dataset: flag(args, "--name").unwrap_or("KF-GINS demo dataset"),
+            dataset: flag(args, "--name").unwrap_or(match report.engine {
+                EngineKind::Eskf => "KF-GINS demo dataset",
+                EngineKind::Eqf => "KF-GINS demo dataset — EqF",
+            }),
             horizontal_rms: report
                 .residual_north
                 .rms()
@@ -139,21 +296,26 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             nis_mean: report.nis.mean(),
             fixes: report.applied_fixes,
         };
-        let svg = plot::render(&report.epochs, &caption);
-        if let Some(parent) = Path::new(figure).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(figure, svg)?;
-        println!("\nwrote {figure}");
+        write_figure(figure, &plot::render(&report.epochs, &caption))?;
     }
     Ok(())
 }
 
-/// Replay a GSDC phone-trace and report the filter against the phone's own
-/// GNSS solution, both scored on ground truth.
+fn write_figure(path: &str, svg: &str) -> std::io::Result<()> {
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, svg)?;
+    println!("\nwrote {path}");
+    Ok(())
+}
+
+/// Replay a GSDC phone-trace through each engine selected, and report them
+/// against the phone's own GNSS solution, all scored on ground truth.
 fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
+    let engines = engines(args, &EngineKind::ALL)?;
     // Per-axis, because smartphone GNSS vertical error is several times its
     // horizontal error — a single figure is wrong for one of them.
     let sn: f64 = flag(args, "--sigma-n").unwrap_or("5").parse()?;
@@ -162,12 +324,14 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let imu_scale: f64 = flag(args, "--imu-scale").unwrap_or("1").parse()?;
     let gyro_scale: f64 = flag(args, "--gyro-scale").unwrap_or("1").parse()?;
     let gnss_lag: f64 = flag(args, "--gnss-lag").unwrap_or("0").parse()?;
-    // GCU convergence rate for the EqF. Defaults to 0 because that is what this
-    // trace measures best — see docs/eqf.md for the sweep and why.
-    let alpha: f64 = flag(args, "--alpha").unwrap_or("0").parse()?;
+    // GCU convergence rate for the EqF. Defaults to 0 because that is what the
+    // phone traces measure best — see docs/eqf.md for the sweep and why.
+    let alpha = eqf::parse_alpha(flag(args, "--alpha"))?;
+    let earth = earth_model(args)?;
     let report = run_gsdc(
         &dir,
         drifters_cli::GsdcOptions {
+            engines,
             sigma: drifters_cli::vec3(sn, se, sv),
             imu_scale,
             gyro_scale,
@@ -184,16 +348,22 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             tight: args.iter().any(|a| a == "--tight"),
             max_satellites: flag(args, "--max-satellites").and_then(|v| v.parse().ok()),
             alpha,
+            earth,
         },
         quiet,
     )?;
 
     println!("\n--- GSDC replay ---");
-    println!("IMU samples processed : {}", report.processed);
-    println!(
-        "GNSS fixes applied    : {} ({} rejected by the gate)",
-        report.applied, report.rejected
-    );
+    for run in &report.runs {
+        println!(
+            "{:<14}: {} IMU samples, {} GNSS fixes applied ({} rejected by a gate){}",
+            run.engine.label(),
+            run.processed,
+            run.applied,
+            run.rejected,
+            if run.tight { ", tightly coupled" } else { "" }
+        );
+    }
     println!("assumed GNSS sigma    : N {sn:.1}, E {se:.1}, D {sv:.1} m");
     if imu_scale != 1.0 {
         println!("IMU process noise     : x{imu_scale} (diagnostic)");
@@ -207,24 +377,33 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     /// One row of the error table: what to call it, the error against truth,
     /// and its per-epoch horizontal error for the order statistics.
     type Row<'a> = (
-        &'a str,
+        String,
         &'a drifters_cli::truth::ErrorStats,
         &'a [(f64, f64)],
     );
-    let mut rows: Vec<Row> = vec![
-        (
-            "phone GNSS (WLS) alone",
-            &report.gnss_only,
-            &report.gnss_horizontal,
-        ),
-        ("drifters ESKF", &report.filter, &report.filter_horizontal),
-        ("drifters EqF", &report.eqf, &report.eqf_horizontal),
-    ];
-    if let Some(s) = &report.rts {
-        rows.push(("drifters ESKF + RTS", s, &report.rts_horizontal));
+    let mut rows: Vec<Row> = vec![(
+        "phone GNSS (WLS) alone".to_string(),
+        &report.gnss_only,
+        &report.gnss_horizontal,
+    )];
+    for run in &report.runs {
+        rows.push((run.engine.label().to_string(), &run.error, &run.horizontal));
+    }
+    for run in &report.runs {
+        if let Some(s) = &run.rts {
+            rows.push((
+                format!("{} + RTS", run.engine.label()),
+                s,
+                &run.rts_horizontal,
+            ));
+        }
     }
     if let Some(s) = &report.smoothed {
-        rows.push(("GNSS batch-smoothed", s, &report.smoothed_horizontal));
+        rows.push((
+            "GNSS batch-smoothed".to_string(),
+            s,
+            &report.smoothed_horizontal,
+        ));
     }
     for (name, e, horizontal) in rows {
         let errors: Vec<f64> = horizontal.iter().map(|&(_, m)| m).collect();
@@ -261,22 +440,26 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             v.horizontal.max(),
         );
     }
-    if !report.filter_satellites.is_empty()
-        && report.filter_satellites.len() == report.filter_horizontal.len()
-    {
+    for run in &report.runs {
+        if run.satellites.is_empty() || run.satellites.len() != run.horizontal.len() {
+            continue;
+        }
         // Tight coupling exists for the epochs where the sky is poor, so the
         // aggregate cannot answer whether it works: a trace that is mostly
         // open sky averages away the case it was built for.
-        println!("\nfilter horizontal error by satellites in view (metres):");
+        println!(
+            "\n{} horizontal error by satellites in view (metres):",
+            run.engine.label()
+        );
         println!(
             "{:<14} {:>7} {:>9} {:>9} {:>9}",
             "satellites", "n", "median", "p95", "max"
         );
         for (lo, hi) in [(0usize, 15usize), (15, 20), (20, 25), (25, 100)] {
-            let mut errors: Vec<f64> = report
-                .filter_satellites
+            let mut errors: Vec<f64> = run
+                .satellites
                 .iter()
-                .zip(&report.filter_horizontal)
+                .zip(&run.horizontal)
                 .filter(|(n, _)| **n >= lo && **n < hi)
                 .map(|(_, (_, e))| *e)
                 .collect();
@@ -335,55 +518,81 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         report.gnss_only.east.rms(),
         report.gnss_only.down.rms(),
     );
-    let (a, b) = (
-        report.gnss_only.horizontal.rms(),
-        report.filter.horizontal.rms(),
-    );
-    if a > 0.0 {
+    let gnss_rms = report.gnss_only.horizontal.rms();
+    println!();
+    for run in &report.runs {
+        let rms = run.error.horizontal.rms();
+        if gnss_rms > 0.0 {
+            println!(
+                "{:<14}: horizontal RMS {:+.1} % against the phone ({:.3} m -> {:.3} m)",
+                run.engine.label(),
+                (rms - gnss_rms) / gnss_rms * 100.0,
+                gnss_rms,
+                rms
+            );
+        }
+    }
+    // Prediction residual: how far the solution had dead-reckoned from the
+    // last epoch against where GNSS says it went, before the epoch's update.
+    // This isolates the inertial propagation from the fusion.
+    for run in &report.runs {
+        let mut rh = drifters_cli::stats::Running::new();
+        let mut rv = drifters_cli::stats::Running::new();
+        for e in &run.epochs {
+            rh.push(e.residual.0.hypot(e.residual.1));
+            rv.push(e.residual.2.abs());
+        }
         println!(
-            "\nhorizontal RMS change  : {:+.1} % ({:.3} m -> {:.3} m)",
-            (b - a) / a * 100.0,
-            a,
-            b
+            "{:<14}: 1-second prediction residual at the antenna, horiz RMS {:.3} m \
+             (max {:.1}), vert RMS {:.3} m",
+            run.engine.label(),
+            rh.rms(),
+            rh.max(),
+            rv.rms()
         );
     }
-    // Prediction residual: how far the IMU dead-reckoned in one fix interval
-    // versus where GNSS says it went. This isolates the IMU from the fusion.
-    let mut rh = drifters_cli::stats::Running::new();
-    let mut rv = drifters_cli::stats::Running::new();
-    for e in &report.epochs {
-        rh.push(e.residual.0.hypot(e.residual.1));
-        rv.push(e.residual.2.abs());
+    for run in &report.runs {
+        println!(
+            "{:<14}: {} epochs compared, against the phone's {}",
+            run.engine.label(),
+            run.error.count(),
+            report.gnss_only.count()
+        );
     }
-    println!(
-        "\n1-second dead-reckoning residual: horiz RMS {:.3} m (max {:.1}), vert RMS {:.3} m",
-        rh.rms(),
-        rh.max(),
-        rv.rms()
-    );
-    println!(
-        "epochs compared        : filter {}, GNSS {}",
-        report.filter.count(),
-        report.gnss_only.count()
-    );
-    println!("\nEqF GCU convergence rate alpha = {:.2}", report.eqf_alpha);
-    println!(
-        "EqF self-calibrated lever arm: [{:+.3}, {:+.3}, {:+.3}] m (a phone has none to find)",
-        report.eqf_lever.x, report.eqf_lever.y, report.eqf_lever.z
-    );
-    println!(
-        "\nNIS mean {:.3} over {} fixes (expected 3.0, ratio {:.2}x — {})",
-        report.nis.mean(),
-        report.nis.count(),
-        report.nis.mean() / 3.0,
-        drifters_cli::practical_verdict(report.nis.mean() / 3.0)
-    );
+    if let Some(run) = report.run(EngineKind::Eqf) {
+        println!(
+            "\nEqF: {}; Earth rate {}",
+            eqf::describe_alpha(report.eqf_alpha),
+            if report.eqf_earth_rate {
+                "compensated"
+            } else {
+                "not modelled (flat Earth)"
+            }
+        );
+        println!(
+            "EqF self-calibrated lever arm: [{:+.3}, {:+.3}, {:+.3}] m (a phone has none to find)",
+            run.lever.x, run.lever.y, run.lever.z
+        );
+    }
+    println!();
+    for run in &report.runs {
+        println!(
+            "{:<14}: NIS mean {:.3} over {} updates (expected 3.0, ratio {:.2}x — {})",
+            run.engine.label(),
+            run.nis.mean(),
+            run.nis.count(),
+            run.nis.mean() / 3.0,
+            drifters_cli::practical_verdict(run.nis.mean() / 3.0)
+        );
+    }
 
+    // `--dump` and `--figure` describe one run: the first engine listed.
+    let first = report.runs.first().ok_or("no engine ran")?;
     if let Some(csv) = flag(args, "--dump") {
         use std::io::Write;
         let mut f = std::fs::File::create(csv)?;
         writeln!(f, "tow,n,e,d,res_n,res_e,res_d,nis")?;
-        for e in &report.epochs {
+        for e in &first.epochs {
             writeln!(
                 f,
                 "{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",
@@ -402,47 +611,35 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(figure) = flag(args, "--compare") {
         // Error against ground truth, which this dataset uniquely has — so the
         // lower panel is true error, not a prediction residual.
-        let t0 = report.epochs.first().map(|e| e.tow).unwrap_or(0.0);
-        let track =
-            |e: &[drifters_cli::Epoch]| e.iter().map(|p| (p.ned.1, p.ned.0)).collect::<Vec<_>>();
-        let series = vec![
-            plot::Series {
-                label: "phone GNSS (WLS) alone",
-                colour: plot::BASELINE,
-                width: 1.4,
-                track: Vec::new(),
-                error: report
-                    .gnss_horizontal
-                    .iter()
-                    .map(|(t, v)| (t - t0, *v))
-                    .collect(),
-                summary: format!("{:.2} m RMS", report.gnss_only.horizontal.rms()),
-            },
-            plot::Series {
-                label: "drifters ESKF (Earth-referenced, 21 states)",
-                colour: plot::ESKF,
+        let t0 = first.epochs.first().map(|e| e.tow).unwrap_or(0.0);
+        let mut series = vec![plot::Series {
+            label: "phone GNSS (WLS) alone",
+            colour: plot::BASELINE,
+            width: 1.4,
+            track: Vec::new(),
+            error: report
+                .gnss_horizontal
+                .iter()
+                .map(|(t, v)| (t - t0, *v))
+                .collect(),
+            summary: format!("{:.2} m RMS", report.gnss_only.horizontal.rms()),
+        }];
+        for run in &report.runs {
+            series.push(plot::Series {
+                label: match run.engine {
+                    EngineKind::Eskf => "drifters ESKF (Earth-referenced, 21 states)",
+                    EngineKind::Eqf => "drifters EqF (flat Earth, self-calibrating)",
+                },
+                colour: match run.engine {
+                    EngineKind::Eskf => plot::ESKF,
+                    EngineKind::Eqf => plot::EQF,
+                },
                 width: 1.8,
-                track: track(&report.epochs),
-                error: report
-                    .filter_horizontal
-                    .iter()
-                    .map(|(t, v)| (t - t0, *v))
-                    .collect(),
-                summary: format!("{:.2} m RMS", report.filter.horizontal.rms()),
-            },
-            plot::Series {
-                label: "drifters EqF (flat Earth, self-calibrating)",
-                colour: plot::EQF,
-                width: 1.8,
-                track: track(&report.eqf_epochs),
-                error: report
-                    .eqf_horizontal
-                    .iter()
-                    .map(|(t, v)| (t - t0, *v))
-                    .collect(),
-                summary: format!("{:.2} m RMS", report.eqf.horizontal.rms()),
-            },
-        ];
+                track: run.epochs.iter().map(|p| (p.ned.1, p.ned.0)).collect(),
+                error: run.horizontal.iter().map(|(t, v)| (t - t0, *v)).collect(),
+                summary: format!("{:.2} m RMS", run.error.horizontal.rms()),
+            });
+        }
         let comparison = plot::Comparison {
             dataset: "GSDC 2023 — Samsung SM-S908B, 20 min of driving",
             subtitle: "Horizontal error against survey-grade ground truth. Consumer MEMS: the grade the EqF's flat-Earth model is designed for.",
@@ -451,164 +648,17 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             error_floor: 1.0e-3,
             series,
         };
-        let svg = plot::render_comparison(&comparison);
-        if let Some(parent) = Path::new(figure).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(figure, svg)?;
-        println!("\nwrote {figure}");
+        write_figure(figure, &plot::render_comparison(&comparison))?;
     }
     if let Some(figure) = flag(args, "--figure") {
         let caption = plot::Caption {
             dataset: flag(args, "--name").unwrap_or("GSDC 2023 phone trace"),
-            horizontal_rms: report.filter.horizontal.rms(),
-            vertical_rms: report.filter.down.rms(),
-            nis_mean: report.nis.mean(),
-            fixes: report.applied,
+            horizontal_rms: first.error.horizontal.rms(),
+            vertical_rms: first.error.down.rms(),
+            nis_mean: first.nis.mean(),
+            fixes: first.applied,
         };
-        let svg = plot::render(&report.epochs, &caption);
-        if let Some(parent) = Path::new(figure).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(figure, svg)?;
-        println!("\nwrote {figure}");
-    }
-    Ok(())
-}
-
-/// Replay the equivariant filter over the KF-GINS formats.
-///
-/// Separate from `replay` rather than a flag on it: the two report different
-/// things. The EqF quotes its own modelling error, and pretending the outputs
-/// are interchangeable would hide exactly the term that matters.
-fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = PathBuf::from(flag(args, "--config").ok_or("--config is required")?);
-    let quiet = args.iter().any(|a| a == "--quiet");
-    let week: u32 = flag(args, "--week").unwrap_or("0").parse()?;
-    let compensate = args.iter().any(|a| a == "--earth-rate");
-
-    let config = kfgins::Config::read(&config_path)?;
-    let base = config_path.parent().unwrap_or(Path::new("."));
-    let imu_path = flag(args, "--imu")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| base.join("Leador-A15.txt"));
-    let gnss_path = flag(args, "--gnss")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| base.join("GNSS-RTK.txt"));
-
-    let imu = kfgins::read_imu(&imu_path, week)?;
-    let gnss = kfgins::read_gnss(&gnss_path, week)?;
-    if !quiet {
-        eprintln!("{} IMU samples, {} GNSS fixes", imu.len(), gnss.len());
-    }
-
-    let warm = match flag(args, "--warm-start") {
-        Some(v) => {
-            eqf::WarmStart::parse(v).ok_or("--warm-start must be none, calibration or full")?
-        }
-        None => eqf::WarmStart::None,
-    };
-    if warm != eqf::WarmStart::None {
-        return Err(
-            "--warm-start needs a backward information filter, which does not \
-             exist yet. A covariance-form filter cannot be run with a negative dt: \
-             the transition becomes its own inverse and contracts the covariance \
-             faster than process noise restores it, so the gain collapses and the \
-             reverse pass free-runs. Measured on KF-GINS, the gyro-bias variance \
-             falls 170x while innovations grow to 18 km. See the WarmStart docs in \
-             crates/drifters-cli/src/eqf.rs."
-                .into(),
-        );
-    }
-    let report = eqf::replay_eqf(&config, &imu, &gnss, compensate, warm, quiet);
-    report.print();
-
-    if let Some(figure) = flag(args, "--compare") {
-        // The ESKF over the same inputs, so the figure is one run of each and
-        // not two runs stitched together from different invocations.
-        let out = std::env::temp_dir().join("drifters-eqf-compare");
-        let baseline = replay(&config, &imu, &gnss, &out, true)?;
-
-        let t0 = baseline.epochs.first().map(|e| e.tow).unwrap_or(0.0);
-        let track =
-            |e: &[drifters_cli::Epoch]| e.iter().map(|p| (p.ned.1, p.ned.0)).collect::<Vec<_>>();
-        let horiz = |e: &[drifters_cli::Epoch]| {
-            e.iter()
-                .map(|p| (p.tow - t0, p.residual.0.hypot(p.residual.1)))
-                .collect::<Vec<_>>()
-        };
-        let series = vec![
-            plot::Series {
-                label: "drifters ESKF (Earth-referenced, 21 states)",
-                colour: plot::ESKF,
-                width: 1.8,
-                track: track(&baseline.epochs),
-                error: horiz(&baseline.epochs),
-                summary: format!(
-                    "{:.3} m RMS",
-                    baseline
-                        .residual_north
-                        .rms()
-                        .hypot(baseline.residual_east.rms())
-                ),
-            },
-            plot::Series {
-                label: if compensate {
-                    "drifters EqF (flat Earth + input-side Earth compensation)"
-                } else {
-                    "drifters EqF (flat Earth, as the paper writes it)"
-                },
-                colour: plot::EQF,
-                width: 1.8,
-                track: track(&report.epochs),
-                error: horiz(&report.epochs),
-                summary: format!(
-                    "{:.3} m RMS, {:.3} m at the last fix",
-                    report
-                        .residual_north
-                        .rms()
-                        .hypot(report.residual_east.rms()),
-                    report.final_residual
-                ),
-            },
-        ];
-        let comparison = plot::Comparison {
-            dataset: "KF-GINS demo — Leador-A15, 57 min of driving, RTK",
-            subtitle: if compensate {
-                "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF diverges as t^3 to 10^6 m."
-            } else {
-                "Open-loop antenna residual before each fix. Tactical grade, and the flat-Earth model diverges: this is the failure, drawn."
-            },
-            error_label: "Horizontal residual, predicted antenna position vs fix (log scale)",
-            log_error: true,
-            error_floor: 1.0e-3,
-            series,
-        };
-        let svg = plot::render_comparison(&comparison);
-        if let Some(parent) = Path::new(figure).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(figure, svg)?;
-        println!("\nwrote {figure}");
-    }
-
-    if let Some(figure) = flag(args, "--figure") {
-        let caption = plot::Caption {
-            dataset: flag(args, "--name").unwrap_or("KF-GINS demo dataset — EqF"),
-            horizontal_rms: report
-                .residual_north
-                .rms()
-                .hypot(report.residual_east.rms()),
-            vertical_rms: report.residual_down.rms(),
-            nis_mean: report.nis.mean(),
-            fixes: report.applied,
-        };
-        let svg = plot::render(&report.epochs, &caption);
-        if let Some(parent) = Path::new(figure).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(figure, svg)?;
-        println!("\nwrote {figure}");
+        write_figure(figure, &plot::render(&first.epochs, &caption))?;
     }
     Ok(())
 }
@@ -629,10 +679,11 @@ fn run_eqf_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
+    let engines = engines(args, &EngineKind::ALL)?;
     let sn: f64 = flag(args, "--sigma-n").unwrap_or("5.7").parse()?;
     let se: f64 = flag(args, "--sigma-e").unwrap_or("2.5").parse()?;
     let sv: f64 = flag(args, "--sigma-v").unwrap_or("18").parse()?;
-    let alpha: f64 = flag(args, "--alpha").unwrap_or("0").parse()?;
+    let alpha = eqf::parse_alpha(flag(args, "--alpha"))?;
 
     let scales: Vec<f64> = match flag(args, "--scales") {
         Some(list) => list
@@ -648,6 +699,7 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
     let rows = drifters_cli::tune_gsdc(
         &dir,
+        &engines,
         drifters_cli::vec3(sn, se, sv),
         &scales,
         alpha,
@@ -656,52 +708,61 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     println!("\n--- posterior IMU process-noise tune ---");
-    println!("assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF alpha {alpha:.2}");
     println!(
-        "\n{:>8}   {:>8} {:>8} {:>9}   {:>8} {:>8} {:>9}",
-        "scale", "ESKF~x", "ESKF~m", "ESKF RMS", "EqF~x", "EqF~m", "EqF RMS"
+        "assumed GNSS sigma: N {sn:.1}, E {se:.1}, D {sv:.1} m;  EqF: {}",
+        eqf::describe_alpha(alpha)
     );
-    println!(
-        "{:>8}   {:>8} {:>8} {:>9}   {:>8} {:>8} {:>9}",
-        "", "mean", "median", "", "mean", "median", ""
-    );
-    for r in &rows {
-        println!(
-            "{:>8.0}   {:>8.3} {:>8.3} {:>7.3} m   {:>8.3} {:>8.3} {:>7.3} m",
-            r.scale,
-            r.eskf_nis,
-            r.eskf_nis_median,
-            r.eskf_rms,
-            r.eqf_nis,
-            r.eqf_nis_median,
-            r.eqf_rms
+    let name = |kind: EngineKind| match kind {
+        EngineKind::Eskf => "ESKF",
+        EngineKind::Eqf => "EqF",
+    };
+    print!("\n{:>8}", "scale");
+    for kind in &engines {
+        let n = name(*kind);
+        print!(
+            "   {:>8} {:>8} {:>9}",
+            format!("{n}~x"),
+            format!("{n}~m"),
+            format!("{n} RMS")
         );
+    }
+    print!("\n{:>8}", "");
+    for _ in &engines {
+        print!("   {:>8} {:>8} {:>9}", "mean", "median", "");
+    }
+    println!();
+    for r in &rows {
+        print!("{:>8.0}", r.scale);
+        for kind in &engines {
+            match r.result(*kind) {
+                Some(x) => print!(
+                    "   {:>8.3} {:>8.3} {:>7.3} m",
+                    x.nis_mean, x.nis_median, x.rms
+                ),
+                None => print!("   {:>8} {:>8} {:>9}", "-", "-", "-"),
+            }
+        }
+        println!();
     }
 
     let fmt = |v: Option<f64>| v.map_or("outside sweep".to_string(), |x| format!("x{x:.0}"));
-    let show = |name: &str, mean: Option<f64>, med: Option<f64>, best: Option<f64>| {
+    let med_target = drifters_cli::stats::CHI2_3DOF_MEDIAN;
+    println!();
+    for kind in &engines {
+        let kind = *kind;
+        let mean = drifters_cli::nis_crossing(&rows, |r| r.result(kind).map(|x| x.nis_mean), 3.0);
+        let med =
+            drifters_cli::nis_crossing(&rows, |r| r.result(kind).map(|x| x.nis_median), med_target);
+        let best = drifters_cli::best_rms(&rows, |r| r.result(kind).map(|x| x.rms));
         println!(
-            "{name:<5} mean NIS -> 3: {:<14} median NIS -> {:.3}: {:<14} lowest error: {}",
+            "{:<5} mean NIS -> 3: {:<14} median NIS -> {:.3}: {:<14} lowest error: {}",
+            name(kind),
             fmt(mean),
-            drifters_cli::stats::CHI2_3DOF_MEDIAN,
+            med_target,
             fmt(med),
             fmt(best)
         );
-    };
-    let med_target = drifters_cli::stats::CHI2_3DOF_MEDIAN;
-    println!();
-    show(
-        "ESKF",
-        eqf::nis_crossing(&rows, |r| r.eskf_nis, 3.0),
-        eqf::nis_crossing(&rows, |r| r.eskf_nis_median, med_target),
-        eqf::best_rms(&rows, |r| r.eskf_rms),
-    );
-    show(
-        "EqF",
-        eqf::nis_crossing(&rows, |r| r.eqf_nis, 3.0),
-        eqf::nis_crossing(&rows, |r| r.eqf_nis_median, med_target),
-        eqf::best_rms(&rows, |r| r.eqf_rms),
-    );
+    }
     println!(
         "\nThe mean and median targets differ (3 against {:.3}) because the\n\
          chi-squared distribution is right-skewed. If the two crossings agree,\n\

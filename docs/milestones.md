@@ -289,7 +289,9 @@ measured 0.033 m residual budget.
 The covariance is a separate question, and once it is stored factored the answer
 differs. `--features f32-covariance` changes nothing measurable — KF-GINS
 0.0330 m, NIS 1.459, GSDC 3.244, NEES 13.874, each matching `f64` — and removes
-41 % of the instructions retired per `add_imu` on Cortex-M4. Reasoning in
+87 % of the instructions retired per `add_imu` on Cortex-M4. (Recorded here as
+41 % until the counter behind it was found to have wrapped; see
+[M9](#m9--hardware-validation).) Reasoning in
 [adr/0005](adr/0005-scalar-type.md).
 
 Mixed precision for the *states* remains open and belongs in M9.
@@ -320,8 +322,9 @@ without one on a desk.
 
 ### Answered without a board
 
-Instructions retired can be counted exactly: `qemu -icount shift=0` advances the
-virtual clock one tick per instruction, so SysTick counts instructions. That is
+Instructions retired can be counted exactly. `qemu -icount shift=0` advances
+the virtual clock one nanosecond per instruction, and the harness times
+`add_imu` against it with SysTick, calibrated on a loop of known length. That is
 not a cycle count — no pipeline, no wait states, no FPU latency — but it
 measures how much *work* a change removes, which on a part whose FPU is
 single-precision is most of the soft-float question. Per `add_imu` on
@@ -329,36 +332,60 @@ single-precision is most of the soft-float question. Per `add_imu` on
 
 | configuration | instructions |
 |---|---|
-| 21-state, `f64` | 21 398 |
-| 21-state, `f32-covariance` | **11 868** |
-| 15-state (`reduced-state`) | **5 911** |
+| ESKF, 21-state, `f64` | 3 538 560 |
+| ESKF, 21-state, `f32-covariance` | **473 440** |
+| ESKF, 15-state (`reduced-state`) | 1 578 080 |
+| ESKF, 15-state, `f32-covariance` | **270 560** |
+| EqF engine | 5 078 640 |
+
+**This table replaced one that was wrong.** It read 21 398, 11 868 and 5 911,
+labelled instructions. They were SysTick ticks, forty instructions each, and
+two of the three were aliased: the counter is 24 bits and the batch being timed
+ran it round twice for the 21-state build and once for the 15-state one. Only
+the `f32-covariance` row was a true count, of ticks. Found when the equivariant
+filter's engine went into the harness and its number needed a unit; the account
+is in [testing.md](testing.md), Layer 9. Counts further down this document that
+predate the correction are in ticks, and the ones taken in the `f64` or
+15-state build are aliased as well. Each is marked where it stands.
 
 - [x] **Cost of software-emulated `f64`, in work rather than time.** The
-      single-precision covariance removes 45 % of the instructions retired. On
-      `thumbv7em` the UD routines compile to `vmul.f32`, `vdiv.f32` and
-      `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
-      `__aeabi_dadd` and `__aeabi_ddiv` without it. What remains for a board is
-      turning that into cycles, below.
+      single-precision covariance removes **87 %** of the instructions retired,
+      not the 45 % first recorded. On `thumbv7em` the UD routines compile to
+      `vmul.f32`, `vdiv.f32` and `vmla.f32` under `f32-covariance`, and to
+      `bl __aeabi_dmul`, `__aeabi_dadd` and `__aeabi_ddiv` without it. What
+      remains for a board is turning that into cycles, below.
 - [x] **Mixed precision, the covariance half.** `--features f32-covariance`,
       measured to change no result — KF-GINS 0.0330 m, NIS 1.459, GSDC 3.244,
       NEES 13.874. See [adr/0005](adr/0005-scalar-type.md).
 - [x] **Where the remaining work is.** Stubbing one stage at a time against the
-      shipping configuration: the covariance recursion dominates, the transition
-      matrix costs 986 instructions, and the earth model cost 1 560 until
-      `Local` took it to one evaluation per point. Recorded in
-      [testing.md](testing.md), along with the two ways this measurement gave a
-      wrong answer first.
+      shipping configuration, in SysTick ticks of the `f32-covariance` build's
+      11 836: the covariance recursion dominates, the transition matrix costs
+      986, and the mechanization 2 096 — it was 3 209 before `Local` took the
+      earth model, 1 560 of that, to one evaluation per point. Recorded in
+      [testing.md](testing.md), along with the ways this measurement gave a
+      wrong answer first, of which there are now four.
+- [x] **Which configurations can keep up at all.** A floor, from the count
+      alone: a Cortex-M4 retires about one instruction per cycle at best, so at
+      168 MHz a 21-state `f64` `add_imu` takes at least 21 ms and the
+      equivariant filter's at least 30 ms. Neither can follow a 100 Hz IMU on
+      that part, let alone a 200 Hz one. With `f32-covariance` the floor is
+      2.8 ms at 21 states and 1.6 ms at 15, which fits inside 5 ms if the real
+      figure is close to it. Whether it is close is the first item below.
 
 ### Still needs a board
 
 - [ ] Cycle-count benchmarks for `predict` and `update` on real Cortex-M4F/M7
 - [ ] Flash wait-state and cache effects at realistic clock speeds
 - [ ] Sustained-rate check: does a 200 Hz IMU keep up with a 1 Hz GNSS update?
+      Answered in the negative for the default build and for the equivariant
+      filter, above. Open for `f32-covariance`, which is the only configuration
+      it is still a question for.
 - [ ] Power per filter step
 - [ ] Mixed precision for the *states*, which the covariance half does not
       cover. [adr/0009](adr/0009-local-first-architecture.md) parks the local
-      frame it would need, on the grounds that the mechanization is 24 % of the
-      work and single precision would spend accuracy to get part of it.
+      frame it would need, on the grounds that the mechanization is 18 % of the
+      work — 24 % when that was written — and single precision would spend
+      accuracy to get part of it.
 - [ ] True cross-implementation comparison against KF-GINS's C++ output
 
 **Why the rest is separate.** QEMU models no pipeline, cache, flash wait states
@@ -393,36 +420,76 @@ measured firmware budget is untouched. Specification and scoping in
 - [x] Propagation, update and reset — the filter itself, closed-loop against an
       independent simulator
 - [x] Local-tangent-frame adapter, with both modelling errors quantified
-- [x] ESKF-vs-EqF on the KF-GINS dataset, `drifters eqf`
+- [x] ESKF-vs-EqF on the KF-GINS dataset, `drifters replay --engine eskf,eqf`
 - [x] The same on GSDC — consumer-grade hardware, where the paper's flat-Earth
       assumption actually holds and the comparison is fair
 - [x] Comparison figures for both datasets, `--compare`
-- [ ] Extract a common backend trait, once both estimators exist and their
-      shapes are known
+- [x] A sans-IO engine, `EqfEngine`, mirroring the ESKF's: validated
+      `EqfOptions` in physical units, the IMU sample split at the GNSS epoch,
+      chi-squared gates with inflation after repeated rejection, geodetic
+      `NavState` out. Bit-identical to the filter driven by hand
+- [x] The same bare-metal ceiling as the ESKF. 28 852 bytes of stack as first
+      measured, **13 488** once the covariance arithmetic was done in place,
+      with the expression forms kept as a bit-for-bit reference; and nothing
+      from `core::panicking` linked
+- [x] Extract a common backend trait, once both estimators exist and their
+      shapes are known — `drifters_core::estimator::Estimator`, with the epoch
+      placement rule, the gate thresholds, `GnssQueued` and `FilterError` that
+      both engines turned out to share. One contract test runs against both
+- [x] Late fixes, through `EqfRewindEngine`. The ESKF's rewind machinery
+      moved to `drifters_core::rewind` as `Rewind<E>`, generic over a
+      `Rewindable` engine that names its own aiding calls, and both engines'
+      wrappers are that type. The ESKF's twelve rewind tests passed against
+      it unchanged; the EqF's, with magnetometer readings and gated velocity
+      fixes interleaved, hold it to on-time delivery bit for bit; the
+      contract test runs the shared layer over both. 25 608 bytes at
+      `<120, 32>`, and the late-fix path measured on Cortex-M4 at the same
+      peak as the engine's own, 13 568 bytes now
+- [x] Every replay through the engine. `--engine eskf,eqf` selects; one
+      loop per dataset, generic over `Estimator`, drives whichever is chosen.
+      The ESKF's outputs are bit-identical through the move — output files,
+      every GSDC table row on four traces, and per-epoch position and NIS
+      loose and tight. The EqF's moved, and the measurements below are
+      through the engine
+- [x] What the engine's numbers exposed, fixed. GCU's covariance update is
+      the paper's, counting its inflation as measurement noise; `None` turns
+      GCU off, where `α = 0` never did; the accelerometer scale factor the
+      EqF has no state for is carried in its bias prior; and a replay picks
+      the Earth model by the gyroscope's grade, as adr/0008 decides
 
 ### Measured on the KF-GINS dataset
 
-| | horizontal RMS | at the last fix |
-|---|---|---|
-| ESKF (Earth-referenced) | **0.033 m** | — |
-| EqF, flat Earth as written | 1.5 × 10⁶ m | diverged |
-| EqF, + input-side Earth compensation | 14.7 m | **0.015 m** |
+| | horizontal RMS | vertical RMS | NIS |
+|---|---|---|---|
+| ESKF (Earth-referenced) | **0.033 m** | 0.018 m | 1.46 |
+| EqF, + input-side Earth compensation | 0.035 m | 0.019 m | 1.55 |
+| EqF, flat Earth as written | 0.943 m | 0.069 m | 6 718 |
 
-The flat-Earth filter diverges as `t³`, which is a constant attitude-rate error;
-solving back gives `5.96 × 10⁻⁵ rad/s` against an Earth rate of `7.29 × 10⁻⁵`.
-The gyro bias prior for this IMU is `0.027 °/h` and Earth rate is **557×** that,
-so no state in the model can represent it. That is the number this milestone's
-scoping predicted before any of it was written.
+Earth rate is **557×** this IMU's gyro bias prior, which this milestone's
+scoping predicted would break a flat-Earth model before any of it was written.
+It breaks half of it. The vertical component of Earth rate is constant about a
+level car's down axis, and the gyro bias absorbs it — the estimate converges to
+`−3.66 × 10⁻⁵ rad/s` against the `3.69 × 10⁻⁵` that is vertical here. The
+horizontal component turns with the vehicle, and the fixes hold what it does to
+a metre, with a NIS that says the filter has no idea.
 
 Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
-recovers five orders of magnitude. The converged accuracy is then competitive;
-the convergence is slow, taking about 40 minutes, which is why both the RMS and
-the final residual are quoted.
+takes it to 3.5 cm against the ESKF's 3.3, with the ESKF's consistency.
+
+**This table has been wrong twice, and neither time about the Earth.** It said
+first that the flat-Earth filter diverges as `t³`, to 10⁶ m. It does, with GCU
+above α = 0, which the replay ran at without setting it. Then, through the
+engine, the compensated filter diverged at every α above zero, 2.78 to 216 m.
+That was an accelerometer scale factor of about −260 ppm, which the ESKF
+estimates and the EqF reaches as a 250 mGal bias, seventeen sigma outside the
+prior it was given; and a GCU covariance update that recorded corrections it
+had only partly applied. With both fixed, every α converges. See
+[eqf.md](eqf.md#three-things-that-were-wrong-none-of-them-the-earth).
 
 **The comparison is unfair by construction.** It is a flat-Earth estimator on
 hardware precise enough to see the Earth turn, so the gap measures an Earth
 model rather than an estimator. The fair venue is GSDC, where a phone gyro sees
-Earth rate at 1.5× its noise floor instead of 557×.
+Earth rate at 0.75× its noise floor instead of 557×.
 
 ### And on GSDC, where the comparison is fair
 
@@ -434,25 +501,31 @@ scaling. No Earth compensation: a phone gyro drifts at ~20 °/h, so Earth rate i
 | against truth | horizontal RMS | vertical RMS | horizontal max |
 |---|---|---|---|
 | phone GNSS (WLS) alone | 6.209 m | 17.980 m | 47.96 m |
-| **drifters ESKF** | **4.055 m** | 10.235 m | 12.97 m |
-| drifters EqF (α = 0) | 4.850 m | 12.044 m | 24.08 m |
+| **drifters ESKF** | **4.055 m** | 10.234 m | 12.97 m |
+| drifters EqF (α = 0) | 4.911 m | 13.067 m | 27.45 m |
 
-Both beat the phone's own solution; the ESKF is 16 % ahead.
+Both beat the phone's own solution; at ×300, the ESKF's tuning, the ESKF is
+17 % ahead on this trace. At each filter's own consistent tuning — ×36 for
+the EqF, ×95 for the ESKF — the EqF leads on this trace and on all three held
+out from it, by 14 to 40 % — see
+[gsdc.md](gsdc.md#held-out-the-fitted-tuning-does-not-transfer).
 
-**GCU made it worse, monotonically.** That is the substantive finding.
-Sweeping the generalised-covariance-union rate `α`, the parameter that replaces
-χ² rejection: 4.85 m at `α = 0`, 11.3 at 0.25, 18.8 at 0.5, **27.4 m at
-`α = 1`** — four times worse than raw GNSS. GCU inflates the innovation
-covariance *along the innovation*, which is right when a large innovation means
-a bad measurement and wrong when it means the filter has drifted and the
-measurement is the only thing that can fix it. On this trace it is the second.
-`α` is not a robustness dial that is safe to turn up; it encodes an assumption
-about which side the surprise comes from.
+**GCU is what the EqF's lead rests on**, which is the reverse of what this
+section said until GCU's covariance update was made the paper's. Sweeping the
+rate `α` over four traces at two tunings, `α = 0` is best in seven of the
+eight, and turning GCU off — which `α = 0` is not — is worse in all eight, by
+4 to 36 %. Larger `α` wins on trace A at ×300, 3.80 m at 0.5, and loses on the
+held-out traces. `α` is still not a robustness dial that is safe to turn up;
+it encodes an assumption about which side the surprise comes from. See
+[eqf.md](eqf.md#gcu-measured-on-four-traces).
 
-**The lever arm calibrated itself** from a zero start to `[+0.138, −0.303,
-−0.271]` against a configured `[+0.136, −0.301, −0.184]` — 2 mm on both
-horizontal axes. That is the paper's headline capability on data it was never
-tuned for, and something the ESKF cannot do at all.
+**The lever arm calibrated itself** on KF-GINS from a zero start, to
+`[+0.163, −0.305]` horizontally against a configured `[+0.136, −0.301]`. The
+2.7 cm along the vehicle is the configuration's: the ESKF, handed the
+configured value, trails the fixes by 2.58 cm along track and not at all
+across it, and handed the EqF's value it improves. That is the paper's
+headline capability on data it was never tuned for, and something the ESKF
+cannot do at all.
 
 **Motivation.** The paper's motivating failure — *false
 observability* under prolonged static conditions, where an EKF gains spurious
@@ -626,13 +699,24 @@ Each step is gated on a measurement rather than on the previous one compiling.
       never had to: `f32` position *storage* alone costs 7 % of NIS at a 1 km
       anchor, and doing the arithmetic in `f32` would cost more.
 
+      **Those figures are as the decision was taken, and two of them were
+      wrong.** 22 415 was an aliased count; the build was 89 524 ticks, so
+      `f32-covariance` took 85 % and not 41 %, and the covariance converted at
+      about nine tenths and not 56 %. Against that, the mechanization is now
+      2 096 ticks of 11 836, 18 %, since `Local` below. Run again with both
+      corrections the same argument gives about **16 %** of current rather
+      than 13 %, for the same accuracy spent. The decision has not been
+      revisited on the new number; it is close enough to the old one that the
+      reasoning reads the same, and far enough that it should be read again.
+      See [M9](#m9--hardware-validation).
+
       One cheaper thing was worth more and cost no precision: the earth model
       was evaluated afresh at every call site, about twelve `sin`/`cos` per
       sample at two distinct latitudes.
       [`Local`](../crates/drifters-core/src/earth.rs) evaluates once, which took
       `add_imu` from 13 238 to 11 868 — 10.4 % — with bit-identical results.
       Building the transition matrix in `f32` was measured and left: 986
-      instructions, 8.3 %, of which single precision might return half, against
+      ticks, 8.3 %, of which single precision might return half, against
       either a second copy of the Jacobian or a lower-precision Φ recorded for
       the smoother. See [testing.md](testing.md).
 
@@ -958,7 +1042,8 @@ the cheapest way to not repeat this is to keep the instrument that caught it.
 
 The pairwise score runs for the equivariant filter too, and there it exonerated
 the correlations: the pairs tracked two overconfident marginals rather than a
-coupling. That pointed at the prior, and the EqF now reads **21.007 against 21**.
+coupling. That pointed at the prior, and the EqF now reads **21.007 against 21**
+(21.102 since GCU can be turned off for it, which `α = 0` never did).
 See [eqf.md](eqf.md).
 
 **What it cost.** The claim was in five documents and had been used to argue for

@@ -253,10 +253,11 @@ jobs:
         run: |
           set -o pipefail
           cargo run --release | tee report.txt
-          peak=$(grep -oP 'PEAK\s+\K[0-9]+' report.txt)
+          peak=$(grep -oP '^PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
           # Ceiling, not a target. 20 KiB leaves headroom over the measured
-          # 18.5 KiB while still failing if a change reintroduces the
+          # 18.7 KiB, a late fix through the rewind layer included, while
+          # still failing if a change reintroduces the
           # expression-chained form that cost 35.3 KiB.
           #
           # This job could not build for three weeks — `cargo run` went
@@ -264,25 +265,33 @@ jobs:
           # peak grew 63 % unnoticed. A job that fails to build is a job that
           # measures nothing, so the build is now a separate step above.
           test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
+          # The equivariant filter's engine, under the same ceiling. Its own
+          # label, because it is the same in every feature configuration and
+          # the two below hold the ESKF to tighter ones. Measured at 13 568 B,
+          # down from 28 852 B before its covariance arithmetic was done in
+          # place. A late fix through its rewind layer measures the same.
+          eqf=$(grep -oP '^PEAK_EQF\s+\K[0-9]+' report.txt)
+          echo "equivariant filter peak stack: $eqf bytes"
+          test "$eqf" -lt 20480 || { echo "equivariant filter stack budget exceeded"; exit 1; }
       - name: the 15-state configuration must fit a 16 KiB stack
         working-directory: cortex-m-harness
         run: |
           set -o pipefail
           cargo run --release --features reduced-state | tee reduced.txt
-          peak=$(grep -oP 'PEAK\s+\K[0-9]+' reduced.txt)
+          peak=$(grep -oP '^PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 10 464 B.
+          # not. Measured at 10 688 B, a late fix included.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
         run: |
           set -o pipefail
           cargo run --release --features f32-covariance | tee f32.txt
-          peak=$(grep -oP 'PEAK\s+\K[0-9]+' f32.txt)
+          peak=$(grep -oP '^PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 22 %. Measured at 17 976 B.
+          # predict path it shrinks it by 23 %. Measured at 18 208 B.
           test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness

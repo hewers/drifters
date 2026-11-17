@@ -15,14 +15,51 @@
 //!
 //! GCU does not reject. It widens the innovation covariance, preferentially
 //! along the innovation itself via the `α ỹ ỹᵀ` term, so a surprising
-//! measurement is applied with proportionally little weight and that weight
-//! recovers as the estimate moves to meet it. `α` sets the rate: `0` is
-//! isotropic inflation only, `1` is sharpest.
+//! measurement is applied with proportionally little weight, and that weight
+//! recovers as the estimate moves to meet it.
 //!
-//! The ESKF in this workspace uses the other approach, a per-measurement gate
-//! plus covariance inflation after repeated rejection. The two are directly
-//! comparable on the same data, which is why this is written as a standalone
-//! function rather than folded into an update routine.
+//! # Which way `α` goes
+//!
+//! The paper is explicit: `α` controls "the convergence rate (the lower, the
+//! faster)". Larger `α` means more inflation along the innovation, so less
+//! weight on a surprising measurement and a slower transition to it — the
+//! smooth curve of its Fig. 4, not the sharp one. `α = 0` is the fastest the
+//! paper offers.
+//!
+//! # `α = 0` is not off
+//!
+//! `β` still applies, and `β = 2` for every `r ≥ 1`. For a three-dimensional
+//! position fix, `r` is χ² with three degrees of freedom and exceeds one about
+//! 80 % of the time, so at `α = 0` four fixes in five are fused as though the
+//! state's own uncertainty were twice what the covariance says. Turning GCU off
+//! is a separate setting —
+//! [`EqfOptions::gcu_alpha`](crate::config::EqfOptions::gcu_alpha) set to
+//! `None` — and gives the plain update of the EqF paper the filter is built on.
+//!
+//! # What the inflation means for the covariance
+//!
+//! The paper inflates `S` "before updating the filter states according to
+//! \[9\]", the EqF paper, whose covariance update is `Σ⁺ = (I − KC*)Σ` with
+//! `K = ΣC*ᵀS⁻¹`. With `S'` in place of `S`, that is the update for a
+//! measurement whose noise is
+//!
+//! ```text
+//! R' = S' − C*ΣC*ᵀ = (β − 1) C*ΣC*ᵀ + αβ ỹỹᵀ + R
+//! ```
+//!
+//! — the measurement is treated as that much less certain, and the posterior
+//! says so. [`effective_noise`] returns `R'`, and the filter runs its Joseph
+//! form with it, which is the same update in the form that stays symmetric and
+//! positive definite under rounding.
+//!
+//! This filter first ran the Joseph form with the sensor's own `R` instead.
+//! That is the exact covariance of the error for the gain used *if* `R` is
+//! right — and GCU's whole premise is that it may not be. The posterior came
+//! out smaller by `K(S' − S)Kᵀ` on every update: a filter that had only
+//! partly applied a correction, and believed it had applied all of it. On the
+//! KF-GINS dataset that turned every `α` above zero into a divergence; with
+//! the paper's update they converge, in the order the paper says. See
+//! docs/eqf.md.
 //!
 //! # The bound, and where it stops holding
 //!
@@ -44,36 +81,61 @@
 use drifters_core::math::{Cholesky, Matrix, Vector};
 use drifters_core::F;
 
-/// The inflated innovation covariance `S'`.
+/// The measurement noise the inflation amounts to,
+/// `R' = S' − C*ΣC*ᵀ = (β − 1) C*ΣC*ᵀ + αβ ỹỹᵀ + R`.
 ///
-/// `projected` is `C* Σ C*ᵀ` and `noise` is `R`, kept apart because only the
-/// first is inflated — `β` multiplies the state's contribution and the
-/// innovation term, never the sensor's own noise.
+/// `projected` is `C* Σ C*ᵀ` and `noise` is `R`. Fusing with `R'` in place of
+/// `R` — gain and covariance both — is the paper's update; the module docs say
+/// why the covariance has to see it too.
 ///
 /// `alpha` is clamped to `[0, 1]`.
 ///
-/// Returns the un-inflated `S = C*ΣC*ᵀ + R` when `S` is not positive definite,
+/// Returns `noise` unchanged when `S = C*ΣC*ᵀ + R` is not positive definite,
 /// since `r` is then undefined. A caller that has already rejected such an
 /// update loses nothing; one that has not gets the behaviour it would have had
 /// without this function.
+pub fn effective_noise<const M: usize>(
+    innovation: &Vector<M>,
+    projected: &Matrix<M, M>,
+    noise: &Matrix<M, M>,
+    alpha: F,
+) -> Matrix<M, M> {
+    let Some(chol) = Cholesky::new(&(*projected + *noise)) else {
+        return *noise;
+    };
+
+    // r = ỹᵀ S⁻¹ ỹ — the normalised innovation squared, solved rather than
+    // inverted, as everywhere else in this workspace.
+    let r = dot(innovation, &chol.solve(innovation));
+    effective_noise_at(r, innovation, projected, noise, alpha)
+}
+
+/// [`effective_noise`] for a caller that has already computed
+/// `r = ỹᵀ S⁻¹ ỹ`, as the filter has for its gate.
+pub(crate) fn effective_noise_at<const M: usize>(
+    r: F,
+    innovation: &Vector<M>,
+    projected: &Matrix<M, M>,
+    noise: &Matrix<M, M>,
+    alpha: F,
+) -> Matrix<M, M> {
+    let beta = beta(r);
+    let alpha = alpha.clamp(0.0, 1.0);
+    *projected * (beta - 1.0) + innovation.mul_transpose(innovation) * (beta * alpha) + *noise
+}
+
+/// The inflated innovation covariance `S' = C*ΣC*ᵀ + R'`, the paper's
+/// `β (C*ΣC*ᵀ + α ỹỹᵀ) + R`.
+///
+/// Kept apart from [`effective_noise`] because it is the quantity the paper
+/// states its bound for, and the tests below hold it to that.
 pub fn inflate<const M: usize>(
     innovation: &Vector<M>,
     projected: &Matrix<M, M>,
     noise: &Matrix<M, M>,
     alpha: F,
 ) -> Matrix<M, M> {
-    let s = *projected + *noise;
-    let Some(chol) = Cholesky::new(&s) else {
-        return s;
-    };
-
-    // r = ỹᵀ S⁻¹ ỹ — the normalised innovation squared, solved rather than
-    // inverted, as everywhere else in this workspace.
-    let r = dot(innovation, &chol.solve(innovation));
-    let beta = beta(r);
-    let alpha = alpha.clamp(0.0, 1.0);
-
-    *projected * beta + innovation.mul_transpose(innovation) * (beta * alpha) + *noise
+    *projected + effective_noise(innovation, projected, noise, alpha)
 }
 
 /// The inflation factor `β(r)`.
@@ -142,24 +204,60 @@ mod tests {
     }
 
     #[test]
+    fn the_inflated_form_is_the_papers() {
+        // S' = C*ΣC*ᵀ + R' must be β(C*ΣC*ᵀ + αỹỹᵀ) + R as printed: R' is a
+        // rearrangement, not a different method.
+        let y = Vector::<3>::from_column([2.0, -1.0, 0.5]);
+        for alpha in [0.0, 0.5, 1.0] {
+            let p = projected();
+            let s = Cholesky::new(&(p + noise())).unwrap();
+            let b = beta(dot(&y, &s.solve(&y)));
+            let printed = (p + y.mul_transpose(&y) * alpha) * b + noise();
+            let ours = inflate(&y, &p, &noise(), alpha);
+            for i in 0..3 {
+                for j in 0..3 {
+                    assert_relative_eq!(ours[(i, j)], printed[(i, j)], epsilon = 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_zero_still_inflates() {
+        // The reason "off" is its own setting. A fix at r = 3, the χ²₃ mean,
+        // gets β = 2: its noise grows by the state's whole projected
+        // covariance.
+        let p = projected();
+        let s = Cholesky::new(&(p + noise())).unwrap();
+        let mut y = Vector::<3>::from_column([1.0, 1.0, 1.0]);
+        let scale = Real::sqrt(3.0 / dot(&y, &s.solve(&y)));
+        y = y * scale;
+        let r_eff = effective_noise(&y, &p, &noise(), 0.0);
+        let expected = p + noise();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_relative_eq!(r_eff[(i, j)], expected[(i, j)], epsilon = 1e-12);
+            }
+        }
+    }
+
+    #[test]
     fn inflation_never_sharpens() {
-        // β ≥ 1 and the ỹỹᵀ term is positive semi-definite, so S' ⪰ S for every
-        // input. Gaining confidence from a surprising measurement is the
-        // failure mode this guards against.
-        let s = projected() + noise();
+        // β ≥ 1 and the ỹỹᵀ term is positive semi-definite, so R' ⪰ R and
+        // S' ⪰ S for every input. Gaining confidence from a surprising
+        // measurement is the failure mode this guards against.
         for scale in [0.0, 0.5, 2.0, 20.0] {
             for alpha in [0.0, 0.5, 1.0] {
                 let y = Vector::<3>::from_column([scale, -0.4 * scale, 0.2 * scale]);
-                let inflated = inflate(&y, &projected(), &noise(), alpha);
-                let difference = inflated - s;
-                // Positive semi-definite ⟺ Cholesky of (S' − S + εI) succeeds.
+                let difference = effective_noise(&y, &projected(), &noise(), alpha) - noise();
+                // Positive semi-definite ⟺ Cholesky of (R' − R + εI) succeeds.
                 let mut probe = difference;
                 for i in 0..3 {
                     probe[(i, i)] += 1e-9;
                 }
                 assert!(
                     Cholesky::new(&probe).is_some(),
-                    "S' − S must be PSD at scale {scale}, alpha {alpha}"
+                    "R' − R must be PSD at scale {scale}, alpha {alpha}"
                 );
             }
         }
@@ -170,11 +268,10 @@ mod tests {
         // At r = 0 the factor is exactly 1 and nothing changes, so the
         // mechanism costs nothing when it is not needed.
         let y = Vector::<3>::zeros();
-        let s = projected() + noise();
-        let inflated = inflate(&y, &projected(), &noise(), 1.0);
+        let r_eff = effective_noise(&y, &projected(), &noise(), 1.0);
         for i in 0..3 {
             for j in 0..3 {
-                assert_relative_eq!(inflated[(i, j)], s[(i, j)], epsilon = 1e-12);
+                assert_relative_eq!(r_eff[(i, j)], noise()[(i, j)], epsilon = 1e-12);
             }
         }
     }
@@ -221,26 +318,32 @@ mod tests {
     }
 
     #[test]
-    fn alpha_orders_the_convergence_rate() {
-        // The paper's Fig. 4 is a family of curves ordered by α: larger α means
-        // a sharper transition, which here means less residual surprise.
+    fn larger_alpha_inflates_more() {
+        // "The lower, the faster": more α, more inflation along ỹ, less
+        // weight on the measurement and so a slower transition to it. Here,
+        // less residual surprise under S', which is the same statement.
         let y = Vector::<3>::from_column([6.0, -2.0, 1.0]);
         let mut previous = F::INFINITY;
         for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let after = nis_after(&y, alpha);
-            assert!(after < previous, "alpha {alpha} should tighten, not loosen");
+            assert!(
+                after < previous,
+                "alpha {alpha} should inflate more, not less"
+            );
             previous = after;
         }
     }
 
     #[test]
-    fn a_singular_covariance_returns_the_uninflated_form() {
-        let s = inflate(
+    fn a_singular_covariance_leaves_the_noise_alone() {
+        let r = effective_noise(
             &Vector::<3>::from_column([1.0, 0.0, 0.0]),
             &Matrix::<3, 3>::zeros(),
             &Matrix::<3, 3>::zeros(),
             1.0,
         );
-        assert_eq!(s, Matrix::<3, 3>::zeros());
+        assert_eq!(r, Matrix::<3, 3>::zeros());
     }
+
+    use drifters_core::math::Real;
 }

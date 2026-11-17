@@ -106,56 +106,22 @@ impl Rng {
 
 /// `∂(physical error) / ∂ε`, evaluated at the estimate.
 ///
-/// The relations are the ones the linearisation was derived from, so a sign
-/// error here would already have shown up in `crates/drifters-eqf/src/linear.rs`:
+/// [`drifters_eqf::physical::jacobian`], which is where this now lives: the
+/// engine needs the same map to turn its configured sigmas into a covariance,
+/// and two copies of a sign convention eventually disagree. The relations,
+/// and the numerical Jacobian that checks them, are documented there.
 ///
-/// ```text
-/// δφ = ε₁,ω                     δb = −Ad_{B̂⁻¹} ε₂
-/// δv = −v̂^ ε₁,ω + ε₁,ν          δt = −Âᵀ ε₃
-/// δp = −p̂^ ε₁,ω + ε₁,ρ          δS = Êᵀ(ε₄ − ε₁,ω)
-/// ```
-pub fn physical_jacobian(x: &drifters_eqf::group::Symmetry, estimate: &State) -> Matrix<DIM, DIM> {
-    let mut j = Matrix::<DIM, DIM>::zeros();
-    let (v, p) = (estimate.pose.velocity, estimate.pose.position);
-
-    j.set_block(0, 0, &Mat3::identity());
-    j.set_block(3, 0, &-v.skew());
-    j.set_block(3, 3, &Mat3::identity());
-    j.set_block(6, 0, &-p.skew());
-    j.set_block(6, 6, &Mat3::identity());
-    j.set_block(9, 9, &-x.b().inverse().adjoint());
-    j.set_block(15, 15, &-x.a().transpose());
-    let et = x.e.transpose();
-    j.set_block(18, 0, &-et);
-    j.set_block(18, 18, &et);
-    j
+/// `_estimate` is kept for the callers that pass it. The estimate is
+/// determined by `x`, so the map never needed both.
+pub fn physical_jacobian(x: &drifters_eqf::group::Symmetry, _estimate: &State) -> Matrix<DIM, DIM> {
+    drifters_eqf::physical::jacobian(x)
 }
 
 /// The physical state error, `truth − estimate`, in the same order.
+///
+/// See [`drifters_eqf::physical::error`].
 pub fn physical_error(truth: &State, estimate: &State) -> [f64; DIM] {
-    let mut e = [0.0; DIM];
-    let att = Quat::from_dcm(
-        &truth
-            .pose
-            .rotation
-            .matmul(&estimate.pose.rotation.transpose()),
-    )
-    .to_rotation_vector();
-    let mag = Quat::from_dcm(&estimate.mag.transpose().matmul(&truth.mag)).to_rotation_vector();
-    let db = truth.bias - estimate.bias;
-    let dv = truth.pose.velocity - estimate.pose.velocity;
-    let dp = truth.pose.position - estimate.pose.position;
-    let dt = truth.lever - estimate.lever;
-    for i in 0..3 {
-        e[i] = att[i];
-        e[3 + i] = dv[i];
-        e[6 + i] = dp[i];
-        e[9 + i] = db.omega[i];
-        e[12 + i] = db.nu[i];
-        e[15 + i] = dt[i];
-        e[18 + i] = mag[i];
-    }
-    e
+    drifters_eqf::physical::error(truth, estimate)
 }
 
 /// The seven three-dimensional blocks, in order, with names for reporting.
@@ -412,7 +378,9 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
 
         let mut filter =
             EqFilter::new(&start, initial_covariance_scaled(strength, &start), GRAVITY);
-        filter.alpha = 0.0; // GCU off: this measures the covariance, not robustness.
+        // GCU off — `None`, not `Some(0.0)`, which still inflates. This
+        // measures the covariance, not a robustness policy.
+        filter.alpha = None;
         let mut bad = false;
 
         let steps = (seconds / dt) as usize;
@@ -698,7 +666,11 @@ mod tests {
             pose: Se23::new(Mat3::identity(), Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0)),
             ..State::default()
         };
-        let j = physical_jacobian(&drifters_eqf::group::Symmetry::IDENTITY, &moved);
+        // The observer that carries the origin to `moved`, not the identity:
+        // the estimate is a function of the observer state, and the Jacobian
+        // reads it from there.
+        let x = drifters_eqf::group::Symmetry::from_state(&moved);
+        let j = physical_jacobian(&x, &moved);
         assert_eq!(j.block::<3, 3>(6, 0), -Vec3::new(1000.0, 0.0, 0.0).skew());
     }
 

@@ -88,7 +88,15 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
 - On `thumbv7em-none-eabihf` the UD routines compile to `vmul.f32`, `vdiv.f32`
   and `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
   `__aeabi_dadd` and `__aeabi_ddiv` without it. Measured over a full `add_imu`,
-  that is 22 415 instructions retired against **13 238**.
+  that is 3.58 million instructions retired against **530 thousand**: 85 % of
+  the work gone.
+
+  This bullet first read "22 415 instructions retired against 13 238". Both
+  were SysTick ticks of forty instructions, and the first had wrapped a 24-bit
+  counter twice; it was 89 524. The decision does not depend on the size of
+  the saving, only on its costing nothing in accuracy, so nothing above
+  changes. The saving is twice what it was credited with. See
+  [testing.md](../testing.md), Layer 9.
 - The covariance halves, 1 848 bytes to 924, and the engine goes 3 240 to 2 320.
 - Position stays `f64` on every target, so the remaining soft-float cost is the
   mechanization's. [adr/0009](0009-local-first-architecture.md) records why

@@ -131,6 +131,26 @@ pub enum FlatEarthVerdict {
     ModelInGroup,
 }
 
+impl FlatEarthVerdict {
+    /// The setting of
+    /// [`EqfOptions::compensate_earth`](crate::config::EqfOptions::compensate_earth)
+    /// this verdict calls for, or `None` where no setting of it is right.
+    ///
+    /// `None` is [`FlatEarthVerdict::ModelInGroup`]: a gyroscope good enough
+    /// to find north from Earth rate loses exactly that by having it
+    /// subtracted from its input, and is out of this filter's scope rather
+    /// than covered by either choice. A caller that runs it anyway should do
+    /// so by choosing, not by default.
+    #[inline]
+    pub fn compensates_input(self) -> Option<bool> {
+        match self {
+            Self::Negligible => Some(false),
+            Self::CompensateInput => Some(true),
+            Self::ModelInGroup => None,
+        }
+    }
+}
+
 /// Earth rate divided by a gyroscope's bias stability, both in rad/s.
 ///
 /// The single number that decides how much Earth modelling an estimator needs.
@@ -202,15 +222,20 @@ pub fn gyrocompass_accuracy(gyro_bias_stability: F, latitude: F) -> F {
 /// # Effect on tactical-grade hardware
 ///
 /// Measured on the KF-GINS dataset, a Leador-A15 over 57 minutes and 3 363 RTK
-/// fixes. Uncompensated, the open-loop residual grows as `t³`: `7.8 × 10² m` at
-/// 200 s, `3.3 × 10⁶ m` at 3 200 s. A `t³` position error is a constant
-/// attitude-rate error, and solving back gives `5.96 × 10⁻⁵ rad/s` against an
-/// Earth rate of `7.29 × 10⁻⁵`. The gyroscope's bias stability is 0.027 °/h, so
-/// Earth rate is 557 times larger and no state in the flat-Earth model can
-/// represent the error.
+/// fixes, through `EqfEngine` at its default GCU rate of zero. The gyroscope's
+/// bias stability is 0.027 °/h, so Earth rate is 557 times larger. The
+/// gyro-bias state absorbs the vertical half, which is constant about a level
+/// vehicle's down axis; the horizontal half turns with the vehicle and no state
+/// can follow it. Uncompensated, the fixes hold it to 0.943 m horizontal RMS
+/// with a NIS of 6 718. Compensated, 0.035 m with a NIS of 1.55, against the
+/// ESKF's 0.033 m and 1.46.
 ///
-/// Compensating the gyroscope alone recovers four orders of magnitude; the
-/// Coriolis term closes the rest, ending at 1.5 cm.
+/// With GCU above α = 0 the uncompensated filter diverges as `t³`, to `10⁶ m`:
+/// the inflation discounts the corrections that bound a forcing which never
+/// stops. Compensated, every α converges. The compensated filter's own
+/// divergences, once also blamed on the Earth, were an accelerometer scale
+/// factor outside its bias prior and a GCU covariance update that was not the
+/// paper's; see docs/eqf.md.
 ///
 /// # Two costs
 ///
@@ -320,7 +345,7 @@ mod tests {
         assert_relative_eq!(earth_rate_ratio(phone), 0.752, epsilon = 1e-3);
         assert_eq!(flat_earth_verdict(phone), FlatEarthVerdict::Negligible);
 
-        // Leador-A15, the KF-GINS dataset. This is the run that diverged.
+        // Leador-A15, the KF-GINS dataset.
         let tactical = deg_per_hour(0.027);
         assert_relative_eq!(earth_rate_ratio(tactical), 557.1, epsilon = 0.5);
         assert_eq!(
@@ -335,6 +360,11 @@ mod tests {
             flat_earth_verdict(navigation),
             FlatEarthVerdict::ModelInGroup
         );
+
+        // And what each band asks of the engine.
+        assert_eq!(flat_earth_verdict(phone).compensates_input(), Some(false));
+        assert_eq!(flat_earth_verdict(tactical).compensates_input(), Some(true));
+        assert_eq!(flat_earth_verdict(navigation).compensates_input(), None);
     }
 
     /// What input-side compensation gives up, quantified. A navigation-grade

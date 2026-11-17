@@ -21,6 +21,26 @@ model can absorb it. On a phone-grade trace the same filter is within 20 % of
 the ESKF, because a 20 °/h phone gyroscope sees Earth rate at 0.75 times its own
 noise floor.
 
+**Corrected 2026-11-17.** The divergence above is real and was measured with
+the EqF's GCU convergence rate at α = 0.5, the filter's default, which the
+replay never overrode. At α = 0 the uncompensated filter does not diverge. The
+gyro-bias state absorbs the vertical component of Earth rate, constant about a
+level vehicle's down axis — it converges to `−3.66 × 10⁻⁵ rad/s` against the
+`3.69 × 10⁻⁵` that is vertical at this latitude — and the 1 Hz fixes hold the
+horizontal component, which turns with the vehicle and which no state can
+follow, to a metre: 0.943 m RMS, with a NIS of 6 718. Above α = 0 it still
+diverges, and for the flat-Earth filter that is GCU inflating against fixes
+that bound a forcing which never stops. So "no state can absorb it" was half
+wrong, and the half it was right about is the half that matters: the ratio
+below still separates a filter within 6 % of the ESKF from one twenty-seven
+times worse and forty-seven times overconfident, and the decision stands.
+
+The compensated filter's own divergences at α > 0, also once read as Earth
+rate, were not: they were an accelerometer scale factor seventeen sigma
+outside the EqF's bias prior, and a GCU covariance update that was not the
+paper's. Both are fixed and compensated runs converge at every α. See
+[eqf.md](../eqf.md#three-things-that-were-wrong-none-of-them-the-earth).
+
 The single ratio that separates those two outcomes is
 
 ```text
@@ -49,9 +69,17 @@ Input-side compensation, as implemented in
 a' = ᴵa − R̂ᵀ[(2ω_ie + ω_en) × v̂]
 ```
 
-Measured on KF-GINS, this recovers five orders of magnitude and converges to
-1.5 cm against the ESKF's 3.3 cm. It is opt-in behind `--earth-rate` because it
-is a deviation from the published filter.
+Measured on KF-GINS, this takes the filter to 3.5 cm horizontal RMS against
+the ESKF's 3.3 cm, with a NIS of 1.55 against the ESKF's 1.46, from 0.943 m and
+a NIS of 6 718 uncompensated. (First recorded as five orders of magnitude and
+1.5 cm at the last fix, both at α = 0.5; see the correction above.)
+
+It is a deviation from the published filter, so the library leaves
+`EqfOptions::compensate_earth` off by default, as the paper does, and
+`FlatEarthVerdict::compensates_input` gives the setting this ADR calls for. The
+CLI applies it: a replay decides by the gyroscope's bias stability from the
+dataset's own IMU model, and `--earth-rate` or `--flat-earth` overrides that.
+In the top band it refuses to choose and asks for one of the two.
 
 **Ratio above about 1000 — navigation, strategic and survey, below 0.01 °/h.**
 Not supported, and input-side compensation must not be extended to cover it. The

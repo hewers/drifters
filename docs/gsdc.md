@@ -143,16 +143,32 @@ cargo run --release -p drifters-cli -- tune --dir datasets/gsdc2023
 
 | scale | ESKF NIS | ESKF RMS | EqF NIS | EqF RMS |
 |---|---|---|---|---|
-| 1 | 41.07 | 5.573 m | 6.43 | 7.241 m |
-| 10 | 23.00 | 4.688 m | 6.01 | 6.608 m |
-| 60 | 6.34 | 6.041 m | 3.35 | 4.588 m |
-| **74** | 4.66 | 5.001 m | **3.00** | **4.387 m** |
-| **95** | **3.16** | **5.707 m** | 2.62 | 4.235 m |
-| 130 | 1.76 | 5.186 m | 2.22 | 4.210 m |
-| 300 | 0.47 | 4.055 m | 1.58 | 4.850 m |
-| 3000 | 0.19 | 5.484 m | 0.42 | 5.710 m |
+| 1 | 41.07 | 5.573 m | 4.28 | 6.116 m |
+| 10 | 23.00 | 4.688 m | 4.27 | 4.451 m |
+| 14 | 20.77 | 5.081 m | 4.14 | 4.116 m |
+| **36** | 10.73 | 5.092 m | **3.10** | **4.536 m** |
+| 57 | 6.86 | 5.636 m | 2.04 | 4.687 m |
+| 60 | 6.34 | 6.041 m | 2.07 | 4.547 m |
+| **95** | **3.16** | **5.707 m** | 1.21 | 4.756 m |
+| 130 | 1.76 | 5.186 m | 0.79 | 4.602 m |
+| 300 | 0.47 | 4.055 m | 0.32 | 4.911 m |
+| 3000 | 0.19 | 5.484 m | 0.05 | 5.494 m |
 
-The consistency crossing is ×95 for the ESKF and ×74 for the EqF.
+The consistency crossing is ×95 for the ESKF and ×36 for the EqF. The scales
+are `--scales 1,10,14,36,57,60,95,130,300,3000`; a crossing is interpolated
+between the two scales either side of it, so where the sweep puts its points
+moves it by a few, and each crossing here is a point of the sweep for that
+reason. (The command prints ×99 and ×38.)
+
+The EqF columns have been re-measured twice. When its replay moved onto the
+engine its crossing went from ×74 to ×57; what moved and why is in
+[eqf.md](eqf.md#what-moved-when-the-eqf-moved-onto-the-engine). When its GCU
+update was corrected to the paper's, which counts the inflation as measurement
+noise and so leaves the covariance larger, its NIS fell at every scale and the
+crossing went to ×36 — see
+[eqf.md](eqf.md#gcu-measured-on-four-traces). Its error stays between 4.12 and
+4.76 m from ×10 to ×130, lowest at ×14. The ESKF columns are unchanged to the last digit
+through both.
 
 ### Held out: the fitted tuning does not transfer
 
@@ -164,22 +180,29 @@ above was carried unchanged onto three held-out traces from the same phone
 |---|---|---|---|---|
 | phone GNSS (WLS) alone | 6.21 | 3.78 | 2.82 | 4.03 |
 | ESKF ×95 | 5.71 | 5.51 | 3.41 | 3.55 |
-| EqF ×74 | 4.39 | 4.49 | 2.46 | 3.51 |
+| EqF ×36 | **4.54** | **3.49** | **2.04** | **3.04** |
 | ESKF ×300 | 4.06 | 4.11 | 2.09 | 3.32 |
-| EqF ×300 | 4.85 | 3.22 | 2.21 | 3.49 |
+| EqF ×300 | 4.91 | 3.05 | 1.84 | 3.22 |
 
 **Trace A is unrepresentative.** Its GNSS is the worst of the four by a wide
 margin, which leaves the most room for an IMU to help, so anything fitted there
 overstates what fusion buys. At the A-fitted tuning, fusion is *worse than raw
-GNSS* on trace B for both filters and on C for the ESKF.
+GNSS* on traces B and C for the ESKF. The EqF beats the phone on all four, at
+either tuning.
 
-**The hand-picked ×300 generalises better than the consistent tuning**, helping
-on seven of eight filter/trace combinations against five of eight, despite a
-mean NIS of 0.44. That is the more useful result: consistency and accuracy
-disagree, and they disagree in the same direction on every trace.
+**For the ESKF, the hand-picked ×300 generalises better than the consistent
+tuning**, helping on three traces against two, despite a mean NIS of 0.47:
+consistency and accuracy disagree, in the same direction on every trace. For
+the EqF they no longer do in any consistent way — ×300 is better on B and C
+and worse on A and D — so its consistent tuning is as good a choice as any.
 
-**The EqF's lead over the ESKF does generalise** at the A-fitted tuning — ahead
-on all four traces, by 23 %, 19 %, 28 % and 1 %. At ×300 it is mixed.
+**The EqF's lead over the ESKF generalises** at the A-fitted tuning — ahead on
+all four traces, by 21 %, 37 %, 40 % and 14 %. At ×300, the ESKF's own tuning,
+the EqF is ahead on the three held-out traces, by 26 %, 12 % and 3 %, and
+behind on A by 21 %.
+
+These EqF rows were 4.90, 4.25, 2.47, 3.10 at ×57 and 5.45, 3.17, 2.27, 3.81
+at ×300 before its GCU update was corrected.
 
 ### The heavy-tail hypothesis, tested and rejected
 
@@ -194,30 +217,36 @@ and quoting 3 for a median would build in a bias before any data arrived.
 
 | | mean → 3 | median → 2.366 | lowest error |
 |---|---|---|---|
-| ESKF | ×99 | ×59 | ×300 |
-| EqF | ×74 | ≈×25 | ×130 |
+| ESKF | ×99 | ×58 | ×300 |
+| EqF | ×38 | ×17 | ×14 |
 
 **The innovations are heavy-tailed.** The mean-to-median ratio runs 2.1 to 3.3
 across the sweep against the 1.27 a chi-squared distribution would give, so the
 tail is real and substantial.
 
-**It does not explain the gap.** Correcting for it moves the consistency point
-the wrong way. Both median crossings sit *below* their mean crossings, so the
-distance to the accuracy optimum roughly doubles: ×59 against ×300 for the ESKF,
-×25 against ×130 for the EqF. The hypothesis predicted the gap would close and
-it widened.
+**It does not explain the ESKF's gap.** Correcting for it moves the ESKF's
+consistency point the wrong way: the median crossing sits *below* the mean one,
+so the distance to its accuracy optimum roughly doubles, ×59 against ×300. The
+hypothesis predicted the gap would close and it widened.
 
-That leaves unmodelled error as the surviving explanation, and it is a large
-one: the filters want between five and twelve times more process noise than
-either consistency criterion supports. The phone's mount flexing and its
+For the EqF the question has gone away. Through the old loop it behaved as the
+ESKF does, ×25 against ×130. Now its median crossing and its lowest error
+nearly coincide, ×17 and ×14, which is what the hypothesis predicts for a
+filter whose remaining gap is the tail; its mean crossing sits above both, as
+a heavy tail drags a mean.
+
+That leaves unmodelled error as the surviving explanation for the ESKF, and it
+is a large one: it wants five times more process noise than either consistency
+criterion supports. The phone's mount flexing and its
 uncalibrated scale factors are the obvious candidates, and neither is in the
 model.
 
-The tails being real has a separate consequence worth following. Heavy tails are
-what innovation *rejection* exists for, and the ESKF has a χ² gate while the
-EqF's GCU never rejects. That is the same mechanism the α sweep found harmful
-above, from the other direction — and it sits awkwardly against the EqF still
-winning at the consistent tuning. Not resolved here.
+The tails being real has a separate consequence, and it has been followed.
+Heavy tails are what innovation *rejection* exists for; the ESKF has a χ² gate,
+and the EqF's GCU never rejects but discounts. Measured on all four traces, the
+discounting is what the EqF's lead is built on: with GCU off it loses 4 to 36 %
+on every trace and tuning. See
+[eqf.md](eqf.md#gcu-measured-on-four-traces).
 
 The sweep uses one scalar over all four IMU noise densities rather than fitting
 them separately. With one 20-minute trace and one measurement type there is not

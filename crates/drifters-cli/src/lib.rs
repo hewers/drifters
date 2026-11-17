@@ -13,6 +13,7 @@
 /// place for one.
 pub use drifters_gnss::{differential, rinex, robust, smooth, tdcp, wls};
 
+pub mod engines;
 pub mod eqf;
 pub mod gsdc;
 pub mod kfgins;
@@ -28,6 +29,8 @@ use std::path::Path;
 use drifters_core::math::RAD_TO_DEG;
 use drifters_filter::{GinsEngine, GinsOptions};
 
+pub use engines::{EngineKind, ReplayEngine};
+
 use stats::{assess, Consistency, Running};
 
 /// What a replay produced, beyond the output files.
@@ -35,12 +38,19 @@ use stats::{assess, Consistency, Running};
 /// Not `Copy`: it owns the per-epoch trace, which is thousands of rows.
 #[derive(Clone, Debug)]
 pub struct Report {
+    /// Which engine produced it.
+    pub engine: EngineKind,
     /// See [`Report`].
     pub processed: u64,
     /// See [`Report`].
     pub applied_fixes: u64,
-    /// See [`Report`].
+    /// Fixes a gate refused.
     pub rejected_fixes: u64,
+    /// Fixes the engine could not use because their epoch was already behind
+    /// it. On KF-GINS that is the first: the window opens on a fix 4.4 ms
+    /// before the first IMU sample, and the first sample is what sets the
+    /// engine's clock.
+    pub stale_fixes: u64,
     /// See [`Report`].
     pub inflations: u32,
     /// See [`Report`].
@@ -59,6 +69,18 @@ pub struct Report {
     /// needed to *see* the filter: when the residual grew, whether the NIS
     /// drifted, where on the trajectory it happened.
     pub epochs: Vec<Epoch>,
+    /// The residual at the last fix, metres.
+    ///
+    /// Next to the RMS because on a long convergence the two say different
+    /// things: the RMS keeps the startup transient for the whole run, and this
+    /// is where the filter ended up.
+    pub final_residual: f64,
+    /// The lever arm the engine finished with: what it was configured with,
+    /// or what it estimated.
+    pub lever: drifters_core::math::Vec3,
+    /// The greatest horizontal distance of any fix from the first, metres.
+    /// What the flat-Earth engine's tangent-plane error is evaluated at.
+    pub max_range: f64,
 }
 
 /// One GNSS epoch's diagnostics.
@@ -77,11 +99,11 @@ pub struct Epoch {
 impl Report {
     /// Print a human-readable summary.
     pub fn print(&self) {
-        println!("\n--- replay summary ---");
+        println!("\n--- replay summary: {} ---", self.engine.label());
         println!("IMU samples processed : {}", self.processed);
         println!(
-            "GNSS fixes applied    : {} ({} rejected by the gate)",
-            self.applied_fixes, self.rejected_fixes
+            "GNSS fixes applied    : {} ({} rejected by the gate, {} stale)",
+            self.applied_fixes, self.rejected_fixes, self.stale_fixes
         );
         if self.inflations > 0 {
             println!(
@@ -112,6 +134,7 @@ impl Report {
             self.horizontal.std_dev(),
             self.horizontal.max()
         );
+        println!("residual at the last fix: {:.3} m", self.final_residual);
 
         println!("\n--- filter consistency ---");
         let verdict = assess(&self.nis, 3);
@@ -158,8 +181,9 @@ pub fn practical_verdict(ratio: f64) -> &'static str {
     }
 }
 
-/// Replay a dataset through the filter, writing output files and returning the
-/// statistics.
+/// Replay a KF-GINS dataset through the ESKF, writing output files and
+/// returning the statistics. [`replay_with`] with the engine the config
+/// describes, which is what the regression test holds to its tolerances.
 pub fn replay(
     config: &kfgins::Config,
     imu: &[drifters_core::types::ImuSample],
@@ -167,17 +191,48 @@ pub fn replay(
     out_dir: &Path,
     quiet: bool,
 ) -> Result<Report, Box<dyn std::error::Error>> {
-    let mut engine = GinsEngine::new(config.options)?;
+    replay_with(
+        GinsEngine::new(config.options)?,
+        config,
+        imu,
+        gnss,
+        out_dir,
+        quiet,
+    )
+}
 
+/// Replay a KF-GINS dataset through any engine.
+///
+/// Scored the same way whatever the engine: the open-loop residual at the
+/// antenna *before* each fix is applied, so between fixes the solution is pure
+/// inertial dead reckoning. Writes three files into `out_dir`, named by
+/// [`EngineKind::file_prefix`]: the navigation solution, the IMU error
+/// estimate and the per-state sigmas, once a second.
+pub fn replay_with<E: ReplayEngine>(
+    mut engine: E,
+    config: &kfgins::Config,
+    imu: &[drifters_core::types::ImuSample],
+    gnss: &[drifters_core::types::GnssFix],
+    out_dir: &Path,
+    quiet: bool,
+) -> Result<Report, Box<dyn std::error::Error>> {
+    let prefix = E::KIND.file_prefix();
     std::fs::create_dir_all(out_dir)?;
-    let mut nav = BufWriter::new(File::create(out_dir.join("drifters_nav.txt"))?);
-    let mut err = BufWriter::new(File::create(out_dir.join("drifters_imuerr.txt"))?);
-    let mut std_out = BufWriter::new(File::create(out_dir.join("drifters_std.txt"))?);
+    let file = |name: &str| -> std::io::Result<BufWriter<File>> {
+        Ok(BufWriter::new(File::create(
+            out_dir.join(format!("{prefix}_{name}.txt")),
+        )?))
+    };
+    let mut nav = file("nav")?;
+    let mut err = file("imuerr")?;
+    let mut std_out = file("std")?;
 
     let mut report = Report {
+        engine: E::KIND,
         processed: 0,
         applied_fixes: 0,
         rejected_fixes: 0,
+        stale_fixes: 0,
         inflations: 0,
         nis: Running::new(),
         residual_north: Running::new(),
@@ -185,6 +240,9 @@ pub fn replay(
         residual_down: Running::new(),
         horizontal: Running::new(),
         epochs: Vec::new(),
+        final_residual: 0.0,
+        lever: engine.lever_arm(),
+        max_range: 0.0,
     };
 
     let mut next_fix = 0usize;
@@ -230,6 +288,10 @@ pub fn replay(
             report.residual_east.push(residual.e);
             report.residual_down.push(residual.d);
             report.horizontal.push(residual.horizontal_norm());
+            report.final_residual = residual.norm();
+            report.max_range = report
+                .max_range
+                .max(fix.position.ned_from(anchor).horizontal_norm());
             let epoch_index = report.epochs.len();
             let from_origin = predicted.ned_from(anchor);
             report.epochs.push(Epoch {
@@ -265,7 +327,15 @@ pub fn replay(
         if report.processed.is_multiple_of(200) {
             write_row(&mut nav, &mut err, &mut std_out, &engine)?;
             if !quiet && report.processed.is_multiple_of(200_000) {
-                eprintln!("  {:.0} s processed", tow - config.start_time);
+                let lever = engine.lever_arm();
+                eprintln!(
+                    "  {:.0} s processed, residual {:.3e} m, lever [{:+.3}, {:+.3}, {:+.3}]",
+                    tow - config.start_time,
+                    report.final_residual,
+                    lever.x,
+                    lever.y,
+                    lever.z,
+                );
             }
         }
     }
@@ -273,15 +343,22 @@ pub fn replay(
     nav.flush()?;
     err.flush()?;
     std_out.flush()?;
+    report.lever = engine.lever_arm();
+    // A fix not applied in the sample it was queued with was counted as
+    // rejected above. The engine knows which of those it never placed at all,
+    // and it may only find out a sample later: the first sample sets its
+    // clock, so a fix queued with it is judged on the next.
+    report.stale_fixes = u64::from(engine.stale_fix_count());
+    report.rejected_fixes = report.rejected_fixes.saturating_sub(report.stale_fixes);
     Ok(report)
 }
 
 /// Write one row to each output file, in KF-GINS's column layout.
-pub(crate) fn write_row(
+pub(crate) fn write_row<E: ReplayEngine>(
     nav: &mut impl Write,
     err: &mut impl Write,
     std_out: &mut impl Write,
-    engine: &GinsEngine,
+    engine: &E,
 ) -> std::io::Result<()> {
     let state = engine.nav_state();
     let p = state.position();
@@ -324,33 +401,24 @@ pub(crate) fn write_row(
         ie.accel_scale.z,
     )?;
 
-    let sigmas = engine.std_deviations();
     write!(std_out, "{:.9}", state.time.tow())?;
-    for s in sigmas {
+    for s in engine.std_row() {
         write!(std_out, " {s:.9e}")?;
     }
     writeln!(std_out)?;
     Ok(())
 }
 
-/// Result of a GSDC replay: the filter and the phone's own GNSS solution, both
-/// scored against ground truth.
+/// Result of a GSDC replay: each engine that was asked for, and the phone's
+/// own GNSS solution, all scored against ground truth.
 pub struct GsdcReport {
-    /// Error of the fused solution against truth.
-    pub filter: truth::ErrorStats,
+    /// One per engine, in the order `--engine` listed them.
+    pub runs: Vec<GsdcRun>,
     /// Error of the phone's weighted-least-squares GNSS fixes against truth.
     ///
     /// The baseline that matters: it is what the device produces unaided, so
     /// the difference is what fusing the IMU actually bought.
     pub gnss_only: truth::ErrorStats,
-    /// Error of the equivariant filter against truth, over the same epochs.
-    pub eqf: truth::ErrorStats,
-    /// Error of the RTS-smoothed ESKF trajectory: the same forward filter run
-    /// backwards, so it is the filter's own answer with the rest of the run
-    /// taken into account.
-    pub rts: Option<truth::ErrorStats>,
-    /// Per-epoch horizontal error of the RTS-smoothed trajectory.
-    pub rts_horizontal: Vec<(f64, f64)>,
     /// Error of the batch-smoothed GNSS trajectory, when carrier phase gave
     /// enough links to build one. No IMU: this is what the GNSS file alone is
     /// worth once the pseudorange positions and the carrier deltas are fitted
@@ -358,21 +426,12 @@ pub struct GsdcReport {
     pub smoothed: Option<truth::ErrorStats>,
     /// Per-epoch horizontal error of the smoothed trajectory.
     pub smoothed_horizontal: Vec<(f64, f64)>,
-    /// Per-epoch trace from the equivariant filter.
-    pub eqf_epochs: Vec<Epoch>,
-    /// The EqF's normalised innovation squared.
-    pub eqf_nis: stats::Running,
-    /// Every ESKF NIS value, and every EqF one, for order statistics.
-    pub nis_values: Vec<f64>,
-    /// See [`GsdcReport::nis_values`].
-    pub eqf_nis_values: Vec<f64>,
-    /// The lever arm the EqF converged to, metres in the body frame.
-    pub eqf_lever: drifters_core::math::Vec3,
-    /// The GCU convergence rate the EqF ran with.
-    pub eqf_alpha: f64,
-    /// Per-epoch horizontal error against truth, `(tow, metres)`, for each of
-    /// the three solutions. Kept separately from [`Epoch`] because they are
-    /// scored against ground truth rather than against the fixes.
+    /// The GCU convergence rate the EqF ran with, `None` for off.
+    pub eqf_alpha: Option<f64>,
+    /// Whether the EqF compensated its input for Earth rate.
+    pub eqf_earth_rate: bool,
+    /// Per-epoch horizontal error of the phone's own solution against truth,
+    /// `(tow, metres)`.
     pub gnss_horizontal: Vec<(f64, f64)>,
     /// Error of the GNSS velocity measurement against a truth velocity, NED
     /// m/s. The measurement the filter is being handed, scored on its own —
@@ -395,30 +454,56 @@ pub struct GsdcReport {
     /// one that is excellent with a handful of bad epochs, and those two call
     /// for opposite responses.
     pub gnss_velocity_horizontal: Vec<f64>,
-    /// See [`GsdcReport::gnss_horizontal`].
-    pub filter_horizontal: Vec<(f64, f64)>,
-    /// Usable satellites at each epoch, matching [`Self::filter_horizontal`].
+}
+
+impl GsdcReport {
+    /// The run of `kind`, if it was asked for.
+    pub fn run(&self, kind: EngineKind) -> Option<&GsdcRun> {
+        self.runs.iter().find(|r| r.engine == kind)
+    }
+}
+
+/// One engine's pass over a GSDC trace.
+pub struct GsdcRun {
+    /// Which engine.
+    pub engine: EngineKind,
+    /// Whether this pass was tightly coupled. Only the ESKF can be; with
+    /// `--tight` the EqF is still fed position fixes, and this says so.
+    pub tight: bool,
+    /// Position error against truth.
+    pub error: truth::ErrorStats,
+    /// Per-epoch horizontal error against truth, `(tow, metres)`.
+    pub horizontal: Vec<(f64, f64)>,
+    /// Usable satellites at each epoch, matching [`Self::horizontal`].
     ///
     /// Tight coupling is supposed to earn its place where the sky is poor, so
     /// the aggregate cannot answer the question it was built for: an average
     /// over a trace that is mostly open sky is an average over the case it was
     /// not for.
-    pub filter_satellites: Vec<usize>,
-    /// See [`GsdcReport::gnss_horizontal`].
-    pub eqf_horizontal: Vec<(f64, f64)>,
-    /// Per-epoch trace for plotting.
+    pub satellites: Vec<usize>,
+    /// Per-epoch trace for plotting. The residual is the predicted antenna
+    /// position *before* the epoch's update, against the fix.
     pub epochs: Vec<Epoch>,
-    /// IMU samples processed.
-    pub processed: u64,
-    /// Fixes applied, and fixes the gate rejected.
-    pub applied: u64,
-    /// Fixes rejected by the chi-squared gate.
-    pub rejected: u64,
     /// Normalised innovation squared over the run.
     pub nis: stats::Running,
+    /// Every NIS value behind [`Self::nis`], for order statistics.
+    pub nis_values: Vec<f64>,
+    /// IMU samples processed.
+    pub processed: u64,
+    /// Fixes applied.
+    pub applied: u64,
+    /// Fixes rejected by a gate.
+    pub rejected: u64,
+    /// The lever arm the engine finished with.
+    pub lever: drifters_core::math::Vec3,
+    /// Error of the RTS-smoothed trajectory: the same forward filter run
+    /// backwards, so it is the filter's own answer with the rest of the run
+    /// taken into account. `None` for an engine that cannot record one.
+    pub rts: Option<truth::ErrorStats>,
+    /// Per-epoch horizontal error of the RTS-smoothed trajectory.
+    pub rts_horizontal: Vec<(f64, f64)>,
 }
 
-/// Replay a GSDC phone-trace directory.
 /// Knobs for a GSDC replay.
 ///
 /// A struct rather than eight positional arguments: most of these are
@@ -426,6 +511,8 @@ pub struct GsdcReport {
 /// `300.0, 1.0, 0.0, true, 0.0, false` says nothing about which is which.
 #[derive(Clone, Debug)]
 pub struct GsdcOptions {
+    /// Which engines to run, in the order to report them.
+    pub engines: Vec<EngineKind>,
     /// Assumed GNSS one-sigma, NED metres. Measured from the trace, not
     /// assumed — the dataset carries no covariance for its WLS solution.
     pub sigma: drifters_core::math::Vec3,
@@ -445,21 +532,58 @@ pub struct GsdcOptions {
     /// corrections. See [`differential`].
     pub base: Option<std::path::PathBuf>,
     /// Feed the ESKF per-satellite pseudoranges instead of a position fix.
-    /// See [`drifters_filter::range`].
+    /// See [`drifters_filter::range`]. An engine that has no pseudorange
+    /// update is still fed the fix; asking for tight coupling with no engine
+    /// that has one is an error.
     pub tight: bool,
     /// Diagnostic: thin the sky to this many satellites per epoch. See
     /// [`gsdc::GnssOptions::max_satellites`].
     pub max_satellites: Option<usize>,
-    /// GCU convergence rate for the EqF. See [`crate::eqf`].
-    pub alpha: f64,
+    /// GCU convergence rate for the EqF, `None` for off. See [`crate::eqf`].
+    pub alpha: Option<f64>,
+    /// The EqF's Earth model. By grade, a phone's is flat.
+    pub earth: eqf::EarthModel,
 }
 
+/// The phone-grade IMU noise model, scaled. Both engines are handed this one
+/// object, so a comparison between them is not a comparison of tuning.
+pub fn gsdc_imu_noise(imu_scale: f64) -> drifters_core::types::ImuNoise {
+    use drifters_core::math::{Vec3, DEG_PER_HOUR_TO_RAD_PER_SEC, DEG_TO_RAD, MGAL_TO_M_S2, PPM};
+    // Phone-grade MEMS, several orders worse than the tactical unit in the
+    // KF-GINS dataset. These are datasheet-class figures, not calibrated.
+    drifters_core::types::ImuNoise {
+        gyro_arw: Vec3::splat(imu_scale * 0.3 * DEG_TO_RAD / 60.0),
+        accel_vrw: Vec3::splat(imu_scale * 0.2 / 60.0),
+        gyro_bias_std: Vec3::splat(imu_scale * 20.0 * DEG_PER_HOUR_TO_RAD_PER_SEC),
+        accel_bias_std: Vec3::splat(imu_scale * 2000.0 * MGAL_TO_M_S2),
+        gyro_scale_std: Vec3::splat(1000.0 * PPM),
+        accel_scale_std: Vec3::splat(1000.0 * PPM),
+        correlation_time: 3600.0,
+    }
+}
+
+/// What every pass over a GSDC trace shares: the inputs, read once.
+struct GsdcInputs<'a> {
+    imu: &'a [drifters_core::types::ImuSample],
+    fixes: &'a [drifters_core::types::GnssFix],
+    ranges: &'a [(f64, Vec<crate::wls::Observation>)],
+    reference: &'a truth::Truth,
+    first: drifters_core::types::GnssFix,
+}
+
+/// Replay a GSDC phone-trace directory through each engine asked for.
+///
+/// Every engine sees byte-identical inputs on identical epochs, through one
+/// loop, `gsdc_pass`. What differs between them is the engine and its
+/// configuration, and the configuration is built from the same IMU noise model
+/// and the same alignment for both.
 pub fn run_gsdc(
     dir: &Path,
     options: GsdcOptions,
     quiet: bool,
 ) -> Result<GsdcReport, Box<dyn std::error::Error>> {
     let GsdcOptions {
+        engines,
         sigma,
         imu_scale,
         gyro_scale,
@@ -470,7 +594,18 @@ pub fn run_gsdc(
         tight,
         max_satellites,
         alpha,
+        earth,
     } = options;
+    if engines.is_empty() {
+        return Err("no engine to run".into());
+    }
+    if tight && !engines.contains(&EngineKind::Eskf) {
+        return Err(
+            "--tight needs the ESKF: tight coupling is drifters-filter's pseudorange update, \
+             and the equivariant filter has none"
+                .into(),
+        );
+    }
     let base = match base {
         Some(p) => Some((
             crate::rinex::read_base(&p, &["C1", "C5"])?,
@@ -533,63 +668,23 @@ pub fn run_gsdc(
         );
     }
 
-    let options = GinsOptions {
-        // Phone-grade MEMS, several orders worse than the tactical unit in the
-        // KF-GINS dataset. These are datasheet-class figures, not calibrated.
-        imu_noise: drifters_core::types::ImuNoise {
-            gyro_arw: drifters_core::math::Vec3::splat(
-                imu_scale * 0.3 * drifters_core::math::DEG_TO_RAD / 60.0,
-            ),
-            accel_vrw: drifters_core::math::Vec3::splat(imu_scale * 0.2 / 60.0),
-            gyro_bias_std: drifters_core::math::Vec3::splat(
-                imu_scale * 20.0 * drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC,
-            ),
-            accel_bias_std: drifters_core::math::Vec3::splat(
-                imu_scale * 2000.0 * drifters_core::math::MGAL_TO_M_S2,
-            ),
-            gyro_scale_std: drifters_core::math::Vec3::splat(1000.0 * drifters_core::math::PPM),
-            accel_scale_std: drifters_core::math::Vec3::splat(1000.0 * drifters_core::math::PPM),
-            correlation_time: 3600.0,
-        },
-        initial_position_std: sigma,
-        initial_velocity_std: drifters_core::math::Vec3::splat(2.0),
-        initial_attitude_std: drifters_core::math::Vec3::new(
-            5.0 * drifters_core::math::DEG_TO_RAD,
-            5.0 * drifters_core::math::DEG_TO_RAD,
-            30.0 * drifters_core::math::DEG_TO_RAD,
-        ),
-        ..GinsOptions::default()
-    }
-    .with_initial_state(first.position, drifters_core::frames::Ned::ZERO, attitude);
+    // By grade from the datasheet figure, not the scaled process noise: the
+    // scale is a tuning of how much the model is trusted, and says nothing
+    // about whether the part can see the Earth turn.
+    let eqf_earth_rate = earth.compensate(gsdc_imu_noise(1.0).gyro_bias_std.amax())?;
 
-    let mut engine = GinsEngine::new(options)?;
     let mut report = GsdcReport {
-        filter: truth::ErrorStats::new(),
+        runs: Vec::new(),
         gnss_only: truth::ErrorStats::new(),
-        eqf: truth::ErrorStats::new(),
-        eqf_epochs: Vec::new(),
-        eqf_nis: stats::Running::new(),
-        nis_values: Vec::new(),
-        eqf_nis_values: Vec::new(),
-        eqf_lever: drifters_core::math::Vec3::ZERO,
-        eqf_alpha: alpha,
-        gnss_velocity: truth::ErrorStats::new(),
-        gnss_velocity_count: 0,
-        gnss_velocity_horizontal: Vec::new(),
-        range_residual: Vec::new(),
-        rts: None,
-        rts_horizontal: Vec::new(),
         smoothed: None,
         smoothed_horizontal: Vec::new(),
-        filter_satellites: Vec::new(),
+        eqf_alpha: alpha,
+        eqf_earth_rate,
         gnss_horizontal: Vec::new(),
-        filter_horizontal: Vec::new(),
-        eqf_horizontal: Vec::new(),
-        epochs: Vec::new(),
-        processed: 0,
-        applied: 0,
-        rejected: 0,
-        nis: stats::Running::new(),
+        gnss_velocity: truth::ErrorStats::new(),
+        gnss_velocity_count: 0,
+        range_residual: Vec::new(),
+        gnss_velocity_horizontal: Vec::new(),
     };
 
     // Score the pseudoranges themselves against truth. The epochs are matched
@@ -624,13 +719,10 @@ pub fn run_gsdc(
         }
     }
 
-    let anchor = first.position;
+    // Score the phone's own solution, and the velocity measurement, on exactly
+    // the epochs the filters consume: the same walk over the samples that
+    // `gsdc_pass` makes, with no engine in it.
     let mut next = 0usize;
-    let mut last_nis: Option<f64> = None;
-    // Record the transition matrices the backward pass needs. Costs a 21×21
-    // product per IMU sample, which is why it is opt-in.
-    engine.record(true);
-    let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
     for sample in &imu {
         let t = sample.time.tow();
         if t < first.time.tow() {
@@ -639,8 +731,6 @@ pub fn run_gsdc(
         if next < fixes.len() && fixes[next].time.tow() <= t {
             let fix = fixes[next];
             next += 1;
-            // Score the phone's own solution on the same epochs, so the two are
-            // compared on identical ground.
             report
                 .gnss_only
                 .push(&reference, fix.time.tow(), fix.position);
@@ -661,160 +751,59 @@ pub fn run_gsdc(
                     .push((v.n - t.n).hypot(v.e - t.e));
                 report.gnss_velocity_count += 1;
             }
-
-            // Tight coupling consumes the ranges the epoch was solved from,
-            // so a position solution is never formed. Velocity still arrives
-            // loosely: it is a different observable, and the carrier-phase
-            // solve is better than anything these ranges would give.
-            if tight {
-                let mut without_position = fix;
-                without_position.position_std = drifters_core::math::Vec3::splat(1.0e6);
-                let _ = engine.add_gnss(without_position);
-            } else {
-                let _ = engine.add_gnss(fix);
-            }
-            engine.add_imu(*sample)?;
-            if tight {
-                if let Some((_, obs)) = ranges.get(next - 1) {
-                    let mut tracked: Vec<drifters_filter::range::RangeObservation> =
-                        Vec::with_capacity(obs.len());
-                    // Not the batch solver's weights. A least-squares fit is
-                    // scale-invariant, so `wls` only ever needed the *relative*
-                    // sizes right; a filter weighs a measurement against its own
-                    // covariance and needs the absolute size. Using the batch
-                    // values directly leaves the filter believing a zenith
-                    // pseudorange is good to 16 m, and it reads NIS 1.4 while
-                    // barely correcting anything.
-                    //
-                    // Fitted on trace A, holding B, C and D out: sigma =
-                    // 0.06 + 3.2/sin(el) metres, so 3.3 m at zenith against the
-                    // 2.55 m measured there, and deliberately optimistic toward
-                    // the horizon because the Huber weighting below is what
-                    // handles that tail.
-                    let set = crate::wls::Settings {
-                        sigma_a: 0.06,
-                        sigma_b: 3.2,
-                        ..crate::wls::Settings::default()
-                    };
-                    for o in obs {
-                        // The same elevation mask the batch solver applies.
-                        // Everything below it is the 25-35 m multipath
-                        // population, and a filter has no way to discover that
-                        // an observation is bad before it has used it.
-                        if o.elevation < set.mask {
-                            continue;
-                        }
-                        tracked.push(drifters_filter::range::RangeObservation {
-                            constellation: o.constellation,
-                            satellite: drifters_core::math::Vec3::new(
-                                o.satellite[0],
-                                o.satellite[1],
-                                o.satellite[2],
-                            ),
-                            pseudorange: o.pseudorange,
-                            // The elevation weighting the batch solver uses, so
-                            // the two paths disagree about the estimator rather
-                            // than about the measurements.
-                            sigma: crate::robust::elevation_sigma(
-                                o.elevation,
-                                set.sigma_a,
-                                set.sigma_b,
-                            ),
-                        });
-                    }
-                    // 1.5 sigma, the same threshold the batch solver settled on.
-                    engine.apply_pseudoranges::<16>(&tracked, 1.5)?;
-                }
-            }
-            report.processed += 1;
-
-            match engine.last_nis() {
-                Some(v) if Some(v) != last_nis => {
-                    report.nis.push(v);
-                    report.nis_values.push(v);
-                    last_nis = Some(v);
-                    report.applied += 1;
-                    // Only accepted updates are checkpointed: a rejected fix
-                    // leaves no correction and no prior, and recording one
-                    // would tell the smoother an epoch happened that did not.
-                    if let Some(c) = engine.take_checkpoint() {
-                        checkpoints.push(c);
-                    }
-                }
-                _ => report.rejected += 1,
-            }
-
-            let solution = engine.nav_state().position();
-            report.filter.push(&reference, t, solution);
-            if let Some(r) = reference.at(t) {
-                report
-                    .filter_horizontal
-                    .push((t, solution.ned_from(r).horizontal_norm()));
-                // Satellites above the mask, which is what either path had to
-                // work with at this epoch.
-                report.filter_satellites.push(
-                    ranges
-                        .get(next - 1)
-                        .map(|(_, obs)| obs.iter().filter(|o| o.elevation >= 10.0).count())
-                        .unwrap_or(0),
-                );
-            }
-            let ned = solution.ned_from(anchor);
-            let residual = engine.antenna_position().ned_from(fix.position);
-            report.epochs.push(Epoch {
-                tow: t,
-                ned: (ned.n, ned.e, ned.d),
-                residual: (residual.n, residual.e, residual.d),
-                nis: engine.last_nis(),
-            });
-        } else {
-            engine.add_imu(*sample)?;
-            report.processed += 1;
         }
     }
 
-    // The equivariant filter over the same inputs and the same epochs. Run as a
-    // second pass rather than interleaved only because the two engines keep
-    // their own state; the data they see is byte-identical.
-    let second = eqf::replay_gsdc_eqf(&imu, &fixes, &reference, attitude, imu_scale, alpha);
-    report.eqf = second.error;
-    report.eqf_epochs = second.epochs;
-    report.eqf_nis = second.nis;
-    report.eqf_nis_values = second.nis_values;
-    report.eqf_lever = second.lever;
-    report.eqf_horizontal = second.horizontal;
-
-    // The backward pass over the ESKF's own run. Allocation-free by contract,
-    // so the storage is ours to choose.
-    if checkpoints.len() > 1 {
-        let mut smoothed = vec![
-            drifters_filter::smoother::Smoothed {
-                state: checkpoints[0].state,
-                correction: Default::default(),
-                covariance: checkpoints[0].posterior,
-            };
-            checkpoints.len()
-        ];
-        match drifters_filter::smoother::smooth(&checkpoints, &mut smoothed) {
-            Ok(()) => {
-                let mut stats = truth::ErrorStats::new();
-                for s in &smoothed {
-                    let tow = s.state.time.tow();
-                    stats.push(&reference, tow, s.state.pva.position);
-                    if let Some(r) = reference.at(tow) {
-                        report
-                            .rts_horizontal
-                            .push((tow, s.state.pva.position.ned_from(r).horizontal_norm()));
-                    }
+    let inputs = GsdcInputs {
+        imu: &imu,
+        fixes: &fixes,
+        ranges: &ranges,
+        reference: &reference,
+        first,
+    };
+    let noise = gsdc_imu_noise(imu_scale);
+    // Both engines start from the ESKF's default scale-factor prior; the EqF
+    // carries it as bias.
+    let accel_scale_std = GinsOptions::default().initial_accel_scale_std;
+    for kind in engines {
+        let run = match kind {
+            EngineKind::Eskf => {
+                let options = GinsOptions {
+                    imu_noise: noise,
+                    initial_position_std: sigma,
+                    initial_velocity_std: drifters_core::math::Vec3::splat(2.0),
+                    initial_attitude_std: drifters_core::math::Vec3::new(
+                        5.0 * drifters_core::math::DEG_TO_RAD,
+                        5.0 * drifters_core::math::DEG_TO_RAD,
+                        30.0 * drifters_core::math::DEG_TO_RAD,
+                    ),
+                    ..GinsOptions::default()
                 }
-                report.rts = Some(stats);
+                .with_initial_state(
+                    first.position,
+                    drifters_core::frames::Ned::ZERO,
+                    attitude,
+                );
+                gsdc_pass(GinsEngine::new(options)?, &inputs, tight, quiet)?
             }
-            Err(e) => {
-                if !quiet {
-                    eprintln!("RTS smoothing failed: {e}");
-                }
+            EngineKind::Eqf => {
+                let options = eqf::gsdc_options(
+                    first.position,
+                    attitude,
+                    &noise,
+                    accel_scale_std,
+                    eqf_earth_rate,
+                    alpha,
+                );
+                gsdc_pass(
+                    drifters_eqf::EqfEngine::new(options)?,
+                    &inputs,
+                    tight,
+                    quiet,
+                )?
             }
-        }
+        };
+        report.runs.push(run);
     }
 
     // The GNSS file fitted to itself: pseudorange positions as anchors,
@@ -898,6 +887,270 @@ pub fn run_gsdc(
     Ok(report)
 }
 
+/// One engine's pass over a GSDC trace.
+///
+/// The loop every engine goes through. A fix is queued before the sample
+/// whose interval contains it, so the engine applies it at its own epoch;
+/// position is scored against truth after that sample, which is where the
+/// solution for the epoch exists.
+fn gsdc_pass<E: ReplayEngine>(
+    mut engine: E,
+    inputs: &GsdcInputs<'_>,
+    tight: bool,
+    quiet: bool,
+) -> Result<GsdcRun, Box<dyn std::error::Error>> {
+    let GsdcInputs {
+        imu,
+        fixes,
+        ranges,
+        reference,
+        first,
+    } = *inputs;
+    // Tight coupling is asked of the trace, and honoured by whichever engine
+    // can. One that cannot is fed the position fix, and the run says so.
+    let tight = tight && E::PSEUDORANGES;
+    let mut run = GsdcRun {
+        engine: E::KIND,
+        tight,
+        error: truth::ErrorStats::new(),
+        horizontal: Vec::new(),
+        satellites: Vec::new(),
+        epochs: Vec::new(),
+        nis: stats::Running::new(),
+        nis_values: Vec::new(),
+        processed: 0,
+        applied: 0,
+        rejected: 0,
+        lever: drifters_core::math::Vec3::ZERO,
+        rts: None,
+        rts_horizontal: Vec::new(),
+    };
+
+    let anchor = first.position;
+    let mut next = 0usize;
+    let mut last_nis: Option<f64> = None;
+    // Record the transition matrices the backward pass needs, where the engine
+    // can. Costs the ESKF a 21×21 product per IMU sample.
+    let recording = engine.start_recording();
+    let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
+    for sample in imu {
+        let t = sample.time.tow();
+        if t < first.time.tow() {
+            continue;
+        }
+        if next < fixes.len() && fixes[next].time.tow() <= t {
+            let fix = fixes[next];
+            next += 1;
+
+            // Before the update: what the filter predicted, against what the
+            // receiver said. After it, the difference is mostly the fix's own
+            // error, which is what this column held until it was moved here.
+            let predicted = engine.antenna_position().ned_from(fix.position);
+
+            // Tight coupling consumes the ranges the epoch was solved from,
+            // so a position solution is never formed. Velocity still arrives
+            // loosely: it is a different observable, and the carrier-phase
+            // solve is better than anything these ranges would give.
+            if tight {
+                let mut without_position = fix;
+                without_position.position_std = drifters_core::math::Vec3::splat(1.0e6);
+                let _ = engine.add_gnss(without_position);
+            } else {
+                let _ = engine.add_gnss(fix);
+            }
+            engine.add_imu(*sample)?;
+            if tight {
+                if let Some((_, obs)) = ranges.get(next - 1) {
+                    let mut tracked: Vec<drifters_filter::range::RangeObservation> =
+                        Vec::with_capacity(obs.len());
+                    // Not the batch solver's weights. A least-squares fit is
+                    // scale-invariant, so `wls` only ever needed the *relative*
+                    // sizes right; a filter weighs a measurement against its own
+                    // covariance and needs the absolute size. Using the batch
+                    // values directly leaves the filter believing a zenith
+                    // pseudorange is good to 16 m, and it reads NIS 1.4 while
+                    // barely correcting anything.
+                    //
+                    // Fitted on trace A, holding B, C and D out: sigma =
+                    // 0.06 + 3.2/sin(el) metres, so 3.3 m at zenith against the
+                    // 2.55 m measured there, and deliberately optimistic toward
+                    // the horizon because the Huber weighting below is what
+                    // handles that tail.
+                    let set = crate::wls::Settings {
+                        sigma_a: 0.06,
+                        sigma_b: 3.2,
+                        ..crate::wls::Settings::default()
+                    };
+                    for o in obs {
+                        // The same elevation mask the batch solver applies.
+                        // Everything below it is the 25-35 m multipath
+                        // population, and a filter has no way to discover that
+                        // an observation is bad before it has used it.
+                        if o.elevation < set.mask {
+                            continue;
+                        }
+                        tracked.push(drifters_filter::range::RangeObservation {
+                            constellation: o.constellation,
+                            satellite: drifters_core::math::Vec3::new(
+                                o.satellite[0],
+                                o.satellite[1],
+                                o.satellite[2],
+                            ),
+                            pseudorange: o.pseudorange,
+                            // The elevation weighting the batch solver uses, so
+                            // the two paths disagree about the estimator rather
+                            // than about the measurements.
+                            sigma: crate::robust::elevation_sigma(
+                                o.elevation,
+                                set.sigma_a,
+                                set.sigma_b,
+                            ),
+                        });
+                    }
+                    // 1.5 sigma, the same threshold the batch solver settled on.
+                    engine.apply_pseudoranges(&tracked, 1.5)?;
+                }
+            }
+            run.processed += 1;
+
+            match engine.last_nis() {
+                Some(v) if Some(v) != last_nis => {
+                    run.nis.push(v);
+                    run.nis_values.push(v);
+                    last_nis = Some(v);
+                    run.applied += 1;
+                    // Only accepted updates are checkpointed: a rejected fix
+                    // leaves no correction and no prior, and recording one
+                    // would tell the smoother an epoch happened that did not.
+                    if let Some(c) = engine.take_checkpoint() {
+                        checkpoints.push(c);
+                    }
+                }
+                _ => run.rejected += 1,
+            }
+
+            let solution = engine.nav_state().position();
+            run.error.push(reference, t, solution);
+            if let Some(r) = reference.at(t) {
+                run.horizontal
+                    .push((t, solution.ned_from(r).horizontal_norm()));
+                // Satellites above the mask, which is what either path had to
+                // work with at this epoch.
+                run.satellites.push(
+                    ranges
+                        .get(next - 1)
+                        .map(|(_, obs)| obs.iter().filter(|o| o.elevation >= 10.0).count())
+                        .unwrap_or(0),
+                );
+            }
+            let ned = solution.ned_from(anchor);
+            run.epochs.push(Epoch {
+                tow: t,
+                ned: (ned.n, ned.e, ned.d),
+                residual: (predicted.n, predicted.e, predicted.d),
+                nis: engine.last_nis(),
+            });
+        } else {
+            engine.add_imu(*sample)?;
+            run.processed += 1;
+        }
+    }
+    run.lever = engine.lever_arm();
+
+    // The backward pass over the engine's own run. Allocation-free by
+    // contract, so the storage is ours to choose.
+    if recording && checkpoints.len() > 1 {
+        let mut smoothed = vec![
+            drifters_filter::smoother::Smoothed {
+                state: checkpoints[0].state,
+                correction: Default::default(),
+                covariance: checkpoints[0].posterior,
+            };
+            checkpoints.len()
+        ];
+        match drifters_filter::smoother::smooth(&checkpoints, &mut smoothed) {
+            Ok(()) => {
+                let mut stats = truth::ErrorStats::new();
+                for s in &smoothed {
+                    let tow = s.state.time.tow();
+                    stats.push(reference, tow, s.state.pva.position);
+                    if let Some(r) = reference.at(tow) {
+                        run.rts_horizontal
+                            .push((tow, s.state.pva.position.ned_from(r).horizontal_norm()));
+                    }
+                }
+                run.rts = Some(stats);
+            }
+            Err(e) => {
+                if !quiet {
+                    eprintln!("RTS smoothing failed: {e}");
+                }
+            }
+        }
+    }
+    Ok(run)
+}
+
+/// One row of a process-noise sweep: each engine's result at one scale.
+pub struct TuneRow {
+    /// Multiplier applied to every IMU noise density.
+    pub scale: f64,
+    /// One per engine swept, in the order asked for.
+    pub results: Vec<TuneResult>,
+}
+
+/// One engine at one scale.
+#[derive(Clone, Copy, Debug)]
+pub struct TuneResult {
+    /// Which engine.
+    pub engine: EngineKind,
+    /// Mean NIS.
+    pub nis_mean: f64,
+    /// Median NIS.
+    pub nis_median: f64,
+    /// Horizontal RMS error against truth.
+    pub rms: f64,
+}
+
+impl TuneRow {
+    /// The result for `kind`, if it was swept.
+    pub fn result(&self, kind: EngineKind) -> Option<&TuneResult> {
+        self.results.iter().find(|r| r.engine == kind)
+    }
+}
+
+/// The scale at which `value` crosses `target`, by log-linear interpolation.
+///
+/// NIS falls monotonically as the assumed process noise rises, so the crossing
+/// is unique when it exists. Returns `None` when the sweep does not bracket it,
+/// which is itself informative: the sweep was too narrow.
+pub fn nis_crossing(
+    rows: &[TuneRow],
+    value: impl Fn(&TuneRow) -> Option<f64>,
+    target: f64,
+) -> Option<f64> {
+    for pair in rows.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let (Some(na), Some(nb)) = (value(a), value(b)) else {
+            continue;
+        };
+        if (na - target) * (nb - target) <= 0.0 && (na - nb).abs() > f64::EPSILON {
+            let t = (na - target) / (na - nb);
+            let (la, lb) = (a.scale.ln(), b.scale.ln());
+            return Some((la + t * (lb - la)).exp());
+        }
+    }
+    None
+}
+
+/// The scale with the lowest value of `rms` in the sweep.
+pub fn best_rms(rows: &[TuneRow], rms: impl Fn(&TuneRow) -> Option<f64>) -> Option<f64> {
+    rows.iter()
+        .filter_map(|r| rms(r).filter(|v| v.is_finite()).map(|v| (r.scale, v)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(scale, _)| scale)
+}
+
 /// Sweep the IMU process-noise scale over a GSDC trace and score every point.
 ///
 /// The scale multiplies all four IMU noise densities together, which is the
@@ -908,12 +1161,13 @@ pub fn run_gsdc(
 /// calibration.
 pub fn tune_gsdc(
     dir: &Path,
+    engines: &[EngineKind],
     sigma: drifters_core::math::Vec3,
     scales: &[f64],
-    alpha: f64,
+    alpha: Option<f64>,
     raw_ranges: bool,
     quiet: bool,
-) -> Result<Vec<eqf::TuneRow>, Box<dyn std::error::Error>> {
+) -> Result<Vec<TuneRow>, Box<dyn std::error::Error>> {
     let mut rows = Vec::new();
     for scale in scales {
         if !quiet {
@@ -922,6 +1176,7 @@ pub fn tune_gsdc(
         let r = run_gsdc(
             dir,
             GsdcOptions {
+                engines: engines.to_vec(),
                 sigma,
                 imu_scale: *scale,
                 gyro_scale: 1.0,
@@ -932,17 +1187,22 @@ pub fn tune_gsdc(
                 tight: false,
                 max_satellites: None,
                 alpha,
+                earth: eqf::EarthModel::ByGrade,
             },
             true,
         )?;
-        rows.push(eqf::TuneRow {
+        rows.push(TuneRow {
             scale: *scale,
-            eskf_nis: r.nis.mean(),
-            eskf_nis_median: stats::median(&r.nis_values),
-            eqf_nis_median: stats::median(&r.eqf_nis_values),
-            eskf_rms: r.filter.horizontal.rms(),
-            eqf_nis: r.eqf_nis.mean(),
-            eqf_rms: r.eqf.horizontal.rms(),
+            results: r
+                .runs
+                .iter()
+                .map(|run| TuneResult {
+                    engine: run.engine,
+                    nis_mean: run.nis.mean(),
+                    nis_median: stats::median(&run.nis_values),
+                    rms: run.error.horizontal.rms(),
+                })
+                .collect(),
         });
     }
     Ok(rows)
