@@ -240,7 +240,7 @@ pub fn replay(
             });
 
             let before = engine.inflation_count();
-            engine.add_gnss(fix);
+            let _ = engine.add_gnss(fix);
             engine.add_imu(*sample)?;
             report.processed += 1;
 
@@ -669,9 +669,9 @@ pub fn run_gsdc(
             if tight {
                 let mut without_position = fix;
                 without_position.position_std = drifters_core::math::Vec3::splat(1.0e6);
-                engine.add_gnss(without_position);
+                let _ = engine.add_gnss(without_position);
             } else {
-                engine.add_gnss(fix);
+                let _ = engine.add_gnss(fix);
             }
             engine.add_imu(*sample)?;
             if tight {

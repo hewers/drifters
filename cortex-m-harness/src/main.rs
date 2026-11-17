@@ -197,7 +197,7 @@ fn main() -> ! {
         engine.nav_state().position(),
         Vec3::splat(0.5),
     );
-    engine.add_gnss(fix);
+    let _ = engine.add_gnss(fix);
     let (_, gnss_step) = measure(bottom, || engine.add_imu(sample(0.015)));
     hprintln!("add_imu with GNSS fix          {}", gnss_step);
 

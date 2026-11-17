@@ -20,8 +20,8 @@ use cortex_m_rt::entry;
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
-use drifters_core::types::ImuSample;
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_core::types::{GnssFix, ImuSample};
+use drifters_filter::{GinsEngine, GinsOptions, RewindEngine};
 
 /// Abort without formatting. `panic-semihosting` would drag in `core::fmt`,
 /// which is exactly what this binary is trying to exclude.
@@ -48,6 +48,10 @@ fn main() -> ! {
             core::hint::spin_loop();
         }
     };
+    // The rewind layer is data path too: on a device every fix goes through
+    // it. Small rings, so that rotation, eviction from a full event ring and
+    // a replay past the newer anchor all happen within a few iterations.
+    let mut rewind = RewindEngine::<16, 4>::from_engine(engine);
 
     let mut t = 0.0;
     loop {
@@ -62,10 +66,24 @@ fn main() -> ! {
         let _ = engine.apply_zupt(Vec3::splat(0.02));
         let _ = engine.apply_height(20.0, 0.5);
 
+        let _ = rewind.add_imu(sample);
+        let _ = rewind.apply_zupt(Vec3::splat(0.02));
+        let _ = rewind.apply_nonholonomic((0.1, 0.1), 0.5);
+        let _ = rewind.apply_wheel_speed(0.0, 0.1);
+        let _ = rewind.apply_height(20.0, 0.5);
+        let _ = rewind.apply_heading(0.0, 0.05);
+        // A fix from 22 ms ago: behind the stream, so this is the rewind.
+        let late = GnssFix::position_only(
+            GpsTime::from_tow(t - 0.022),
+            rewind.nav_state().position(),
+            Vec3::splat(1.0),
+        );
+        let _ = rewind.add_gnss(late);
+
         // SAFETY: single-threaded, no interrupts enabled, and the write only
         // exists to keep the work above from being optimised out.
         unsafe {
-            SINK = engine.nav_state().position().height;
+            SINK = engine.nav_state().position().height + rewind.nav_state().position().height;
         }
     }
 }

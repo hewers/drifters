@@ -46,6 +46,7 @@
 //! - [`measurement`] — auxiliary sensor models (ZUPT, NHC, odometer, …).
 //! - [`eskf`] — transition matrix, predict and Joseph-form update.
 //! - [`engine`] — the orchestration, including GNSS epoch alignment.
+//! - [`rewind`] — applying a GNSS fix that arrived after its epoch.
 //! - [`state`] — the error-state index map.
 //! - [`config`] — configuration and its validation.
 
@@ -64,12 +65,14 @@ pub mod eskf;
 pub mod measurement;
 pub mod mechanization;
 pub mod range;
+pub mod rewind;
 pub mod smoother;
 pub mod state;
 pub mod ud;
 
 pub use config::{ConfigError, GinsOptions};
-pub use engine::GinsEngine;
+pub use engine::{GinsEngine, GnssQueued};
 pub use eskf::{Eskf, FilterError};
 pub use measurement::{Measurement, StationarityConfig, StationarityDetector};
 pub use mechanization::mechanize;
+pub use rewind::{FixOutcome, RewindEngine};

@@ -104,7 +104,7 @@ fn main() {
         for k in 0..200 {
             t += 0.005;
             if k == 100 {
-                engine.add_gnss(GnssFix::position_only(
+                let _ = engine.add_gnss(GnssFix::position_only(
                     GpsTime::from_tow(t),
                     Lla::from_degrees(30.44, 114.47, 20.0),
                     Vec3::splat(2.0),
@@ -125,7 +125,7 @@ fn main() {
         for k in 0..200 {
             t += 0.005;
             if k == 100 {
-                engine.add_gnss(GnssFix::position_only(
+                let _ = engine.add_gnss(GnssFix::position_only(
                     GpsTime::from_tow(t),
                     Lla::from_degrees(30.44, 114.47, 20.0),
                     Vec3::splat(2.0),

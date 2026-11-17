@@ -12,8 +12,26 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **`GinsEngine::add_gnss` returns `GnssQueued`, not `bool`** — `Queued`,
+  `Replaced`, `Stale` or `Invalid`. Breaking. A fix whose epoch the engine has
+  already passed is refused at ingest and counted in `stale_fix_count`, where it
+  used to be accepted into the pending slot and never applied; one stranded
+  behind the stream inside `add_imu` is dropped and counted the same way. `true`
+  was the first two arms and `false` the last. The enum is `#[must_use]`, so a
+  call site that ignored the `bool` now has to say that it means to.
+
 ### Fixed
 
+- **A GNSS fix that arrives after its epoch is no longer lost in silence.** A
+  receiver reports each fix after the epoch it describes, so on hardware every
+  fix is late; the engine took each one, held it, and applied none, with no
+  error and no counter. The report is above, and the remedy is `rewind`, below.
+- **`measurement::nonholonomic` linked a reachable `panic_bounds_check`**, from
+  iterating `[1, 2]` for the Jacobian's body-axis rows. The panic audit had
+  never linked that function. It does now, with every aiding call and the
+  rewind layer. Same arithmetic, and no result moves.
 - **The equivariant filter's covariance measures as consistent**, 21.007 against
   an expected 21, where it had measured 23.6. The fault was the Monte-Carlo
   harness's prior: it drew initial errors independently in physical coordinates
@@ -23,6 +41,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`drifters-filter::rewind`** — `RewindEngine`, which applies a GNSS fix after
+  the engine has propagated past its epoch. Two snapshots of the engine and a
+  ring of the IMU samples and aiding calls since; a late fix restores the
+  snapshot before it and replays the ring with the fix in its place.
+  Allocation-free, sized by two const parameters, and bit-identical to
+  delivering the fix on time, which is what its tests check. A fix up to
+  `SAMPLES / 2` samples late is always applicable. No propagation in steady
+  state; a rewind costs the samples it replays — 356 µs on the host for 300 ms
+  of lateness at 200 Hz — and the whole layer is 21 312 bytes at that size.
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
   geodetic position, answering gravity, earth rate, transport rate and the radii
   of curvature from a single `sin_cos`. The free functions on `Wgs84` each

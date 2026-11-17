@@ -14,6 +14,11 @@ Sans-IO: push samples in, pull state out. It never allocates, blocks, reads a
 clock or touches a file, so the same code runs inside an interrupt handler and
 inside a replay harness.
 
+A GNSS fix reaches a device after the epoch it describes, by which time the IMU
+stream has passed it. `RewindEngine` applies it anyway: it restores a snapshot
+from before the epoch and replays the samples since, in a fixed-size ring, with
+a result bit-identical to on-time delivery.
+
 Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 10.2 KiB peak
 stack on Cortex-M4 in the 15-state configuration; the data path links no panic
 machinery.

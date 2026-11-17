@@ -157,13 +157,38 @@ Splitting the IMU sample at the GNSS epoch is what keeps a 1 Hz GNSS fix from
 being applied up to one IMU interval late. At 100 Hz and 30 m/s that error would
 be 0.3 m — larger than the GNSS noise it is trying to correct.
 
+### A fix that arrives after its epoch
+
+The diagram assumes the fix is in hand before the interval that contains it is
+pushed. In replay it is. On a device it is not: a receiver reports a fix tens to
+hundreds of milliseconds after the epoch it describes, and by then the IMU
+stream has passed it. `add_gnss` refuses such a fix as `GnssQueued::Stale` and
+counts it. It used to accept it into the pending slot and never apply it, with
+nothing to say so, which on hardware would have been every fix.
+
+[`rewind::RewindEngine`](../crates/drifters-filter/src/rewind.rs) is how a late
+fix gets applied. It wraps the engine with two earlier snapshots of it and a
+ring of the IMU samples and aiding calls since the older one. A late fix
+restores the snapshot before its epoch, queues the fix where it belonged, and
+pushes the ring through again, so the diagram above runs exactly as it would
+have on time, split interval included. The result is bit-identical to on-time
+delivery. That is the property the tests hold it to, and the reason it was
+built before the alternative: a filter run a fixed delay behind real time with
+a predictor for output, whose cost is flat but whose output is no longer the
+filter's own.
+
+The cost is a burst. A fix `L` samples late pushes between `L` and `L + W − 1`
+samples again, where `W` is the lateness the ring is sized to always cover; in
+steady state the layer copies and does not propagate. Sizes and timings are
+under [Resource budget](#the-rewind-layer).
+
 ## Sans-IO
 
 `GinsEngine` has no dependency on how samples arrive. It exposes:
 
 ```rust
 engine.add_imu(sample)?;   // processes immediately
-engine.add_gnss(fix);      // queued for the interval that contains it
+engine.add_gnss(fix);      // queued for the interval that contains it, or refused as stale
 engine.nav_state();        // current solution
 engine.covariance();       // current uncertainty
 ```
@@ -191,6 +216,35 @@ and before the covariance was factored.
 
 Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
 table and the code cannot drift apart silently.
+
+### The rewind layer
+
+`RewindEngine<SAMPLES, EVENTS>` is three engines, `SAMPLES` IMU samples of 64
+bytes and `EVENTS` aiding records of 120. Sized for a 200 Hz IMU and a receiver
+up to 300 ms late, which is `RewindEngine<120, 32>`:
+
+| features | `GinsEngine` | `RewindEngine<120, 32>` |
+|---|---|---|
+| default | 3 240 | **21 312** |
+| `f32-covariance` | 2 320 | 18 552 |
+| `reduced-state` | 2 304 | 18 504 |
+| both | 1 824 | 17 064 |
+
+Six and a half times the engine, and the one thing in the runtime stack whose
+size the caller chooses. Asserted by
+`rewind::tests::the_wrapper_has_its_documented_footprint`. It is also the one
+runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
+this size a copy should be something the caller wrote.
+
+On the host a rewind costs what the samples it replays cost and nothing
+measurable besides: 356 µs for a fix 60 samples late, 80 samples replayed at
+4.45 µs each against an `add_imu` of 4.47. In steady state the layer adds less
+than the run-to-run noise.
+
+Its stack is **not measured**. The replay runs in place on the live engine, so
+it should add a small frame to `add_imu`'s and no engine-sized temporary — but
+the QEMU harness does not exercise it yet, and "should" is how the 11 000-byte
+estimate in the next section was arrived at.
 
 ### Stack, measured on Cortex-M4
 

@@ -154,7 +154,13 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
 
     let mut jacobian = Matrix::<2, N_STATE>::zeros();
     // Rows 1 and 2 of the body-velocity Jacobians: lateral and vertical.
-    for (row, axis) in [1usize, 2usize].into_iter().enumerate() {
+    //
+    // As `row + 1` rather than by iterating `[1, 2]`: through an array
+    // iterator the compiler loses that the axis is below three, and keeps a
+    // bounds check — a reachable panic — on every element read. Found when
+    // the panic audit first linked this function, through `rewind`.
+    for row in 0..2 {
+        let axis = row + 1;
         for c in 0..3 {
             jacobian[(row, V_ID + c)] = wrt_velocity[(axis, c)];
             jacobian[(row, PHI_ID + c)] = wrt_attitude[(axis, c)];

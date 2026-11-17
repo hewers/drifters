@@ -536,11 +536,24 @@ visible in the source. All of these read as obviously-fine code, and every one
 of them linked a panic. It is also why the audit has to actually run — three of
 the five were introduced while it could not.
 
+**`panic_bounds_check`, from `measurement::nonholonomic`.** The Jacobian's two
+rows were filled by iterating `[1usize, 2usize]` for the body axis. Through an
+array iterator the optimiser loses that the axis is below three, and keeps the
+check on every element read; written as `row + 1` it is provable. This one is a
+different lesson. It had been there since M6 with the audit running and green,
+because the audit binary called three of the engine's entry points and
+non-holonomic was not among them. It surfaced when the rewind layer went in: a
+replay can repeat any aid, so linking one links them all. The audit proves the
+absence of panics in what it links, and nothing about what it does not.
+
 ### Scope
 
-This covers the steady-state data path — `add_imu`, `apply_zupt`,
-`apply_height`. Construction and configuration validation are *not* in scope and
-may legitimately panic on programmer error; they run once, at startup, where a
+This covers the steady-state data path: `add_imu`; the five aiding calls,
+ZUPT, non-holonomic, wheel speed, height and heading; and a late fix through
+`RewindEngine::add_gnss`, the rewind and the replay included. It does not link
+`apply_pseudoranges` or the smoother, and so says nothing about them.
+Construction and configuration validation are *not* in scope and may
+legitimately panic on programmer error; they run once, at startup, where a
 panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.
 
 ## Layer 11 — error against ground truth

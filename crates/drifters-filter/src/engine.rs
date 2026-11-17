@@ -25,8 +25,9 @@ use crate::state::{SA_ID, SG_ID};
 
 /// How a GNSS epoch relates to the IMU interval being processed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GnssPlacement {
-    /// No fix pending, or it is too far away to use.
+pub(crate) enum GnssPlacement {
+    /// No fix pending, or it is ahead of this interval and waits for a later
+    /// one.
     None,
     /// The fix coincides with the start of the interval: update, then
     /// propagate.
@@ -35,6 +36,37 @@ enum GnssPlacement {
     AtEnd,
     /// The fix falls strictly inside: split the IMU sample at the fix.
     Inside,
+    /// The fix is behind this interval. No later interval can contain it, so
+    /// it is dropped and counted rather than left to rot in the slot.
+    Stale,
+}
+
+/// What [`GinsEngine::add_gnss`] did with a fix.
+///
+/// Only the first two arms queue anything. The other two are the cases a
+/// caller on real hardware must be able to see: a receiver that reports its
+/// fixes late enough to be stale is the normal failure, not an exotic one, and
+/// a `bool` could not say which of the two it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "a Stale or Invalid fix was not queued"]
+#[non_exhaustive]
+pub enum GnssQueued {
+    /// Queued, to be applied by the next IMU interval that contains it.
+    Queued,
+    /// Queued, and the fix that was already waiting has been discarded.
+    ///
+    /// The engine holds one pending fix. Two queued before an IMU sample
+    /// consumes the first means the IMU stream is lagging the receiver; the
+    /// newer fix is kept because it is the one the stream has not passed.
+    Replaced,
+    /// The epoch is already behind the engine's current time, so no IMU
+    /// interval can ever contain it. Not queued; counted in
+    /// [`GinsEngine::stale_fix_count`]. Apply it through
+    /// [`crate::rewind::RewindEngine`] instead.
+    Stale,
+    /// Failed [`GnssFix::is_valid`]: a non-finite position or a zero sigma,
+    /// which would make the innovation covariance singular. Not queued.
+    Invalid,
 }
 
 /// A loosely-coupled GNSS/INS engine over the 21-state error model.
@@ -52,6 +84,8 @@ pub struct GinsEngine {
     epoch_tolerance: F,
     consecutive_rejections: u32,
     inflations: u32,
+    /// Fixes refused for arriving after the engine had passed their epoch.
+    stale_fixes: u32,
     /// Smoothing state, present only while recording.
     ///
     /// Behind `alloc` because it is three 21×21 matrices — four times the rest
@@ -117,6 +151,7 @@ impl GinsEngine {
             epoch_tolerance: 1.0e-4,
             consecutive_rejections: 0,
             inflations: 0,
+            stale_fixes: 0,
             #[cfg(feature = "smoothing")]
             recorder: None,
             options,
@@ -154,17 +189,56 @@ impl GinsEngine {
         &self.options
     }
 
+    /// How close to an interval boundary a fix is treated as lying on it.
+    ///
+    /// [`crate::rewind`] places a late fix with the same rule the engine uses,
+    /// so the two cannot disagree about which sample consumes it.
+    #[inline]
+    pub(crate) fn epoch_tolerance(&self) -> F {
+        self.epoch_tolerance
+    }
+
+    /// Whether a first IMU sample has fixed the time origin.
+    ///
+    /// Before it has, [`GinsEngine::timestamp`] is [`GpsTime::ZERO`] and says
+    /// nothing about where the stream is.
+    #[inline]
+    pub(crate) fn has_time_origin(&self) -> bool {
+        self.initialised
+    }
+
     /// Queue a GNSS fix.
     ///
     /// It is consumed by the next [`GinsEngine::add_imu`] whose interval
     /// contains it. Invalid fixes are dropped rather than queued — a fix with a
-    /// zero sigma would make the innovation covariance singular.
-    pub fn add_gnss(&mut self, fix: GnssFix) -> bool {
+    /// zero sigma would make the innovation covariance singular — and so are
+    /// fixes whose epoch the engine has already propagated past, because no
+    /// later interval can contain them. Both are reported, not swallowed: a
+    /// receiver delivers its fix tens to hundreds of milliseconds after the
+    /// epoch it describes, so on hardware a late fix is the ordinary case and
+    /// the caller needs to know it happened. [`crate::rewind`] is how a late
+    /// fix gets applied anyway.
+    ///
+    /// Before the first IMU sample there is no current time, and any valid fix
+    /// is queued.
+    pub fn add_gnss(&mut self, fix: GnssFix) -> GnssQueued {
         if !fix.is_valid() {
-            return false;
+            return GnssQueued::Invalid;
         }
+        // The next interval starts at the current time. A fix within the
+        // tolerance of it is `AtStart` of that interval and still usable;
+        // anything earlier is not.
+        if self.initialised && fix.time.seconds_since(self.state.time) < -self.epoch_tolerance {
+            self.stale_fixes = self.stale_fixes.saturating_add(1);
+            return GnssQueued::Stale;
+        }
+        let replaced = self.pending_gnss.is_some();
         self.pending_gnss = Some(fix);
-        true
+        if replaced {
+            GnssQueued::Replaced
+        } else {
+            GnssQueued::Queued
+        }
     }
 
     /// Process one IMU sample, applying any pending GNSS fix at the right point
@@ -187,6 +261,15 @@ impl GinsEngine {
         let imu = self.state.imu_error.compensate(&raw);
         match self.classify_gnss(&imu) {
             GnssPlacement::None => {
+                self.propagate(&imu);
+            }
+            GnssPlacement::Stale => {
+                // Queued before the first sample fixed the time origin, or the
+                // stream jumped. Either way it is unusable, and a slot that
+                // holds it would present the next `add_gnss` as a replacement
+                // of something that never had a chance.
+                self.pending_gnss = None;
+                self.stale_fixes = self.stale_fixes.saturating_add(1);
                 self.propagate(&imu);
             }
             GnssPlacement::AtStart => {
@@ -215,23 +298,9 @@ impl GinsEngine {
     }
 
     fn classify_gnss(&self, imu: &ImuSample) -> GnssPlacement {
-        let Some(fix) = self.pending_gnss else {
-            return GnssPlacement::None;
-        };
-        let start = imu.time.add_seconds(-imu.dt);
-        let from_start = fix.time.seconds_since(start);
-        let from_end = fix.time.seconds_since(imu.time);
-        if from_start.abs() <= self.epoch_tolerance {
-            GnssPlacement::AtStart
-        } else if from_end.abs() <= self.epoch_tolerance {
-            GnssPlacement::AtEnd
-        } else if from_start > 0.0 && from_end < 0.0 {
-            GnssPlacement::Inside
-        } else {
-            // The fix is outside this interval. If it is in the past it is
-            // stale and will never be usable, so drop it; if it is in the
-            // future, hold it for a later sample.
-            GnssPlacement::None
+        match self.pending_gnss {
+            Some(fix) => place(fix.time, imu, self.epoch_tolerance),
+            None => GnssPlacement::None,
         }
     }
 
@@ -439,6 +508,20 @@ impl GinsEngine {
         self.inflations
     }
 
+    /// How many fixes were refused because the engine had already passed
+    /// their epoch, at [`GinsEngine::add_gnss`] or inside
+    /// [`GinsEngine::add_imu`].
+    ///
+    /// Non-zero on a live system means the receiver's latency exceeds what
+    /// the caller is buffering for. Zero fixes applied and a climbing count
+    /// here is the signature of a GNSS stream that is being delivered and
+    /// never used — which, before this counter existed, looked exactly like a
+    /// stream that was never delivered at all.
+    #[inline]
+    pub fn stale_fix_count(&self) -> u32 {
+        self.stale_fixes
+    }
+
     /// Apply a zero-velocity update at the current state.
     ///
     /// See [`measurement::zero_velocity`]; the caller decides *when*, usually
@@ -549,6 +632,31 @@ impl GinsEngine {
                 r.prior_pending = false;
             }
         }
+    }
+}
+
+/// Where an epoch falls relative to the interval an IMU sample covers.
+///
+/// A free function of the sample's own time and length, and nothing of the
+/// engine's state, so that [`crate::rewind`] can ask the question of a sample
+/// in its ring and get the answer the engine will give when that sample is
+/// pushed again. Two copies of this rule would be two rules.
+pub(crate) fn place(epoch: GpsTime, imu: &ImuSample, tolerance: F) -> GnssPlacement {
+    let start = imu.time.add_seconds(-imu.dt);
+    let from_start = epoch.seconds_since(start);
+    let from_end = epoch.seconds_since(imu.time);
+    if from_start.abs() <= tolerance {
+        GnssPlacement::AtStart
+    } else if from_end.abs() <= tolerance {
+        GnssPlacement::AtEnd
+    } else if from_start > 0.0 && from_end < 0.0 {
+        GnssPlacement::Inside
+    } else if from_start < 0.0 {
+        // Behind the interval, and intervals only move forward.
+        GnssPlacement::Stale
+    } else {
+        // Ahead of the interval: hold it for a later sample.
+        GnssPlacement::None
     }
 }
 
@@ -746,8 +854,45 @@ mod tests {
     fn an_invalid_gnss_fix_is_refused() {
         let mut e = GinsEngine::new(options()).unwrap();
         let bad = GnssFix::position_only(GpsTime::from_tow(1.0), origin(), Vec3::ZERO);
-        assert!(!e.add_gnss(bad));
+        assert_eq!(e.add_gnss(bad), GnssQueued::Invalid);
         assert!(e.pending_gnss.is_none());
+    }
+
+    #[test]
+    fn a_fix_behind_the_engine_is_refused_at_ingest_and_counted() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=10 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        // The engine is at 0.10 s; this fix describes 0.05 s.
+        let late = GnssFix::position_only(GpsTime::from_tow(0.05), origin(), Vec3::splat(1.0));
+        assert_eq!(e.add_gnss(late), GnssQueued::Stale);
+        assert!(
+            e.pending_gnss.is_none(),
+            "a stale fix must not occupy the slot"
+        );
+        assert_eq!(e.stale_fix_count(), 1);
+        // Within the tolerance of the current time is the start of the next
+        // interval, and still usable.
+        let edge = GnssFix::position_only(GpsTime::from_tow(0.10), origin(), Vec3::splat(1.0));
+        assert_eq!(e.add_gnss(edge), GnssQueued::Queued);
+        assert_eq!(e.stale_fix_count(), 1);
+    }
+
+    #[test]
+    fn a_second_fix_queued_before_the_first_is_consumed_reports_the_replacement() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
+        let first = GnssFix::position_only(GpsTime::from_tow(0.055), origin(), Vec3::splat(1.0));
+        let second = GnssFix::position_only(GpsTime::from_tow(0.065), origin(), Vec3::splat(1.0));
+        assert_eq!(e.add_gnss(first), GnssQueued::Queued);
+        assert_eq!(e.add_gnss(second), GnssQueued::Replaced);
+        assert_eq!(
+            e.pending_gnss,
+            Some(second),
+            "the newer fix is the one kept"
+        );
     }
 
     #[test]
@@ -772,7 +917,7 @@ mod tests {
         // A fix 3 m north of where the INS thinks it is.
         let target = origin().shifted(Ned::new(3.0, 0.0, 0.0));
         let fix = GnssFix::position_only(GpsTime::from_tow(1.005), target, Vec3::splat(0.1));
-        assert!(e.add_gnss(fix));
+        assert_eq!(e.add_gnss(fix), GnssQueued::Queued);
         e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
 
         let moved = e.nav_state().position().ned_from(origin());
@@ -791,7 +936,7 @@ mod tests {
         }
         let before = e.std_deviations()[P_ID];
         let fix = GnssFix::position_only(GpsTime::from_tow(1.005), origin(), Vec3::splat(0.1));
-        e.add_gnss(fix);
+        let _ = e.add_gnss(fix);
         e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
         let after = e.std_deviations()[P_ID];
         assert!(after < before / 2.0, "sigma went {before} -> {after}");
@@ -808,7 +953,7 @@ mod tests {
             if i % 100 == 0 {
                 let fix =
                     GnssFix::position_only(GpsTime::from_tow(t - 0.005), truth, Vec3::splat(0.5));
-                e.add_gnss(fix);
+                let _ = e.add_gnss(fix);
             }
             let s = stationary_sample(&e, 0.01, t);
             e.add_imu(s).unwrap();
@@ -824,7 +969,7 @@ mod tests {
         e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
         // Land the fix at 40 % through the next interval.
         let fix = GnssFix::position_only(GpsTime::from_tow(0.014), origin(), Vec3::splat(1.0));
-        e.add_gnss(fix);
+        let _ = e.add_gnss(fix);
         assert_eq!(
             e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
             GnssPlacement::Inside
@@ -837,14 +982,20 @@ mod tests {
     #[test]
     fn a_stale_fix_is_discarded_rather_than_applied_late() {
         let mut e = GinsEngine::new(options()).unwrap();
-        e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
-        // A fix from well before the current interval.
+        // Queued before the first sample, so ingest has no current time to
+        // judge it against and accepts it. The first sample then puts the
+        // stream's origin after it.
         let fix = GnssFix::position_only(GpsTime::from_tow(0.001), origin(), Vec3::splat(1.0));
-        e.add_gnss(fix);
+        assert_eq!(e.add_gnss(fix), GnssQueued::Queued);
+        e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
         assert_eq!(
             e.classify_gnss(&stationary_sample(&e, 0.01, 0.02)),
-            GnssPlacement::None
+            GnssPlacement::Stale
         );
+        e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
+        assert!(e.pending_gnss.is_none(), "a stale fix must leave the slot");
+        assert_eq!(e.stale_fix_count(), 1);
+        assert!(e.last_nis().is_none(), "and must not have been applied");
     }
 
     #[test]
@@ -852,7 +1003,7 @@ mod tests {
         let mut e = GinsEngine::new(options()).unwrap();
         e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
         let fix = GnssFix::position_only(GpsTime::from_tow(0.055), origin(), Vec3::splat(1.0));
-        e.add_gnss(fix);
+        let _ = e.add_gnss(fix);
         e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
         assert!(e.pending_gnss.is_some(), "fix must still be queued");
         for i in 3..=6 {
@@ -990,7 +1141,7 @@ mod tests {
                 .unwrap();
         }
         let target = origin().shifted(Ned::new(3.0, 0.0, 0.0));
-        e.add_gnss(GnssFix::position_only(
+        let _ = e.add_gnss(GnssFix::position_only(
             GpsTime::from_tow(1.005),
             target,
             Vec3::splat(0.1),
@@ -1151,7 +1302,7 @@ mod tests {
         );
         fix.velocity = Some(Ned::ZERO);
         fix.velocity_std = Vec3::splat(0.05);
-        e.add_gnss(fix);
+        let _ = e.add_gnss(fix);
         e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
         assert!(
             e.nav_state().speed() < 0.1,
@@ -1177,7 +1328,7 @@ mod tests {
         );
         fix.velocity = Some(Ned::ZERO);
         fix.velocity_std = Vec3::splat(0.05);
-        e.add_gnss(fix);
+        let _ = e.add_gnss(fix);
         e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
         assert!(
             e.nav_state().speed() > 4.9,
@@ -1214,10 +1365,10 @@ mod tests {
         let mut with_velocity = base;
         with_velocity.velocity = Some(Ned::ZERO);
         // velocity_std left at zero — an "infinitely certain" measurement.
-        e.add_gnss(with_velocity);
+        let _ = e.add_gnss(with_velocity);
         e.add_imu(stationary_sample(&e, 0.01, 1.01)).unwrap();
 
-        reference.add_gnss(base);
+        let _ = reference.add_gnss(base);
         reference
             .add_imu(stationary_sample(&reference, 0.01, 1.01))
             .unwrap();
@@ -1531,7 +1682,7 @@ mod tests {
         for i in 1..=6000 {
             let t = i as F * 0.01;
             if i % 100 == 0 {
-                e.add_gnss(GnssFix::position_only(
+                let _ = e.add_gnss(GnssFix::position_only(
                     GpsTime::from_tow(t - 0.005),
                     origin(),
                     Vec3::splat(0.1),

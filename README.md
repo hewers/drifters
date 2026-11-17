@@ -32,7 +32,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
 | **Estimators** | two, sharing one core: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 434, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 449, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -232,9 +232,13 @@ let mut engine = GinsEngine::new(GinsOptions::default())?;
 
 // Push samples in, pull state out. No allocation, no threads, no clock.
 engine.add_imu(imu_sample)?;
-engine.add_gnss(gnss_fix);
+let queued = engine.add_gnss(gnss_fix); // `Stale` once the IMU has passed its epoch
 let solution = engine.nav_state();
 ```
+
+On a device the IMU always has passed it: a receiver reports a fix after the
+epoch it describes. `drifters_filter::RewindEngine` wraps the engine and applies
+a late fix by rewinding, bit-identically to on-time delivery.
 
 Reproduce the accuracy number yourself — no dataset is committed, so fetch it
 first (67 MB, from the KF-GINS authors; the full index is

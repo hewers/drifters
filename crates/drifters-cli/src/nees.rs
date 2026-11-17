@@ -977,7 +977,7 @@ pub mod eskf {
                         fresh.z * (1.0 - rho * rho).sqrt(),
                     );
                 let jitter = fix_error;
-                engine.add_gnss(GnssFix::position_only(
+                let _ = engine.add_gnss(GnssFix::position_only(
                     GpsTime::new(0, t),
                     truth_pos.shifted(Ned {
                         n: jitter.x,
@@ -1188,7 +1188,7 @@ pub mod eskf {
 
                 if k % (1.0 / dt).round() as usize == 0 {
                     let jitter = rng.normal_vec3(gnss_sigma);
-                    engine.add_gnss(GnssFix::position_only(
+                    let _ = engine.add_gnss(GnssFix::position_only(
                         GpsTime::new(0, t),
                         truth_pos.shifted(Ned {
                             n: jitter.x,
