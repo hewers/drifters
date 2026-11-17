@@ -58,6 +58,9 @@ pub const NOISE: usize = 18;
 /// Split by physical source rather than by state block, matching how a
 /// datasheet quotes them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct ProcessNoise {
     /// Gyroscope white noise, `(rad/s)²/Hz`.
     pub gyro: Vec3,
@@ -125,6 +128,7 @@ impl ProcessNoise {
 
 /// What [`EqFilter::update_gated`] did with a measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Verdict {
     /// Applied. Carries the NIS, before any inflation.
     Applied(F),
@@ -146,6 +150,7 @@ pub enum Verdict {
 /// factored, [`Ud`](crate::covariance::Ud), which is what runs in single
 /// precision. See [`crate::covariance`].
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EqFilter<C: Covariance = StateMatrix> {
     /// The observer state `X̂ ∈ G`.
     pub x: Symmetry,

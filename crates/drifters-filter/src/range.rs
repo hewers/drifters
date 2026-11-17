@@ -42,7 +42,7 @@
 use drifters_core::frames::{Ecef, Ned};
 // `std` makes the inherent float methods visible and they win over the trait's,
 // so this looks unused there. See drifters_core::math::real.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Matrix, Vec3};
 use drifters_core::types::Pva;
@@ -64,6 +64,7 @@ const OMEGA_E: F = 7.292_115_146_7e-5;
 /// model, and a receiver that reports pseudoranges generally reports those
 /// corrections alongside them.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct RangeObservation {
     /// Which constellation, in any numbering the caller likes. Only equality
     /// matters — it decides which satellites share a receiver clock and so can

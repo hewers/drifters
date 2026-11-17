@@ -24,7 +24,7 @@
 
 // `Real` supplies the no_std float math; see math::real for why the test
 // harness's injected `std` makes this look unused.
-#[cfg_attr(test, allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use crate::math::Real;
 use crate::F;
 
@@ -69,7 +69,13 @@ fn round(x: F) -> F {
 /// and a time of week, seconds, nanoseconds — are accessors, and the ways of
 /// building one each name the epoch and scale they expect.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct GpsTime {
+    // Serialized under a name that says which epoch, as every constructor
+    // does: a bare `nanos` is how a Unix time gets read as a GPS one.
+    #[cfg_attr(feature = "serde", serde(rename = "gps_nanos"))]
     nanos: u64,
 }
 

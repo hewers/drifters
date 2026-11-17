@@ -35,6 +35,7 @@ use crate::lie::Se23Tangent;
 
 /// The IMU input `u = (ω, a)`, both in the body frame `{I}`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Input {
     /// Gyroscope measurement `ᴵω`, rad/s.
     pub omega: Vec3,

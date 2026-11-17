@@ -4,7 +4,7 @@ use core::ops::{Add, AddAssign, Div, Index, IndexMut, Mul, Neg, Sub, SubAssign};
 
 // `Real` supplies the no_std float math; see math::real for why the test
 // harness's injected `std` makes this look unused.
-#[cfg_attr(test, allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use super::{Mat3, Real};
 use crate::F;
 
@@ -14,7 +14,10 @@ use crate::F;
 /// frame specific; what they mean depends on the frame the value is tagged with
 /// at the call site. See `docs/frames.md`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Vec3 {
     /// First component.
     pub x: F,

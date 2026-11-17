@@ -27,7 +27,7 @@
 //! which and why.
 
 use drifters_core::earth::Wgs84;
-use drifters_core::estimator::{Estimator, GnssQueued, EPOCH_TOLERANCE};
+use drifters_core::estimator::{epoch_tolerance, Estimator, GnssQueued};
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::rewind::{FixOutcome, Rewind, Rewindable};
@@ -220,9 +220,13 @@ fn a_fix_is_classified_at_ingest<F: Fixture>() {
     );
     assert_eq!(e.stale_fix_count(), 2);
     // Within the shared tolerance of the present is the start of the next
-    // interval, and still usable.
+    // interval, and still usable. The tolerance is the latest interval's.
     assert_eq!(
-        e.add_gnss(fix_at(t - 0.5 * EPOCH_TOLERANCE, origin(), 1.0)),
+        e.add_gnss(fix_at(t - 1.5 * epoch_tolerance(0.01), origin(), 1.0)),
+        GnssQueued::Stale
+    );
+    assert_eq!(
+        e.add_gnss(fix_at(t - 0.5 * epoch_tolerance(0.01), origin(), 1.0)),
         GnssQueued::Queued
     );
     // One pending slot: a second fix displaces the first and says so.
@@ -230,7 +234,7 @@ fn a_fix_is_classified_at_ingest<F: Fixture>() {
         e.add_gnss(fix_at(t + 0.005, origin(), 1.0)),
         GnssQueued::Replaced
     );
-    assert_eq!(e.stale_fix_count(), 2);
+    assert_eq!(e.stale_fix_count(), 3);
     assert!(e.last_nis().is_none(), "nothing is applied at ingest");
 }
 

@@ -31,7 +31,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Footprint** | **10.4 KiB** peak stack (15-state), 18.7 KiB (21-state), on Cortex-M4, late fixes included |
 | | 13.2 KiB for the equivariant filter's engine, under the same 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
-| **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless` |
+| **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
 | **Tests** | 449, plus fuzzing and a bare-metal QEMU harness |
 
@@ -262,6 +262,9 @@ drifters-eqf       no_std, no alloc — equivariant filter, Lie groups,
                    self-calibration, EqfEngine
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
 drifters-cli       std — replay, estimator comparison, NEES and tuning
+examples/rtic-imu  firmware — IMU interrupt to engine to telemetry under RTIC,
+                   run on QEMU's STM32F405 in CI
+cortex-m-harness   firmware — stack, size and panic measurements under QEMU
 ```
 
 ## Quick start
@@ -287,6 +290,42 @@ epoch it describes. `drifters_filter::RewindEngine` wraps the engine and applies
 a late fix by rewinding, bit-identically to on-time delivery;
 `drifters_eqf::EqfRewindEngine` does the same for the equivariant filter, with
 the same code.
+
+The options types are `#[non_exhaustive]`, so a new setting is not a breaking
+change ([adr/0010](docs/adr/0010-non-exhaustive-settings.md)). Start from the
+defaults and assign what differs:
+
+```rust
+let mut options = GinsOptions::default()
+    .with_initial_state(position, velocity, attitude)
+    .with_antenna_lever_arm(lever_arm);
+options.max_consecutive_rejections = 20;
+```
+
+With `--features serde` the same options read from a file on a host, and a
+partial file takes the defaults for the rest. A misspelt setting is an error,
+not a silent default:
+
+```json
+{ "antenna_lever_arm": [0.14, -0.02, -1.10], "max_consecutive_rejections": 20 }
+```
+
+### On a microcontroller
+
+[`examples/rtic-imu`](examples/rtic-imu) is the firmware around the engine: an
+IMU data-ready interrupt that timestamps and queues, the filter in a task the
+interrupts preempt, a GNSS receiver whose fixes all arrive 120 ms late, and a
+published solution. It runs on QEMU's STM32F405 board and checks its own result.
+Its README works through how deep the IMU queue must be to absorb a rewind.
+On a Cortex-M4F, use these features:
+
+```toml
+drifters-filter = { version = "0.1", features = ["f32-covariance", "defmt"] }
+```
+
+`f32-covariance` puts the covariance arithmetic on the single-precision FPU, and
+`defmt` gives every public type a `defmt::Format` for logging. Neither feature
+allocates.
 
 The equivariant filter is driven the same way, and code that does not care
 which it has can take either:
@@ -350,7 +389,8 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 ## Minimum supported Rust
 
 **1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf` — the crates
-that go on the target, which depend on nothing but `libm`. **1.88** for
+that go on the target, which depend on nothing but `libm`, and on `defmt` and
+`serde` only when asked. **1.88** for
 `drifters-proto` and the crates downstream of it, forced by `micropb` and
 `heapless`. CI builds the first three at 1.85 on every push.
 

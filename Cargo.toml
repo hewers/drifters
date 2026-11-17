@@ -29,12 +29,23 @@ drifters-gnss = { version = "0.1.0", path = "crates/drifters-gnss" }
 drifters-filter = { version = "0.1.0", path = "crates/drifters-filter", default-features = false }
 drifters-proto = { version = "0.1.0", path = "crates/drifters-proto", default-features = false }
 
-# The only non-dev dependency permitted in the no_std core stack.
+# The only required non-dev dependency in the no_std core stack.
 libm = "0.2"
+
+# Optional, each behind a feature of the same name and off by default: `Format`
+# for logging on target, and `Serialize`/`Deserialize` for host-side
+# configuration. `serde` is used without its `std` feature, so enabling it keeps
+# the crates `no_std`; a host program that turns `serde/std` on is a `std`
+# build, with the one-ulp caveat adr/0004 describes.
+defmt = "1"
+serde = { version = "1", default-features = false, features = ["derive"] }
 
 # dev / host-only
 approx = "0.5"
 proptest = "1"
+# `float_roundtrip`: the default parser can be an ulp out, and the round-trip
+# tests compare exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [profile.release]
 lto = "fat"

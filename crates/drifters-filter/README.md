@@ -34,9 +34,15 @@ Features:
   default build cannot keep up with a 100 Hz IMU, and this one is the
   configuration to use.
 - `smoothing` — records what an RTS backward pass needs from the forward one.
+- `defmt` — `defmt::Format` on every public type that implements `Debug`, for
+  logging on target.
+- `serde` — `Serialize` and `Deserialize` on `GinsOptions` and
+  `StationarityConfig`, for configuration loaded on a host. A partial file
+  takes the defaults for the rest; an unknown setting is an error.
 
 The first two are not additive. Each changes what the filter computes, so
-enabling one through feature unification changes results.
+enabling one through feature unification changes results. The last two are
+additive and change no arithmetic on target.
 
 ## Licence
 

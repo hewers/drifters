@@ -20,7 +20,10 @@ use crate::F;
 
 /// A quaternion, scalar-first, normally of unit length.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Quat {
     /// Scalar part.
     pub w: F,
@@ -321,6 +324,9 @@ impl Mul for Quat {
 
 /// Roll, pitch and yaw in radians, in the Z-Y-X aerospace sequence.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Euler {
     /// Rotation about the body forward axis, radians.
     pub roll: F,

@@ -1058,9 +1058,9 @@ harness code:
 
 | | dense `f64` | factored `f32` |
 |---|---|---|
-| `EqfEngine` | 4 672 bytes | **2 072 bytes** |
-| `EqfRewindEngine<120, 32>` | 25 608 bytes | 17 808 bytes |
-| peak stack, a late fix through the rewind layer included | 15 472 bytes | **14 000 bytes** |
+| `EqfEngine` | 4 680 bytes | **2 080 bytes** |
+| `EqfRewindEngine<120, 32>` | 25 632 bytes | 17 832 bytes |
+| peak stack, a late fix through the rewind layer included | 15 480 bytes | **14 008 bytes** |
 | instructions per `add_imu` | 4.29 million | **0.84 million** |
 | at an instruction per cycle, 168 MHz | 25.5 ms | **5.0 ms** |
 | panic machinery linked | none | none |
@@ -1129,7 +1129,7 @@ is bit-identical to the expressions, which are kept as a test reference. It
 read 13 488 bytes after that, and 13 568 once the GCU update took its
 inflated noise into the Joseph form.
 
-It reads 15 472 now, on its update paths only — propagation went the other
+It read 15 472, on its update paths only — propagation went the other
 way, 9 856 to 9 772 — and the cause has not been isolated. The dense
 arithmetic is unchanged and its results are bit-identical; what changed
 around it is that the update now reaches it through the covariance trait.
@@ -1140,7 +1140,9 @@ The factored form's first measurement was 19 036, higher than the dense,
 because its time update held `A` in `f64`, `A dt` in `f32`, a whole `Φ`, the
 Gram–Schmidt rows and `G` in `f64`. `Φ` is now formed a row at a time, and
 `A` and `G` are handed over entry by entry and narrowed straight into the
-factored buffers, which neither form's results noticed: 14 000.
+factored buffers, which neither form's results noticed: 14 000. Both rose
+by 8 bytes, to 15 480 and 14 008, when the engine began recording its last
+IMU interval for the epoch tolerance: the engine is copied on those paths.
 
 ## Implementation plan
 

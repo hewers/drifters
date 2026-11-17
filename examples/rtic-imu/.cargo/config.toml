@@ -1,0 +1,19 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+# `cargo run --release` boots the firmware on QEMU's STM32F405 board.
+#
+# `-icount shift=3` makes every instruction take 8 ns of emulated time, a
+# 125 MIPS core. The firmware's timers run in that time, so the IMU's 10 ms
+# period is a fixed number of instructions. That makes runs deterministic,
+# and it makes a filter that cannot keep up fall behind here too. It is a
+# model, not a timing: QEMU models no pipeline, cache or wait states (see
+# `cortex-m-harness`).
+#
+# Semihosting carries the telemetry text and the exit status.
+[target.thumbv7em-none-eabihf]
+runner = """qemu-system-arm \
+  -machine netduinoplus2 -nographic \
+  -icount shift=3 \
+  -semihosting-config enable=on,target=native \
+  -kernel"""

@@ -328,10 +328,10 @@ dense covariance, and `PEAK_EQF_F32` with the factored single-precision one.
 | | peak stack, bytes |
 |---|---|
 | ESKF, 21-state | 19 120 |
-| ESKF, 21-state, `f32-covariance` | 18 208 |
+| ESKF, 21-state, `f32-covariance` | 18 200 |
 | ESKF, 15-state (`reduced-state`) | 10 688 |
-| EqF engine, dense `f64` | **15 472** |
-| EqF engine, factored `f32` | **14 000** |
+| EqF engine, dense `f64` | **15 480** |
+| EqF engine, factored `f32` | **14 008** |
 
 The two engines are measured by the same generic code, written against
 [`Estimator`](../crates/drifters-core/src/estimator.rs) and
@@ -377,7 +377,9 @@ inflated noise into the Joseph form they read 9 856, 13 568 and 12 328, and
 since the update reached them through the covariance trait, 9 772, 15 472 and
 14 392 — the 1.9 KB on the update paths not yet explained; see
 [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained). The factored
-form reads 10 100, 14 000 and 12 920.
+form reads 10 100, 14 000 and 12 920. Each engine-sized frame grew by 8 bytes
+when the engine began recording its last IMU interval: 9 780, 15 480 and
+10 108, 14 008.
 
 Each of propagation, the Joseph update and the reset's covariance transport now
 runs in two buffers, with `Σ` itself the destination of the last product, and
@@ -657,6 +659,29 @@ _start`, and locked the core up on boot with `can't escalate 3 to HardFault`.
 The link argument now comes from `build.rs`, which `RUSTFLAGS` does not
 override. Both are one-line causes that a green checkmark would never have
 distinguished from a healthy run.
+
+### The engine inside firmware
+
+The harness calls the engine from one loop. Firmware calls it from a task
+that interrupts preempt, fed by queues that the interrupts fill.
+[`examples/rtic-imu`](../examples/rtic-imu) is that arrangement under RTIC, on
+QEMU's STM32F405 board. An IMU data-ready interrupt runs every 10 ms, and a
+receiver delivers each second's fix 120 ms late, so every fix goes through the
+rewind layer. Under `-icount shift=3` each instruction is 8 ns of emulated
+time, so a step of the filter takes a fixed share of the IMU period, and the
+run is deterministic.
+
+The firmware checks itself and exits non-zero if it fails. It must end within
+10 cm of the simulated truth, drop no IMU sample, and apply every fix. CI
+runs it. It currently ends 2.8 cm from the truth with all 19 fixes rewound;
+the longest replay is 27 samples and the IMU backlog peaks at 11 of 32.
+
+What it proves is the integration. The engine runs correctly when it is
+preempted, a late fix arrives between two samples, and the queue absorbs a
+rewind burst. The failure mode it was written to catch is real: the same
+firmware built without `f32-covariance` cannot keep up, drops 1 368 of 2 000
+samples and fails. Its timing is a model, for the reasons in the next
+section, so the margin it shows still needs silicon.
 
 ## Layer 10 — the data path links no panic machinery
 

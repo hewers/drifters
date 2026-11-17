@@ -4,7 +4,7 @@ use drifters_core::estimator::chi_squared;
 use drifters_core::frames::{Lla, Ned};
 // `Real` supplies the no_std float math; with `std` linked the inherent
 // methods win and the import goes unused.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::types::{Attitude, ImuNoise, Pva};
@@ -36,7 +36,28 @@ use crate::linear::DIM;
 ///   [`compensate_earth`](Self::compensate_earth) asks.
 /// - **Robustness is inflation first, a gate second.** See
 ///   [`gcu_alpha`](Self::gcu_alpha).
+///
+/// `#[non_exhaustive]`, like `GinsOptions` and for the same reason
+/// (`docs/adr/0010`): a new setting is not a breaking change. Outside this
+/// crate, start from [`Default`] and assign:
+///
+/// ```
+/// use drifters_core::frames::{Lla, Ned};
+/// use drifters_core::math::{Euler, Vec3};
+/// use drifters_eqf::{EqfEngine, EqfOptions};
+///
+/// let mut options = EqfOptions::default()
+///     .with_initial_state(Lla::from_degrees(30.44, 114.47, 20.0), Ned::ZERO, Euler::default())
+///     .with_lever_arm(Vec3::ZERO, Vec3::splat(0.5));
+/// options.position_gate = Some(50.0);
+/// let engine = EqfEngine::new(options).expect("valid configuration");
+/// # let _ = engine;
+/// ```
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct EqfOptions {
     /// Initial position, velocity and attitude.
     pub initial_state: Pva,
@@ -360,6 +381,7 @@ impl EqfOptions {
 
 /// Why an [`EqfOptions`] cannot be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum ConfigError {
     /// The initial geodetic position is out of range or not finite.

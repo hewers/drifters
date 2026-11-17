@@ -29,6 +29,7 @@ use crate::F;
 
 /// A local Cartesian frame, NED metres about a geodetic origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct LocalFrame {
     origin: Lla,
     /// `C_en` at the origin, cached: every conversion needs it and it depends
@@ -85,7 +86,7 @@ impl LocalFrame {
     /// not grow the way ground track does.
     #[inline]
     pub fn horizontal_range(local: Vec3) -> F {
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use crate::math::Real;
         (local.x * local.x + local.y * local.y).sqrt()
     }

@@ -1,0 +1,46 @@
+[package]
+name = "rtic-imu"
+description = "Worked example: an IMU interrupt feeding a drifters engine under RTIC, with telemetry out"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Excluded from the main workspace, like `cortex-m-harness`: it is firmware,
+# with its own target and linker configuration, and `cargo test --workspace`
+# must not try to build it.
+[workspace]
+
+[dependencies]
+# The two features a firmware build wants. `f32-covariance` puts the
+# covariance arithmetic on the Cortex-M4F's single-precision FPU, the
+# configuration that keeps up with a 100 Hz IMU on this class of part; `defmt`
+# lets every drifters type go into a log line.
+drifters-core = { path = "../../crates/drifters-core", features = ["defmt"] }
+drifters-filter = { path = "../../crates/drifters-filter", features = ["defmt", "f32-covariance"] }
+
+rtic = { version = "2.4", features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "3", features = ["cortex-m-systick"] }
+rtic-sync = "1.6"
+# STM32F405, the part QEMU's `netduinoplus2` machine emulates. RTIC takes its
+# interrupt names and vector table from the PAC.
+stm32f4 = { version = "0.16", features = ["stm32f405", "rt"] }
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+
+# Diagnostics over RTT, which a debug probe reads (`probe-rs run`). Under QEMU
+# nothing reads the buffer, and nothing has to.
+defmt = "1"
+defmt-rtt = "1"
+
+# Telemetry and the exit status under QEMU. On a board, telemetry is a UART
+# and the exit is a reset; see the README.
+cortex-m-semihosting = "0.5"
+panic-semihosting = { version = "0.6", features = ["exit"] }
+
+[profile.release]
+# As `cortex-m-harness` builds, so the instruction counts it measures apply.
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true

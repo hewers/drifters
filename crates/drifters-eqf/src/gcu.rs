@@ -146,7 +146,7 @@ pub fn inflate<const M: usize>(
 #[inline]
 pub fn beta(r: F) -> F {
     if r < 1.0 {
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use drifters_core::math::Real;
         let root = Real::sqrt(r.max(0.0));
         (1.0 + root) * (1.0 + root) / (1.0 + r)

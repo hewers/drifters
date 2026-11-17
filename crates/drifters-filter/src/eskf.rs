@@ -7,7 +7,7 @@ use drifters_core::earth::{Local, Wgs84};
 // harness, or this crate's own `std` feature — makes `std`'s inherent
 // `f64::sin_cos` visible, and inherent methods win over trait methods, so the
 // import looks unused there. See drifters_core::math::real.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Cholesky, Mat3, Matrix, Vec3};
 use drifters_core::types::{ImuNoise, ImuSample, Pva};
@@ -211,6 +211,7 @@ pub(crate) mod tests_support {
 /// correct both makes the pair drift apart until the tilt's gravity
 /// mis-projection dominates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeldStates(u32);
 
 impl HeldStates {
@@ -319,6 +320,7 @@ pub use drifters_core::estimator::chi_squared;
 
 /// The running filter state: the error-state estimate and its covariance.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Eskf {
     /// Error-state estimate. Zero immediately after every feedback.
     pub dx: StateVector,

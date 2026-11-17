@@ -278,20 +278,20 @@ impl Config {
             correlation_time: scalar("corrtime")? * 3600.0,
         };
 
-        let options = GinsOptions {
-            initial_position_std: vec3("initposstd", 1.0)?,
-            initial_velocity_std: vec3("initvelstd", 1.0)?,
-            initial_attitude_std: vec3("initattstd", DEG_TO_RAD)?,
-            initial_gyro_bias_std: vec3("initbgstd", DEG_PER_HOUR_TO_RAD_PER_SEC)
-                .unwrap_or(gyro_bias_std),
-            initial_accel_bias_std: vec3("initbastd", MGAL_TO_M_S2).unwrap_or(accel_bias_std),
-            initial_gyro_scale_std: vec3("initsgstd", PPM).unwrap_or(gyro_scale_std),
-            initial_accel_scale_std: vec3("initsastd", PPM).unwrap_or(accel_scale_std),
-            imu_noise,
-            antenna_lever_arm: vec3("antlever", 1.0)?,
-            ..GinsOptions::default()
-        }
-        .with_initial_state(position, velocity, attitude);
+        // `GinsOptions` is `#[non_exhaustive]` (adr/0010): start from the
+        // defaults and set what the file says.
+        let mut options = GinsOptions::default()
+            .with_initial_state(position, velocity, attitude)
+            .with_imu_noise(imu_noise)
+            .with_antenna_lever_arm(vec3("antlever", 1.0)?);
+        options.initial_position_std = vec3("initposstd", 1.0)?;
+        options.initial_velocity_std = vec3("initvelstd", 1.0)?;
+        options.initial_attitude_std = vec3("initattstd", DEG_TO_RAD)?;
+        options.initial_gyro_bias_std =
+            vec3("initbgstd", DEG_PER_HOUR_TO_RAD_PER_SEC).unwrap_or(gyro_bias_std);
+        options.initial_accel_bias_std = vec3("initbastd", MGAL_TO_M_S2).unwrap_or(accel_bias_std);
+        options.initial_gyro_scale_std = vec3("initsgstd", PPM).unwrap_or(gyro_scale_std);
+        options.initial_accel_scale_std = vec3("initsastd", PPM).unwrap_or(accel_scale_std);
 
         let end_time = scalar("endtime").ok().filter(|t| *t >= 0.0);
         Ok(Self {

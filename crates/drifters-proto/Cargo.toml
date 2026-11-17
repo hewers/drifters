@@ -15,6 +15,7 @@ keywords = ["navigation", "protobuf", "gnss", "ins", "no-std"]
 [dependencies]
 drifters-core = { workspace = true }
 drifters-filter = { workspace = true }
+defmt = { workspace = true, optional = true }
 # Allocation-free protobuf runtime. `container-heapless` supplies the
 # fixed-capacity vectors the generated repeated fields use.
 micropb = { version = "0.6", default-features = false, features = [
@@ -43,6 +44,9 @@ default = []
 ## Pass through to `drifters-filter`: 15 states, no scale factors.
 reduced-state = ["drifters-filter/reduced-state"]
 std = ["drifters-core/std", "drifters-filter/std"]
+## `defmt::Format` on [`ConvertError`], and through to `drifters-core` and
+## `drifters-filter`. The generated message types do not implement it.
+defmt = ["dep:defmt", "drifters-core/defmt", "drifters-filter/defmt"]
 
 [lints.rust]
 unsafe_code = "forbid"

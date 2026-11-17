@@ -768,21 +768,15 @@ pub fn run_gsdc(
     for kind in engines {
         let run = match kind {
             EngineKind::Eskf => {
-                let options = GinsOptions {
-                    imu_noise: noise,
-                    initial_position_std: sigma,
-                    initial_velocity_std: drifters_core::math::Vec3::splat(2.0),
-                    initial_attitude_std: drifters_core::math::Vec3::new(
-                        5.0 * drifters_core::math::DEG_TO_RAD,
-                        5.0 * drifters_core::math::DEG_TO_RAD,
-                        30.0 * drifters_core::math::DEG_TO_RAD,
-                    ),
-                    ..GinsOptions::default()
-                }
-                .with_initial_state(
-                    first.position,
-                    drifters_core::frames::Ned::ZERO,
-                    attitude,
+                let mut options = GinsOptions::default()
+                    .with_imu_noise(noise)
+                    .with_initial_state(first.position, drifters_core::frames::Ned::ZERO, attitude);
+                options.initial_position_std = sigma;
+                options.initial_velocity_std = drifters_core::math::Vec3::splat(2.0);
+                options.initial_attitude_std = drifters_core::math::Vec3::new(
+                    5.0 * drifters_core::math::DEG_TO_RAD,
+                    5.0 * drifters_core::math::DEG_TO_RAD,
+                    30.0 * drifters_core::math::DEG_TO_RAD,
                 );
                 gsdc_pass(GinsEngine::new(options)?, &inputs, tight, quiet)?
             }

@@ -74,10 +74,17 @@ than the `libm` crate. Two things cause that:
    `extern crate std` to get `std::error::Error` impls. Found later, when
    `clippy --all-features` reported the same unused import against the library
    target rather than the test target.
+3. **A dependency that links `std`**, which brings in `std` as surely as
+   declaring it does. The `serde` feature is the one this project offers. The
+   crates enable `serde` without its `std` feature, but any host program that
+   also uses `serde_json`, or almost any other format crate, turns `serde/std`
+   on through feature unification, and from then on `x.sin()` in the filter is
+   the platform's. This one was found the first time the serde tests ran.
 
 The affected imports therefore carry
-`#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]` — both triggers,
-not just the first — with a comment, rather than a blanket allow.
+`#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]`
+(every trigger, not just the first) with a comment, rather than a blanket
+allow. `defmt` does not link `std` and is not a trigger.
 
 A default `no_std` build links no `std` at all and always uses `libm`. That is
 the configuration firmware ships.

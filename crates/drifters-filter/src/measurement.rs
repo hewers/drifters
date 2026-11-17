@@ -35,7 +35,7 @@
 use drifters_core::frames::Ned;
 // `Real` supplies the no_std float math; see drifters_core::math::real for why
 // anything that links `std` makes this look unused.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{wrap_pi, Mat3, Matrix, Vec3};
 use drifters_core::types::{ImuSample, Pva};
@@ -49,6 +49,7 @@ use crate::state::{N_STATE, PHI_ID, P_ID, V_ID};
 /// `M` is the measurement dimension: 1 for a scalar sensor, 2 for
 /// non-holonomic constraints, 3 for a full velocity or position fix.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Measurement<const M: usize> {
     /// Predicted minus measured.
     pub innovation: Matrix<M, 1>,
@@ -298,7 +299,14 @@ pub fn gnss_velocity(
 }
 
 /// Thresholds for [`StationarityDetector`].
+///
+/// `#[non_exhaustive]` (`docs/adr/0010`): start from [`Default`] and assign
+/// the thresholds to change.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct StationarityConfig {
     /// Maximum RMS angular rate to call the vehicle still, rad/s.
     ///
@@ -339,6 +347,7 @@ impl Default for StationarityConfig {
 /// This is a heuristic, and it will occasionally be wrong. That is why every
 /// ZUPT it triggers still goes through a chi-squared gate.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StationarityDetector<const N: usize> {
     gyro_sq: [F; N],
     accel_mag: [F; N],

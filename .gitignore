@@ -10,6 +10,7 @@
 /fuzz/corpus
 /fuzz/artifacts
 /cortex-m-harness/target
+/examples/*/target
 
 # Source papers: fetched locally, not redistributed. Neither is clearly
 # redistributable by a third party — see docs/papers/README.md.

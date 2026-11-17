@@ -121,7 +121,7 @@
 //! continue from. The same holds for an error from [`Rewind::add_imu`]: the
 //! sample is not recorded, and the record is no longer a history.
 
-use crate::estimator::{place, Estimator, FilterError, GnssQueued, Placement, EPOCH_TOLERANCE};
+use crate::estimator::{epoch_tolerance, place, Estimator, FilterError, GnssQueued, Placement};
 use crate::time::GpsTime;
 use crate::types::{GnssFix, ImuSample};
 use crate::F;
@@ -137,10 +137,10 @@ use crate::F;
 ///   The engine's named methods and `apply_aid` must be the same code path,
 ///   or a replay is not a replay.
 /// - **The engine's own placement.** [`Rewindable::has_time_origin`] and
-///   [`Rewindable::epoch_tolerance`] are what the engine uses to decide which
-///   sample consumes a fix. A rewind asks the same question of a recorded
-///   sample before spending a replay on the answer, and it must get the
-///   answer the engine will give.
+///   [`Rewindable::latest_interval`] are what the engine uses to decide
+///   whether a fix is behind it. A rewind asks the same question of a
+///   recorded sample before spending a replay on the answer, and it must get
+///   the answer the engine will give.
 pub trait Rewindable: Estimator + Copy {
     /// One aiding call, as a value a replay can repeat.
     type Aid: Copy + core::fmt::Debug;
@@ -155,16 +155,18 @@ pub trait Rewindable: Estimator + Copy {
     /// stream is.
     fn has_time_origin(&self) -> bool;
 
-    /// How close to an interval boundary the engine treats a fix as lying on
-    /// it. [`EPOCH_TOLERANCE`], unless the engine places fixes some other way.
-    #[inline]
-    fn epoch_tolerance(&self) -> F {
-        EPOCH_TOLERANCE
-    }
+    /// Length of the most recent IMU interval the engine processed, seconds.
+    ///
+    /// The engine's [`Estimator::add_gnss`] refuses a fix more than
+    /// [`epoch_tolerance`] of this behind [`Estimator::timestamp`], since the
+    /// next interval's length is not known until its sample arrives. Zero
+    /// before [`Rewindable::has_time_origin`].
+    fn latest_interval(&self) -> F;
 }
 
 /// What [`Rewind::add_gnss`] did with a fix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[must_use = "a Stale or Invalid fix was not applied"]
 #[non_exhaustive]
 pub enum FixOutcome {
@@ -192,6 +194,7 @@ pub enum FixOutcome {
 ///
 /// Read through [`Rewind::history`].
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Record<A> {
     /// Sequence number of the IMU sample this call followed. A replay from an
     /// anchor at sequence `s` repeats the records tagged `s` before pushing
@@ -201,6 +204,7 @@ pub struct Record<A> {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum Action<A> {
     Gnss(GnssFix),
     Aid(A),
@@ -402,8 +406,6 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         if !fix.is_valid() {
             return Ok(FixOutcome::Invalid);
         }
-        let tolerance = self.live.epoch_tolerance();
-
         // Ahead of the stream: a later interval will contain it, and the
         // engine's own queue is the right place. Before the first sample there
         // is no stream to be behind.
@@ -414,8 +416,9 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         // at the start of the next one, after them — the same update at the
         // same state only when nothing came between, which this type cannot
         // promise. So it is late, by one sample, and takes the other path.
-        if !self.live.has_time_origin() || fix.time.seconds_since(self.live.timestamp()) > tolerance
-        {
+        // The tolerance is that sample's own, as `place` would have used.
+        let latest = epoch_tolerance(self.live.latest_interval());
+        if !self.live.has_time_origin() || fix.time.seconds_since(self.live.timestamp()) > latest {
             return Ok(match self.live.add_gnss(fix) {
                 GnssQueued::Queued => {
                     self.record(self.seq, Action::Gnss(fix));
@@ -441,12 +444,13 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         // after its own sample, so a fix that sample would have consumed is
         // out of reach.
         if self.older.has_time_origin()
-            && fix.time.seconds_since(self.older.timestamp()) <= tolerance
+            && fix.time.seconds_since(self.older.timestamp())
+                <= epoch_tolerance(self.older.latest_interval())
         {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
             return Ok(FixOutcome::Stale);
         }
-        let Some(consumer) = self.consuming_sample(fix.time, tolerance) else {
+        let Some(consumer) = self.consuming_sample(fix.time) else {
             // Cannot happen while the stream is behind the fix and the ring
             // holds the latest sample, but a counted refusal beats a panic.
             self.stale_fixes = self.stale_fixes.saturating_add(1);
@@ -467,8 +471,7 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         } else {
             consumer
         };
-        if judge <= self.seq && place(fix.time, &self.sample(judge), tolerance) == Placement::Stale
-        {
+        if judge <= self.seq && place(fix.time, &self.sample(judge)) == Placement::Stale {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
             return Ok(FixOutcome::Stale);
         }
@@ -589,10 +592,13 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
     }
 
     /// The sequence number of the ring sample that would consume a fix at
-    /// `epoch`: the first whose end the epoch does not lie beyond.
-    fn consuming_sample(&self, epoch: GpsTime, tolerance: F) -> Option<u64> {
-        (self.older_seq + 1..=self.seq)
-            .find(|&s| epoch.seconds_since(self.sample(s).time) <= tolerance)
+    /// `epoch`: the first whose end the epoch does not lie beyond, by more
+    /// than that sample's own tolerance.
+    fn consuming_sample(&self, epoch: GpsTime) -> Option<u64> {
+        (self.older_seq + 1..=self.seq).find(|&s| {
+            let sample = self.sample(s);
+            epoch.seconds_since(sample.time) <= epoch_tolerance(sample.dt)
+        })
     }
 
     /// Restore an anchor and push everything since it again.
@@ -664,6 +670,34 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
     }
 }
 
+/// The live engine and the counters, without the anchors or the rings.
+///
+/// Written by hand rather than derived, for two reasons. A derive bounds only
+/// `E`, and the event ring also needs `E::Aid: Format`. And `Debug`'s output
+/// is the wrong thing to put on a defmt link: over the ESKF at `<120, 32>` the
+/// rings and the two anchors are about 18 KiB, to say what the counters say in
+/// under a hundred bytes. The live engine is printed whole.
+#[cfg(feature = "defmt")]
+impl<E, const SAMPLES: usize, const EVENTS: usize> defmt::Format for Rewind<E, SAMPLES, EVENTS>
+where
+    E: Rewindable + defmt::Format,
+{
+    fn format(&self, f: defmt::Formatter<'_>) {
+        defmt::write!(
+            f,
+            "Rewind {{ live: {}, seq: {=u64}, coverage: {=usize}, rewinds: {=u32}, \
+             longest_replay: {=u32}, stale_fixes: {=u32}, dropped_events: {=u32} }}",
+            self.live,
+            self.seq,
+            self.len,
+            self.rewinds,
+            self.longest_replay,
+            self.stale_fixes,
+            self.dropped_events,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! The machinery, against an engine that does no arithmetic.
@@ -688,6 +722,7 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     struct Tally {
         time: GpsTime,
+        interval: F,
         started: bool,
         pending: Option<GnssFix>,
         hash: u64,
@@ -699,6 +734,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 time: GpsTime::ZERO,
+                interval: 0.0,
                 started: false,
                 pending: None,
                 hash: 0xCBF2_9CE4_8422_2325,
@@ -729,14 +765,13 @@ mod tests {
             if !sample.is_valid() {
                 return Ok(());
             }
+            self.interval = sample.dt;
             if !self.started {
                 self.time = sample.time;
                 self.started = true;
                 return Ok(());
             }
-            let placement = self
-                .pending
-                .map(|fix| place(fix.time, &sample, EPOCH_TOLERANCE));
+            let placement = self.pending.map(|fix| place(fix.time, &sample));
             match placement {
                 Some(Placement::Stale) => {
                     self.pending = None;
@@ -758,7 +793,7 @@ mod tests {
             if !fix.is_valid() {
                 return GnssQueued::Invalid;
             }
-            if self.started && fix.time.seconds_since(self.time) < -EPOCH_TOLERANCE {
+            if self.started && fix.time.seconds_since(self.time) < -epoch_tolerance(self.interval) {
                 self.stale += 1;
                 return GnssQueued::Stale;
             }
@@ -816,6 +851,10 @@ mod tests {
         fn has_time_origin(&self) -> bool {
             self.started
         }
+
+        fn latest_interval(&self) -> F {
+            self.interval
+        }
     }
 
     fn sample(i: u64) -> ImuSample {
@@ -839,7 +878,7 @@ mod tests {
 
     fn consumer(epoch: F) -> u64 {
         (1..)
-            .find(|&i| epoch <= i as F * DT + EPOCH_TOLERANCE)
+            .find(|&i| epoch <= i as F * DT + epoch_tolerance(DT))
             .unwrap()
     }
 

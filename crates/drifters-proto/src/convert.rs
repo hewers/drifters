@@ -52,6 +52,7 @@ const WIRE_COVARIANCE_CAPACITY: usize = 21 * 21;
 
 /// Why a decoded message could not become an in-memory value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum ConvertError {
     /// A message field the receiver requires was absent.
@@ -511,58 +512,46 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
     /// a config file, and roll/pitch/yaw is the form they write it in.
     fn try_from(msg: &pb::GinsOptions) -> Result<Self, Self::Error> {
         let euler: Euler = require!(msg.r#initial_attitude(), "initial_attitude").into();
-        let options = GinsOptions {
-            initial_state: Pva {
-                position: require!(msg.r#initial_position(), "initial_position").try_into()?,
-                velocity: require!(msg.r#initial_velocity_mps(), "initial_velocity_mps").into(),
-                attitude: Attitude::from_euler(euler.roll, euler.pitch, euler.yaw),
-            },
-            initial_imu_error: require!(msg.r#initial_imu_error(), "initial_imu_error")
-                .try_into()?,
-            initial_position_std: require!(
-                msg.r#initial_position_std_m(),
-                "initial_position_std_m"
-            )
-            .into(),
-            initial_velocity_std: require!(
-                msg.r#initial_velocity_std_mps(),
-                "initial_velocity_std_mps"
-            )
-            .into(),
-            initial_attitude_std: require!(
-                msg.r#initial_attitude_std_rad(),
-                "initial_attitude_std_rad"
-            )
-            .into(),
-            initial_gyro_bias_std: require!(
-                msg.r#initial_gyro_bias_std_rps(),
-                "initial_gyro_bias_std_rps"
-            )
-            .into(),
-            initial_accel_bias_std: require!(
-                msg.r#initial_accel_bias_std_mps2(),
-                "initial_accel_bias_std_mps2"
-            )
-            .into(),
-            initial_gyro_scale_std: require!(
-                msg.r#initial_gyro_scale_std(),
-                "initial_gyro_scale_std"
-            )
-            .into(),
-            initial_accel_scale_std: require!(
-                msg.r#initial_accel_scale_std(),
-                "initial_accel_scale_std"
-            )
-            .into(),
-            imu_noise: require!(msg.r#imu_noise(), "imu_noise").try_into()?,
-            antenna_lever_arm: require!(msg.r#antenna_lever_arm_m(), "antenna_lever_arm_m").into(),
-            max_consecutive_rejections: msg.r#max_consecutive_rejections,
-            rejection_inflation: msg.r#rejection_inflation,
-            // Absent means "the recommended default", not false. A message
-            // written before this field existed must not silently decode to
-            // the setting that lets the accel-bias/tilt pair diverge.
-            zupt_holds_attitude: msg.r#zupt_holds_attitude().copied().unwrap_or(true),
+        // Every field is assigned. `GinsOptions` is `#[non_exhaustive]`, so the
+        // compiler no longer says when it grows one this misses;
+        // `every_options_field_is_carried` below does.
+        let mut options = GinsOptions::default();
+        options.initial_state = Pva {
+            position: require!(msg.r#initial_position(), "initial_position").try_into()?,
+            velocity: require!(msg.r#initial_velocity_mps(), "initial_velocity_mps").into(),
+            attitude: Attitude::from_euler(euler.roll, euler.pitch, euler.yaw),
         };
+        options.initial_imu_error =
+            require!(msg.r#initial_imu_error(), "initial_imu_error").try_into()?;
+        options.initial_position_std =
+            require!(msg.r#initial_position_std_m(), "initial_position_std_m").into();
+        options.initial_velocity_std =
+            require!(msg.r#initial_velocity_std_mps(), "initial_velocity_std_mps").into();
+        options.initial_attitude_std =
+            require!(msg.r#initial_attitude_std_rad(), "initial_attitude_std_rad").into();
+        options.initial_gyro_bias_std = require!(
+            msg.r#initial_gyro_bias_std_rps(),
+            "initial_gyro_bias_std_rps"
+        )
+        .into();
+        options.initial_accel_bias_std = require!(
+            msg.r#initial_accel_bias_std_mps2(),
+            "initial_accel_bias_std_mps2"
+        )
+        .into();
+        options.initial_gyro_scale_std =
+            require!(msg.r#initial_gyro_scale_std(), "initial_gyro_scale_std").into();
+        options.initial_accel_scale_std =
+            require!(msg.r#initial_accel_scale_std(), "initial_accel_scale_std").into();
+        options.imu_noise = require!(msg.r#imu_noise(), "imu_noise").try_into()?;
+        options.antenna_lever_arm =
+            require!(msg.r#antenna_lever_arm_m(), "antenna_lever_arm_m").into();
+        options.max_consecutive_rejections = msg.r#max_consecutive_rejections;
+        options.rejection_inflation = msg.r#rejection_inflation;
+        // Absent means "the recommended default", not false. A message
+        // written before this field existed must not silently decode to
+        // the setting that lets the accel-bias/tilt pair diverge.
+        options.zupt_holds_attitude = msg.r#zupt_holds_attitude().copied().unwrap_or(true);
         if options.validate().is_some() {
             return Err(ConvertError::Invalid("gins_options"));
         }
@@ -1102,14 +1091,64 @@ mod option_defaults {
         );
     }
 
+    /// The field list the two conversions above were written against.
+    ///
+    /// `GinsOptions` is `#[non_exhaustive]` (adr/0010), so a struct literal
+    /// naming all its fields no longer compiles here, and neither conversion
+    /// fails to build when the struct grows one. This is the check that
+    /// replaced the compiler's: `Debug` is derived and prints every field, so
+    /// a field added upstream and missing below fails here, not in a decoded
+    /// configuration that silently lost a setting.
+    #[test]
+    fn every_options_field_is_carried() {
+        extern crate std;
+        use std::{format, vec::Vec};
+        let debug = format!("{:?}", GinsOptions::default());
+        // Top-level fields only: the names at nesting depth one.
+        let mut depth = 0;
+        let mut fields = Vec::new();
+        let mut word = std::string::String::new();
+        for c in debug.chars() {
+            match c {
+                '{' | '(' | '[' => depth += 1,
+                '}' | ')' | ']' => depth -= 1,
+                ':' if depth == 1 && !word.is_empty() => fields.push(word.clone()),
+                _ => {}
+            }
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else if c != ' ' {
+                word.clear();
+            }
+        }
+        let carried = [
+            "initial_state",
+            "initial_imu_error",
+            "initial_position_std",
+            "initial_velocity_std",
+            "initial_attitude_std",
+            "initial_gyro_bias_std",
+            "initial_accel_bias_std",
+            "initial_gyro_scale_std",
+            "initial_accel_scale_std",
+            "imu_noise",
+            "antenna_lever_arm",
+            "max_consecutive_rejections",
+            "zupt_holds_attitude",
+            "rejection_inflation",
+        ];
+        assert_eq!(
+            fields, carried,
+            "GinsOptions's fields changed; update both conversions and this list"
+        );
+    }
+
     #[test]
     fn an_explicit_false_survives_the_round_trip() {
         // The escape hatch still has to work: someone who has other attitude
         // aiding may legitimately want the textbook optimal gain.
-        let options = GinsOptions {
-            zupt_holds_attitude: false,
-            ..Default::default()
-        };
+        let mut options = GinsOptions::default();
+        options.zupt_holds_attitude = false;
         let msg = pb::GinsOptions::from(&options);
         let decoded = GinsOptions::try_from(&msg).expect("valid");
         assert!(!decoded.zupt_holds_attitude);

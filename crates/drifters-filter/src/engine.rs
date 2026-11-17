@@ -6,7 +6,7 @@
 //! inside a replay harness on a workstation.
 
 use drifters_core::earth::Wgs84;
-use drifters_core::estimator::{place, Estimator, Placement, PvaStd, EPOCH_TOLERANCE};
+use drifters_core::estimator::{epoch_tolerance, place, Estimator, Placement, PvaStd};
 use drifters_core::frames::Ned;
 use drifters_core::math::Quat;
 use drifters_core::math::{Mat3, Matrix, Vec3};
@@ -32,6 +32,7 @@ pub use drifters_core::estimator::GnssQueued;
 
 /// A loosely-coupled GNSS/INS engine over the 21-state error model.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GinsEngine {
     options: GinsOptions,
     filter: Eskf,
@@ -40,9 +41,6 @@ pub struct GinsEngine {
     previous_imu: ImuSample,
     pending_gnss: Option<GnssFix>,
     initialised: bool,
-    /// A fix closer than this to a boundary is treated as coincident with it
-    /// rather than split. See [`EPOCH_TOLERANCE`].
-    epoch_tolerance: F,
     consecutive_rejections: u32,
     inflations: u32,
     /// Fixes refused for arriving after the engine had passed their epoch.
@@ -62,6 +60,7 @@ pub struct GinsEngine {
 /// What a backward pass needs, accumulated during the forward one.
 #[cfg(feature = "smoothing")]
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 struct Recorder {
     /// Transition accumulated since the last checkpoint.
     transition: StateMatrix,
@@ -109,7 +108,6 @@ impl GinsEngine {
             previous_imu: ImuSample::default(),
             pending_gnss: None,
             initialised: false,
-            epoch_tolerance: EPOCH_TOLERANCE,
             consecutive_rejections: 0,
             inflations: 0,
             stale_fixes: 0,
@@ -171,13 +169,15 @@ impl GinsEngine {
         &self.options
     }
 
-    /// How close to an interval boundary a fix is treated as lying on it.
+    /// Length of the most recent IMU interval, seconds; zero before the
+    /// first sample.
     ///
-    /// [`crate::rewind`] places a late fix with the same rule the engine uses,
-    /// so the two cannot disagree about which sample consumes it.
+    /// [`add_gnss`](Self::add_gnss) judges a fix stale against
+    /// [`epoch_tolerance`] of this, and [`crate::rewind`] asks for it so that
+    /// the two cannot disagree about which sample consumes a fix.
     #[inline]
-    pub(crate) fn epoch_tolerance(&self) -> F {
-        self.epoch_tolerance
+    pub(crate) fn latest_interval(&self) -> F {
+        self.previous_imu.dt
     }
 
     /// Whether a first IMU sample has fixed the time origin.
@@ -209,8 +209,12 @@ impl GinsEngine {
         }
         // The next interval starts at the current time. A fix within the
         // tolerance of it is `AtStart` of that interval and still usable;
-        // anything earlier is not.
-        if self.initialised && fix.time.seconds_since(self.state.time) < -self.epoch_tolerance {
+        // anything earlier is not. The next interval's length is unknown until
+        // its sample arrives, so the latest one's stands in for it; if they
+        // differ enough to disagree, `add_imu` drops the fix as stale there.
+        if self.initialised
+            && fix.time.seconds_since(self.state.time) < -epoch_tolerance(self.latest_interval())
+        {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
             return GnssQueued::Stale;
         }
@@ -284,8 +288,7 @@ impl GinsEngine {
     /// The pending fix and where it falls in the interval `imu` covers, or
     /// `None` when no fix is pending.
     fn pending_placement(&self, imu: &ImuSample) -> Option<(Placement, GnssFix)> {
-        self.pending_gnss
-            .map(|fix| (place(fix.time, imu, self.epoch_tolerance), fix))
+        self.pending_gnss.map(|fix| (place(fix.time, imu), fix))
     }
 
     /// Where the pending fix falls, without the fix.

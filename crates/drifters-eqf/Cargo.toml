@@ -13,13 +13,23 @@ keywords = ["navigation", "equivariant", "lie-group", "filter", "ins"]
 
 [dependencies]
 drifters-core = { workspace = true }
+defmt = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = []
 std = ["drifters-core/std"]
+## `defmt::Format` on every public type that implements `Debug`, here and in
+## `drifters-core`. Formatting only.
+defmt = ["dep:defmt", "drifters-core/defmt"]
+## `serde` `Serialize` and `Deserialize` on [`EqfOptions`] and [`ProcessNoise`],
+## and on the `drifters-core` types they contain, for configuration loaded on a
+## host. Missing fields take their defaults; unknown ones are an error.
+serde = ["dep:serde", "drifters-core/serde"]
 
 [lints.rust]
 unsafe_code = "forbid"

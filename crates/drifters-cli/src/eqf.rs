@@ -217,25 +217,23 @@ pub fn kfgins_options(
     // A lever arm that may drift by a fraction of a millimetre over the hour,
     // so the filter never becomes certain enough to stop listening.
     process_noise.lever = Vec3::splat(1e-10);
-    EqfOptions {
-        initial_state: o.initial_state,
-        anchor: Some(anchor),
-        initial_gyro_bias: o.initial_imu_error.gyro_bias,
-        initial_accel_bias: o.initial_imu_error.accel_bias,
-        initial_lever_arm: Vec3::ZERO,
-        initial_position_std: o.initial_position_std,
-        initial_velocity_std: o.initial_velocity_std,
-        initial_attitude_std: o.initial_attitude_std,
-        initial_gyro_bias_std: o.initial_gyro_bias_std,
-        initial_accel_bias_std: o.initial_accel_bias_std,
-        initial_lever_arm_std: Vec3::splat(1.0),
-        initial_mag_std: Vec3::splat(1e-3),
-        process_noise,
-        compensate_earth: compensate,
-        gcu_alpha: alpha,
-        ..EqfOptions::default()
-    }
-    .with_accel_scale_factor(o.initial_accel_scale_std, &o.imu_noise)
+    // `EqfOptions` is `#[non_exhaustive]` (adr/0010): defaults, then fields.
+    let mut options = EqfOptions::default()
+        .with_anchor(anchor)
+        .with_lever_arm(Vec3::ZERO, Vec3::splat(1.0))
+        .with_earth_compensation(compensate);
+    options.initial_state = o.initial_state;
+    options.initial_gyro_bias = o.initial_imu_error.gyro_bias;
+    options.initial_accel_bias = o.initial_imu_error.accel_bias;
+    options.initial_position_std = o.initial_position_std;
+    options.initial_velocity_std = o.initial_velocity_std;
+    options.initial_attitude_std = o.initial_attitude_std;
+    options.initial_gyro_bias_std = o.initial_gyro_bias_std;
+    options.initial_accel_bias_std = o.initial_accel_bias_std;
+    options.initial_mag_std = Vec3::splat(1e-3);
+    options.process_noise = process_noise;
+    options.gcu_alpha = alpha;
+    options.with_accel_scale_factor(o.initial_accel_scale_std, &o.imu_noise)
 }
 
 /// The EqF configured for a GSDC phone trace, from the same IMU noise model
@@ -265,23 +263,21 @@ pub fn gsdc_options(
 ) -> EqfOptions {
     let mut process_noise = ProcessNoise::from_imu_noise(noise);
     process_noise.lever = Vec3::splat(1e-12);
-    EqfOptions {
-        initial_position_std: Vec3::splat(5.0),
-        initial_velocity_std: Vec3::splat(2.0),
-        // 5.1°, 5.1° and 31° — the variances the replay used before it moved
-        // onto the engine, now stated as the sigmas they are.
-        initial_attitude_std: Vec3::new(0.008_f64.sqrt(), 0.008_f64.sqrt(), 0.30_f64.sqrt()),
-        initial_gyro_bias_std: Vec3::splat(1e-3),
-        initial_accel_bias_std: Vec3::splat(0.1),
-        initial_lever_arm_std: Vec3::splat(0.1),
-        initial_mag_std: Vec3::splat(1e-3),
-        process_noise,
-        compensate_earth: compensate,
-        gcu_alpha: alpha,
-        ..EqfOptions::default()
-    }
-    .with_initial_state(origin, drifters_core::frames::Ned::ZERO, attitude)
-    .with_accel_scale_factor(accel_scale_std, noise)
+    let mut options = EqfOptions::default()
+        .with_initial_state(origin, drifters_core::frames::Ned::ZERO, attitude)
+        .with_lever_arm(Vec3::ZERO, Vec3::splat(0.1))
+        .with_earth_compensation(compensate);
+    options.initial_position_std = Vec3::splat(5.0);
+    options.initial_velocity_std = Vec3::splat(2.0);
+    // 5.1°, 5.1° and 31° — the variances the replay used before it moved
+    // onto the engine, now stated as the sigmas they are.
+    options.initial_attitude_std = Vec3::new(0.008_f64.sqrt(), 0.008_f64.sqrt(), 0.30_f64.sqrt());
+    options.initial_gyro_bias_std = Vec3::splat(1e-3);
+    options.initial_accel_bias_std = Vec3::splat(0.1);
+    options.initial_mag_std = Vec3::splat(1e-3);
+    options.process_noise = process_noise;
+    options.gcu_alpha = alpha;
+    options.with_accel_scale_factor(accel_scale_std, noise)
 }
 
 /// `--alpha`: a rate in `[0, 1]`, or `off` for no GCU inflation at all.

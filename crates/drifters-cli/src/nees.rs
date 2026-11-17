@@ -942,17 +942,7 @@ pub mod eskf {
         let mut bg = rng.normal_vec3(Vec3::splat(gyro_bias_sigma));
         let mut ba = rng.normal_vec3(Vec3::splat(accel_bias_sigma));
         let start = origin;
-        let options = GinsOptions {
-            imu_noise: noise,
-            initial_position_std: Vec3::splat(0.5),
-            initial_velocity_std: Vec3::splat(0.2),
-            initial_attitude_std: Vec3::splat(2.0e-3),
-            initial_gyro_bias_std: Vec3::splat(gyro_bias_sigma),
-            initial_accel_bias_std: Vec3::splat(accel_bias_sigma),
-            antenna_lever_arm: Vec3::ZERO,
-            ..GinsOptions::default()
-        }
-        .with_initial_state(
+        let mut options = GinsOptions::default().with_initial_state(
             start.shifted(Ned {
                 n: rng.normal() * 0.5,
                 e: rng.normal() * 0.5,
@@ -965,15 +955,18 @@ pub mod eskf {
             },
             attitude,
         );
-        let options = GinsOptions {
-            imu_noise: drifters_core::types::ImuNoise {
-                gyro_arw: noise.gyro_arw * inflation,
-                accel_vrw: noise.accel_vrw * inflation,
-                gyro_bias_std: noise.gyro_bias_std * inflation,
-                accel_bias_std: noise.accel_bias_std * inflation,
-                ..noise
-            },
-            ..options
+        options.initial_position_std = Vec3::splat(0.5);
+        options.initial_velocity_std = Vec3::splat(0.2);
+        options.initial_attitude_std = Vec3::splat(2.0e-3);
+        options.initial_gyro_bias_std = Vec3::splat(gyro_bias_sigma);
+        options.initial_accel_bias_std = Vec3::splat(accel_bias_sigma);
+        options.antenna_lever_arm = Vec3::ZERO;
+        options.imu_noise = drifters_core::types::ImuNoise {
+            gyro_arw: noise.gyro_arw * inflation,
+            accel_vrw: noise.accel_vrw * inflation,
+            gyro_bias_std: noise.gyro_bias_std * inflation,
+            accel_bias_std: noise.accel_bias_std * inflation,
+            ..noise
         };
         let mut engine = GinsEngine::new(options).expect("valid options");
         engine.record(true);
@@ -1180,29 +1173,27 @@ pub mod eskf {
                 lon: origin.lon,
                 height: origin.height,
             };
-            let options = GinsOptions {
-                imu_noise: noise,
-                initial_position_std: Vec3::splat(prior[0]),
-                initial_velocity_std: Vec3::splat(prior[1]),
-                initial_attitude_std: Vec3::splat(prior[2]),
-                initial_gyro_bias_std: Vec3::splat(prior[3]),
-                initial_accel_bias_std: Vec3::splat(prior[4]),
-                antenna_lever_arm: Vec3::ZERO,
-                ..GinsOptions::default()
-            }
-            .with_initial_state(
-                start.shifted(Ned {
-                    n: rng.normal() * prior[0],
-                    e: rng.normal() * prior[0],
-                    d: rng.normal() * prior[0],
-                }),
-                Ned {
-                    n: velocity.n + rng.normal() * prior[1],
-                    e: velocity.e + rng.normal() * prior[1],
-                    d: velocity.d + rng.normal() * prior[1],
-                },
-                attitude,
-            );
+            let mut options = GinsOptions::default()
+                .with_imu_noise(noise)
+                .with_initial_state(
+                    start.shifted(Ned {
+                        n: rng.normal() * prior[0],
+                        e: rng.normal() * prior[0],
+                        d: rng.normal() * prior[0],
+                    }),
+                    Ned {
+                        n: velocity.n + rng.normal() * prior[1],
+                        e: velocity.e + rng.normal() * prior[1],
+                        d: velocity.d + rng.normal() * prior[1],
+                    },
+                    attitude,
+                );
+            options.initial_position_std = Vec3::splat(prior[0]);
+            options.initial_velocity_std = Vec3::splat(prior[1]);
+            options.initial_attitude_std = Vec3::splat(prior[2]);
+            options.initial_gyro_bias_std = Vec3::splat(prior[3]);
+            options.initial_accel_bias_std = Vec3::splat(prior[4]);
+            options.antenna_lever_arm = Vec3::ZERO;
             let Ok(mut engine) = GinsEngine::new(options) else {
                 report.singular += 1;
                 continue;

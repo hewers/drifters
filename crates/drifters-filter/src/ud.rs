@@ -90,6 +90,7 @@ const fn at(i: usize, j: usize) -> usize {
 
 /// A covariance as `U D Uᵀ`.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Ud {
     /// Strictly-upper entries of `U`, packed by column. The diagonal is 1 and
     /// is not stored.

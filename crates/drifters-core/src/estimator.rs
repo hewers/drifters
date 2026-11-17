@@ -44,18 +44,47 @@ use crate::types::{GnssFix, ImuSample, NavState};
 use crate::F;
 
 /// How close to an interval boundary a GNSS epoch is treated as lying on it,
-/// seconds.
+/// as a fraction of the interval's length.
 ///
-/// A fix nearer than this to either end of an IMU interval is applied at that
-/// end rather than splitting the sample there: a split a few microseconds from
-/// the edge propagates the covariance over an interval too short to mean
-/// anything, and buys no accuracy. At 30 m/s the tolerance is 3 mm of travel.
-pub const EPOCH_TOLERANCE: F = 1.0e-4;
+/// A fix nearer than [`epoch_tolerance`] to either end of an IMU interval is
+/// applied at that end rather than splitting the sample there: a split that
+/// close to the edge propagates the covariance over a sliver of a sample, and
+/// buys nothing the sample itself can resolve. What a sample resolves is set
+/// by its own length, so the tolerance is a fraction of that length.
+///
+/// It was a fixed 100 µs. That is a hundredth of a 100 Hz interval, so the
+/// value there is unchanged; at 200 Hz it is now 50 µs. At high rates a fixed
+/// value is wrong, not merely loose: at 5 kHz the two edge windows meet, and
+/// faster than that an epoch most of the way through an interval was applied
+/// at its *start*, the farther edge.
+///
+/// A hundredth moves no fix by more than 1 % of a sample, keeps the two
+/// windows 98 % of the interval apart, and at 100 Hz and 30 m/s is 3 mm of
+/// travel.
+pub const EPOCH_TOLERANCE_FRACTION: F = 0.01;
+
+/// How close to either end of an IMU interval `dt` seconds long a GNSS epoch
+/// is treated as lying on it, in seconds: [`EPOCH_TOLERANCE_FRACTION`] of
+/// `dt`.
+///
+/// Zero for a `dt` that is not positive and finite. No valid sample has one,
+/// and with a zero tolerance only an exact match is an edge.
+#[inline]
+pub fn epoch_tolerance(dt: F) -> F {
+    let tolerance = EPOCH_TOLERANCE_FRACTION * dt;
+    // `>` is false for NaN, so the comparison carries that case too.
+    if tolerance > 0.0 && tolerance.is_finite() {
+        tolerance
+    } else {
+        0.0
+    }
+}
 
 /// Where an epoch falls relative to the interval an IMU sample covers.
 ///
 /// Returned by [`place`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Placement {
     /// Ahead of the interval: it waits for a later sample.
     Ahead,
@@ -72,15 +101,17 @@ pub enum Placement {
 
 /// Where `epoch` falls relative to the interval `imu` covers.
 ///
-/// The interval is `(imu.time − imu.dt, imu.time]`, and `tolerance` is how
-/// close to either end counts as on it; see [`EPOCH_TOLERANCE`].
+/// The interval is `(imu.time − imu.dt, imu.time]`, and an epoch within
+/// [`epoch_tolerance`]`(imu.dt)` of either end counts as on it.
 ///
 /// A free function of the sample's own time and length, and nothing of any
 /// engine's state, so that anything holding a sample can ask the question and
 /// get the answer the engine will give when that sample is pushed. The rewind
-/// layer in `drifters-filter` depends on exactly that, and both engines call
-/// this rather than each carrying the rule.
-pub fn place(epoch: GpsTime, imu: &ImuSample, tolerance: F) -> Placement {
+/// layer depends on exactly that, and both engines call this rather than each
+/// carrying the rule. The tolerance is not a parameter for the same reason: a
+/// caller able to pass its own would be able to disagree with the engine.
+pub fn place(epoch: GpsTime, imu: &ImuSample) -> Placement {
+    let tolerance = epoch_tolerance(imu.dt);
     let start = imu.time.add_seconds(-imu.dt);
     let from_start = epoch.seconds_since(start);
     let from_end = epoch.seconds_since(imu.time);
@@ -105,6 +136,7 @@ pub fn place(epoch: GpsTime, imu: &ImuSample, tolerance: F) -> Placement {
 /// fixes late enough to be stale is the normal failure, not an exotic one, and
 /// a `bool` could not say which of the two it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[must_use = "a Stale or Invalid fix was not queued"]
 #[non_exhaustive]
 pub enum GnssQueued {
@@ -128,6 +160,7 @@ pub enum GnssQueued {
 
 /// Why a filter operation could not complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum FilterError {
     /// The innovation covariance was not positive definite. Almost always a
@@ -184,6 +217,9 @@ pub mod chi_squared {
 /// The marginals only. Each estimator's full covariance is its own, in its own
 /// coordinates; this is what is left when both are asked the same question.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct PvaStd {
     /// Position of the IMU reference point, NED metres.
     pub position: Vec3,
@@ -300,7 +336,7 @@ mod tests {
     fn an_epoch_is_placed_against_the_interval_it_is_asked_about() {
         // The interval is (0.01, 0.02].
         let imu = sample(0.02, 0.01);
-        let at = |t: F| place(GpsTime::from_tow(t), &imu, EPOCH_TOLERANCE);
+        let at = |t: F| place(GpsTime::from_tow(t), &imu);
         assert_eq!(at(0.005), Placement::Stale);
         assert_eq!(at(0.01), Placement::AtStart);
         assert_eq!(at(0.014), Placement::Inside);
@@ -311,18 +347,74 @@ mod tests {
     #[test]
     fn the_tolerance_decides_what_counts_as_an_edge() {
         let imu = sample(0.02, 0.01);
-        let at = |t: F| place(GpsTime::from_tow(t), &imu, EPOCH_TOLERANCE);
+        let tolerance = epoch_tolerance(imu.dt);
+        let at = |t: F| place(GpsTime::from_tow(t), &imu);
         // Half a tolerance either side of an edge is the edge, so a fix that
         // close is never split off into a sliver of an interval.
-        let half = 0.5 * EPOCH_TOLERANCE;
+        let half = 0.5 * tolerance;
         assert_eq!(at(0.01 - half), Placement::AtStart);
         assert_eq!(at(0.01 + half), Placement::AtStart);
         assert_eq!(at(0.02 - half), Placement::AtEnd);
         assert_eq!(at(0.02 + half), Placement::AtEnd);
         // Two tolerances away it is not.
-        assert_eq!(at(0.01 + 2.0 * EPOCH_TOLERANCE), Placement::Inside);
-        assert_eq!(at(0.02 + 2.0 * EPOCH_TOLERANCE), Placement::Ahead);
-        assert_eq!(at(0.01 - 2.0 * EPOCH_TOLERANCE), Placement::Stale);
+        assert_eq!(at(0.01 + 2.0 * tolerance), Placement::Inside);
+        assert_eq!(at(0.02 + 2.0 * tolerance), Placement::Ahead);
+        assert_eq!(at(0.01 - 2.0 * tolerance), Placement::Stale);
+    }
+
+    #[test]
+    fn the_tolerance_is_a_fraction_of_the_interval() {
+        // 100 µs at 100 Hz, the fixed value it replaced.
+        assert!((epoch_tolerance(0.01) - 1.0e-4).abs() < 1e-18);
+        assert!((epoch_tolerance(0.005) - 5.0e-5).abs() < 1e-18);
+        assert!((epoch_tolerance(0.001) - 1.0e-5).abs() < 1e-18);
+        for dt in [0.0, -0.01, F::NAN, F::INFINITY] {
+            assert_eq!(epoch_tolerance(dt), 0.0, "dt = {dt}");
+        }
+
+        // At 1 kHz an epoch 50 µs into the interval is 5 % of the way through
+        // it, and is split there. The fixed 100 µs called it the start.
+        let imu = sample(0.002, 0.001);
+        assert_eq!(place(GpsTime::from_tow(0.001_050), &imu), Placement::Inside);
+        assert_eq!(
+            place(GpsTime::from_tow(0.001_005), &imu),
+            Placement::AtStart
+        );
+    }
+
+    /// Whatever the rate, an epoch is only ever moved to the edge it is
+    /// nearer, and only from within a hundredth of the interval.
+    ///
+    /// The fixed tolerance failed this from 5 kHz: at 8 kHz an epoch 90 µs
+    /// into a 125 µs interval, 35 µs from its end, was applied at its start.
+    #[test]
+    fn an_epoch_is_never_moved_to_the_farther_edge() {
+        for hz in [10_u64, 100, 200, 1_000, 4_000, 8_000, 10_000] {
+            let dt_ns = 1_000_000_000 / hz;
+            let start = 1_000_000_000_u64;
+            let imu = ImuSample {
+                time: GpsTime::from_nanos(start + dt_ns),
+                dt: dt_ns as F * 1e-9,
+                ..ImuSample::default()
+            };
+            for percent in 0..=100_u64 {
+                let epoch = GpsTime::from_nanos(start + dt_ns * percent / 100);
+                let placement = place(epoch, &imu);
+                let expected = match percent {
+                    0 => Placement::AtStart,
+                    100 => Placement::AtEnd,
+                    // Exactly one tolerance from an edge rounds either way.
+                    1 | 99 => placement,
+                    _ => Placement::Inside,
+                };
+                assert_eq!(placement, expected, "{hz} Hz, {percent} % through");
+                match placement {
+                    Placement::AtStart => assert!(percent <= 1, "{hz} Hz, {percent} %"),
+                    Placement::AtEnd => assert!(percent >= 99, "{hz} Hz, {percent} %"),
+                    _ => {}
+                }
+            }
+        }
     }
 
     #[test]

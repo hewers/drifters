@@ -19,8 +19,8 @@ use drifters_filter::engine::GinsEngine;
 use drifters_filter::state::N_STATE;
 
 fn options() -> GinsOptions {
-    GinsOptions {
-        imu_noise: ImuNoise {
+    let mut options = GinsOptions::default()
+        .with_imu_noise(ImuNoise {
             gyro_arw: Vec3::splat(3.0e-4),
             accel_vrw: Vec3::splat(3.0e-3),
             gyro_bias_std: Vec3::splat(2.0e-5),
@@ -28,24 +28,23 @@ fn options() -> GinsOptions {
             gyro_scale_std: Vec3::splat(1.0e-6),
             accel_scale_std: Vec3::splat(1.0e-6),
             correlation_time: 3600.0,
-        },
-        initial_position_std: Vec3::splat(1.0),
-        initial_velocity_std: Vec3::splat(0.5),
-        initial_attitude_std: Vec3::splat(0.01),
-        initial_gyro_bias_std: Vec3::splat(2.0e-5),
-        initial_accel_bias_std: Vec3::splat(2.0e-3),
-        antenna_lever_arm: Vec3::new(0.2, 0.0, -0.5),
-        ..GinsOptions::default()
-    }
-    .with_initial_state(
-        Lla::from_degrees(30.44, 114.47, 20.0),
-        Ned::new(8.0, 3.0, 0.0),
-        drifters_core::math::Euler {
-            roll: 0.02,
-            pitch: -0.01,
-            yaw: 0.6,
-        },
-    )
+        })
+        .with_antenna_lever_arm(Vec3::new(0.2, 0.0, -0.5))
+        .with_initial_state(
+            Lla::from_degrees(30.44, 114.47, 20.0),
+            Ned::new(8.0, 3.0, 0.0),
+            drifters_core::math::Euler {
+                roll: 0.02,
+                pitch: -0.01,
+                yaw: 0.6,
+            },
+        );
+    options.initial_position_std = Vec3::splat(1.0);
+    options.initial_velocity_std = Vec3::splat(0.5);
+    options.initial_attitude_std = Vec3::splat(0.01);
+    options.initial_gyro_bias_std = Vec3::splat(2.0e-5);
+    options.initial_accel_bias_std = Vec3::splat(2.0e-3);
+    options
 }
 
 fn sample(t: f64) -> ImuSample {

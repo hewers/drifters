@@ -76,8 +76,8 @@
 //!
 //! Three engines, the two rings and 72 bytes of bookkeeping. For
 //! `EqfRewindEngine<120, 32>`, the size the ESKF's is quoted at — a 200 Hz
-//! IMU and 300 ms of latency — that is 3 × 4 672 + 120 × 64 + 32 × 120 + 72 =
-//! **25 608 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
+//! IMU and 300 ms of latency — that is 3 × 4 680 + 120 × 64 + 32 × 120 + 72 =
+//! **25 632 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
 //! The engines are the larger part, for the reason [`EqfEngine`] is larger
 //! than the ESKF's: a dense covariance.
 
@@ -101,6 +101,7 @@ use crate::linear::{StateMatrix, DIM};
 /// Each variant is the arguments of the [`EqfEngine`] method of the same
 /// name, and [`Rewindable::apply_aid`] calls that method.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Aid {
     /// [`EqfEngine::apply_magnetometer`].
@@ -131,6 +132,11 @@ impl<C: Covariance> Rewindable for EqfEngine<C> {
     fn has_time_origin(&self) -> bool {
         EqfEngine::has_time_origin(self)
     }
+
+    #[inline]
+    fn latest_interval(&self) -> F {
+        EqfEngine::latest_interval(self)
+    }
 }
 
 /// An [`EqfEngine`] that can apply a GNSS fix after its epoch has passed.
@@ -148,6 +154,7 @@ impl<C: Covariance> Rewindable for EqfEngine<C> {
 /// `C` is the wrapped engine's covariance form; see
 /// [`EqfEngine::with_covariance`].
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EqfRewindEngine<const SAMPLES: usize, const EVENTS: usize, C: Covariance = StateMatrix> {
     inner: Rewind<EqfEngine<C>, SAMPLES, EVENTS>,
 }
@@ -345,7 +352,7 @@ impl<const SAMPLES: usize, const EVENTS: usize, C: Covariance> EqfRewindEngine<S
 mod tests {
     use super::*;
     use drifters_core::earth::Wgs84;
-    use drifters_core::estimator::{GnssQueued, EPOCH_TOLERANCE};
+    use drifters_core::estimator::{epoch_tolerance, GnssQueued};
     use drifters_core::frames::Ned;
     use drifters_core::math::{Euler, Quat};
 
@@ -422,7 +429,7 @@ mod tests {
 
     fn consumer(epoch: F) -> u64 {
         (1..)
-            .find(|&i| epoch <= i as F * DT + EPOCH_TOLERANCE)
+            .find(|&i| epoch <= i as F * DT + epoch_tolerance(DT))
             .unwrap()
     }
 
@@ -691,7 +698,7 @@ mod tests {
                 + 72,
             "three engines, the two rings, and 72 bytes of bookkeeping"
         );
-        assert_eq!(size_of::<Representative>(), 25_608);
+        assert_eq!(size_of::<Representative>(), 25_632);
     }
 
     /// The factored, single-precision engine through the same layer. The
@@ -735,7 +742,7 @@ mod tests {
         // bytes against 3 528, three times over in the wrapper.
         assert_eq!(size_of::<Ud<f32>>(), 924);
         assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_232);
-        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_072);
-        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_808);
+        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_080);
+        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_832);
     }
 }

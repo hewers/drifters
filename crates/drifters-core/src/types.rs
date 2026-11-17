@@ -16,6 +16,9 @@ use crate::F;
 /// form the two-sample mechanization needs. Use [`ImuSample::from_rates`] if
 /// your driver gives instantaneous rates instead.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct ImuSample {
     /// Timestamp at the **end** of the integration interval.
     pub time: GpsTime,
@@ -99,6 +102,9 @@ impl ImuSample {
 
 /// A GNSS position fix, the loosely-coupled measurement.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct GnssFix {
     /// Epoch of the fix.
     pub time: GpsTime,
@@ -143,7 +149,14 @@ impl GnssFix {
 /// mechanization uses it several times per sample, and the Euler angles are
 /// derived on demand for output. Build with [`Attitude::from_quat`] so the
 /// three never fall out of sync.
+///
+/// With the `serde` feature it is written and read as the quaternion alone,
+/// `{ "w": …, "x": …, "y": …, "z": … }`, and the DCM is rebuilt on reading. A
+/// file that carried both could carry two that disagree.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(from = "Quat", into = "Quat"))]
 pub struct Attitude {
     /// `q_nb`, rotating body vectors into the navigation frame.
     pub quat: Quat,
@@ -155,6 +168,21 @@ impl Default for Attitude {
     #[inline]
     fn default() -> Self {
         Self::from_quat(Quat::IDENTITY)
+    }
+}
+
+impl From<Quat> for Attitude {
+    /// [`Attitude::from_quat`]: normalised, with the DCM cached.
+    #[inline]
+    fn from(quat: Quat) -> Self {
+        Self::from_quat(quat)
+    }
+}
+
+impl From<Attitude> for Quat {
+    #[inline]
+    fn from(attitude: Attitude) -> Self {
+        attitude.quat
     }
 }
 
@@ -190,6 +218,9 @@ impl Attitude {
 
 /// Position, velocity and attitude — the navigation solution proper.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Pva {
     /// Geodetic position of the IMU reference point.
     pub position: Lla,
@@ -204,6 +235,9 @@ pub struct Pva {
 /// The mechanization removes these from every raw sample:
 /// `corrected = (raw − bias·dt) ⊘ (1 + scale)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct ImuError {
     /// Gyroscope bias, rad/s.
     pub gyro_bias: Vec3,
@@ -247,6 +281,9 @@ impl ImuError {
 /// with correlation time [`ImuNoise::correlation_time`]; the random walks are
 /// white noise on rate and specific force.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct ImuNoise {
     /// Angle random walk, rad/√s.
     pub gyro_arw: Vec3,
@@ -287,6 +324,9 @@ impl Default for ImuNoise {
 
 /// A full navigation state: the PVA plus the estimated IMU errors.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct NavState {
     /// Epoch this state is valid at.
     pub time: GpsTime,

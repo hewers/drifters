@@ -68,6 +68,7 @@ mod private {
 /// `A` in the buffer it then scales in place, and the factored form narrows it
 /// as it goes.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Propagation<'a> {
     /// The observer state at the interval's midpoint, where `A` is evaluated.
     pub midpoint: &'a Symmetry,
@@ -408,6 +409,7 @@ const fn column_start(j: usize) -> usize {
 /// operation keeps `D` non-negative or refuses, so the covariance cannot stop
 /// being one, where a dense filter can only notice afterwards.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Ud<S: FactorScalar> {
     upper: [S; UPPER],
     diagonal: [S; DIM],

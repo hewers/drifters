@@ -95,13 +95,13 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 240 | **21 312** |
-//! | `f32-covariance` | 2 320 | 18 552 |
-//! | `reduced-state` | 2 304 | 18 504 |
-//! | both | 1 824 | 17 064 |
-//! | `smoothing` | 21 488 | 76 056 |
+//! | default | 3 232 | **21 288** |
+//! | `f32-covariance` | 2 312 | 18 528 |
+//! | `reduced-state` | 2 296 | 18 480 |
+//! | both | 1 816 | 17 040 |
+//! | `smoothing` | 21 480 | 76 032 |
 //!
-//! The default row is 3 × 3 240 for the engines, 120 × 64 for the samples,
+//! The default row is 3 × 3 232 for the engines, 120 × 64 for the samples,
 //! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!
@@ -149,6 +149,7 @@ pub use drifters_core::rewind::FixOutcome;
 /// name, and [`Rewindable::apply_aid`] calls that method, so a replay goes
 /// down exactly the path the original call did.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Aid {
     /// [`GinsEngine::apply_zupt`].
@@ -205,8 +206,8 @@ impl Rewindable for GinsEngine {
     }
 
     #[inline]
-    fn epoch_tolerance(&self) -> F {
-        GinsEngine::epoch_tolerance(self)
+    fn latest_interval(&self) -> F {
+        GinsEngine::latest_interval(self)
     }
 }
 
@@ -222,6 +223,7 @@ impl Rewindable for GinsEngine {
 /// three of them and two rings, and a type this size should not be copied by
 /// an assignment that did not say so.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct RewindEngine<const SAMPLES: usize, const EVENTS: usize> {
     inner: Rewind<GinsEngine, SAMPLES, EVENTS>,
 }
@@ -917,7 +919,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_312);
+            assert_eq!(size_of::<Representative>(), 21_288);
         }
     }
 }

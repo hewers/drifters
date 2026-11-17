@@ -38,6 +38,7 @@ use crate::lift::Input;
 /// `(0, 0, +g)` and the EqF's `ᴳg` is that vector. See
 /// [`adr/0006`](https://github.com/hewers/drifters/blob/main/docs/adr/0006-frame-convention.md).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Anchor {
     /// The geodetic origin.
     pub origin: Lla,
@@ -86,7 +87,7 @@ impl Anchor {
     /// error does.
     pub fn curvature_error(&self, range: F) -> F {
         let (rm, rn) = Wgs84::radii(self.origin.lat);
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use drifters_core::math::Real;
         let r = Real::sqrt(rm * rn);
         range * range / (2.0 * r)
@@ -118,6 +119,7 @@ pub const EARTH_RATE_DEG_PER_HOUR: F = 15.041_067;
 
 /// Whether a flat, non-rotating Earth model is defensible for a given gyroscope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FlatEarthVerdict {
     /// Earth rate is at or below the sensor's own noise floor. Model nothing.
     /// Consumer MEMS, 10–100 °/h.
@@ -196,7 +198,7 @@ pub fn flat_earth_verdict(gyro_bias_stability: F) -> FlatEarthVerdict {
 /// the poles, where the horizontal component vanishes and gyrocompassing fails
 /// entirely.
 pub fn gyrocompass_accuracy(gyro_bias_stability: F, latitude: F) -> F {
-    #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+    #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
     use drifters_core::math::Real;
     let horizontal = Wgs84::OMEGA * Real::cos(latitude);
     if horizontal <= 0.0 {

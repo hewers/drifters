@@ -38,6 +38,7 @@ use crate::lie::{integrated_adjoint_apply, left_jacobian, Se23, Se23Tangent, Se3
 
 /// An element of the symmetry group.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Symmetry {
     /// `C ∈ SE₂(3)` — acts on the extended pose.
     pub c: Se23,
@@ -117,6 +118,7 @@ impl Symmetry {
 /// 18..21   so(3),  paired with E   — magnetometer calibration
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Algebra {
     /// `se₂(3)` part, the extended pose.
     pub c: Se23Tangent,
@@ -291,6 +293,7 @@ pub(crate) fn curve(u: Algebra, h: F) -> Symmetry {
 /// Grouped as the paper does: the extended pose, the IMU biases, the GNSS lever
 /// arm and the magnetometer calibration. Total dimension 21.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct State {
     /// `T = (R, v, p) ∈ SE₂(3)`.
     pub pose: Se23,

@@ -6,7 +6,7 @@
 
 // `Real` supplies the no_std float math; see math::real for why the test
 // harness's injected `std` makes this look unused.
-#[cfg_attr(test, allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use crate::math::{Mat3, Real, Vec3};
 use crate::F;
 
@@ -15,6 +15,7 @@ use crate::F;
 /// Exposed as a unit struct rather than loose constants so an alternative datum
 /// can be introduced later without renaming call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Wgs84;
 
 impl Wgs84 {
@@ -138,6 +139,7 @@ impl Wgs84 {
 /// from one evaluation. Nothing is approximated and no state is cached between
 /// samples.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Local {
     sin_lat: F,
     cos_lat: F,
@@ -152,7 +154,7 @@ impl Local {
     /// Evaluate at a geodetic latitude (radians) and height (metres).
     #[inline]
     pub fn at(lat: F, height: F) -> Self {
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use crate::math::Real;
         let (sin_lat, cos_lat) = lat.sin_cos();
         let t = 1.0 - Wgs84::E2 * sin_lat * sin_lat;

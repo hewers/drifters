@@ -13,10 +13,13 @@ keywords = ["navigation", "gnss", "ins", "kalman", "imu"]
 
 [dependencies]
 libm = { workspace = true }
+defmt = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx = { workspace = true }
 proptest = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = []
@@ -24,6 +27,14 @@ default = []
 ## Does **not** change any arithmetic: scalar math always goes through `libm`
 ## so results are bit-identical on host and target. See docs/adr/0004.
 std = []
+## `defmt::Format` on every public type that implements `Debug`, for logging
+## on target. Formatting only: no arithmetic changes.
+defmt = ["dep:defmt"]
+## `serde` `Serialize` and `Deserialize` on the value types configuration is
+## made of, for loading it on a host. `no_std`: serde's own `std` is not
+## enabled here, though a host program's format crate usually enables it, and
+## then the transcendentals may be the platform's; see docs/adr/0004.
+serde = ["dep:serde"]
 
 [lints.rust]
 missing_docs = "warn"

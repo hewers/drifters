@@ -11,7 +11,37 @@ use drifters_core::F;
 /// set the diagonal of `P` and therefore how quickly the first GNSS fixes are
 /// allowed to pull the solution around. Setting them too small is the most
 /// common way to make a correctly implemented filter behave badly.
+///
+/// `#[non_exhaustive]`, so a new setting is not a breaking change. Outside this
+/// crate that rules out a struct literal, even one ending in
+/// `..Default::default()`. Start from [`Default`], chain the `with_*` builders
+/// for the settings almost every caller changes, and assign the rest:
+///
+/// ```
+/// use drifters_core::frames::{Lla, Ned};
+/// use drifters_core::math::{Euler, Vec3};
+/// use drifters_filter::{GinsEngine, GinsOptions};
+///
+/// let mut options = GinsOptions::default()
+///     .with_initial_state(
+///         Lla::from_degrees(30.44, 114.47, 20.0),
+///         Ned::ZERO,
+///         Euler::new(0.0, 0.0, 1.2),
+///     )
+///     .with_antenna_lever_arm(Vec3::new(0.14, -0.02, -1.10));
+/// options.max_consecutive_rejections = 20;
+/// let engine = GinsEngine::new(options).expect("valid configuration");
+/// # let _ = engine;
+/// ```
+///
+/// With the `serde` feature, a configuration file can give some of the fields
+/// and leave the rest at their defaults. See `docs/adr/0010` for why the
+/// settings types are non-exhaustive and the value types are not.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct GinsOptions {
     /// Initial position, velocity and attitude.
     pub initial_state: Pva,
@@ -169,6 +199,7 @@ impl GinsOptions {
 
 /// Why a [`GinsOptions`] cannot be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum ConfigError {
     /// The initial geodetic position is out of range or not finite.

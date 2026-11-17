@@ -87,6 +87,18 @@ jobs:
       # call into `__aeabi_dmul`. It has to build everywhere, including on the
       # targets with no FPU at all, where it is merely smaller.
       - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features f32-covariance
+      # The optional features, which exist for exactly these targets. `defmt`
+      # is how firmware logs; `serde` is for host-side configuration, but it
+      # is declared without `std`, and this is the build that would notice if
+      # that stopped being true.
+      - run: >
+          cargo build -p drifters-filter -p drifters-eqf -p drifters-proto
+          --target ${{ matrix.target }}
+          --features drifters-filter/defmt,drifters-eqf/defmt,drifters-proto/defmt
+      - run: >
+          cargo build -p drifters-filter -p drifters-eqf
+          --target ${{ matrix.target }}
+          --features drifters-filter/serde,drifters-eqf/serde
       # No `drifters-gnss` here on purpose: it is the desktop half and uses
       # `std` deliberately. See its crate docs.
 
@@ -167,7 +179,8 @@ jobs:
       # can reach for something newer without the default build noticing.
       - run: >
           cargo build -p drifters-filter
-          --features f32-covariance,reduced-state,smoothing,std
+          --features f32-covariance,reduced-state,smoothing,std,defmt,serde
+      - run: cargo build -p drifters-eqf --features std,defmt,serde
       # The crates above the floor, at the floor they declare.
       - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo build --workspace
@@ -267,7 +280,7 @@ jobs:
           test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
           # The equivariant filter's engine, under the same ceiling. Its own
           # label, because it is the same in every feature configuration and
-          # the two below hold the ESKF to tighter ones. Measured at 15 472 B,
+          # the two below hold the ESKF to tighter ones. Measured at 15 480 B,
           # down from 28 852 B before its covariance arithmetic was done in
           # place. A late fix through its rewind layer measures the same.
           eqf=$(grep -oP '^PEAK_EQF\s+\K[0-9]+' report.txt)
@@ -275,7 +288,7 @@ jobs:
           test "$eqf" -lt 20480 || { echo "equivariant filter stack budget exceeded"; exit 1; }
           # The same filter with its covariance factored and held in f32, the
           # form for a single-precision FPU and the one that keeps pace with
-          # an IMU on this part. Measured at 14 000 B.
+          # an IMU on this part. Measured at 14 008 B.
           eqf32=$(grep -oP '^PEAK_EQF_F32\s+\K[0-9]+' report.txt)
           echo "factored equivariant filter peak stack: $eqf32 bytes"
           test "$eqf32" -lt 20480 || { echo "factored equivariant filter stack budget exceeded"; exit 1; }
@@ -297,7 +310,7 @@ jobs:
           peak=$(grep -oP '^PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 18 208 B.
+          # predict path it shrinks it by 23 %. Measured at 18 200 B.
           test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
@@ -313,6 +326,31 @@ jobs:
             fi
             echo "no panic machinery linked [${features:-default}]"
           done
+
+  # The worked RTIC example: an IMU interrupt feeding the engine, late GNSS
+  # fixes applied by rewinding, telemetry out. It runs on QEMU's STM32F405
+  # board under `-icount`, so its timing is deterministic, and the firmware
+  # judges itself. It exits non-zero if the solution ends more than 10 cm from
+  # the truth, an IMU sample was dropped, or a fix was not applied. An example
+  # nothing runs is an example that has stopped working.
+  rtic_example:
+    name: RTIC example (QEMU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/rtic-imu
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: build
+        working-directory: examples/rtic-imu
+        run: cargo build --release
+      - name: run under QEMU
+        working-directory: examples/rtic-imu
+        run: timeout 600 cargo run --release
 
   # `portable_simd` is opt-in through `--cfg drifters_nightly_simd`, not a cargo
   # feature, so that `--all-features` on stable does not try to enable a

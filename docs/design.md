@@ -267,7 +267,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 240 | **2 320** |
+| `GinsEngine` total | 3 232 | **2 312** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -285,16 +285,16 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 240 | **21 312** |
-| `f32-covariance` | 2 320 | 18 552 |
-| `reduced-state` | 2 304 | 18 504 |
-| both | 1 824 | 17 064 |
+| default | 3 232 | **21 288** |
+| `f32-covariance` | 2 312 | 18 528 |
+| `reduced-state` | 2 296 | 18 480 |
+| both | 1 816 | 17 040 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 608 bytes** with
-the dense covariance and 17 808 with the factored `f32` one: the rings are
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 632 bytes** with
+the dense covariance and 17 832 with the factored `f32` one: the rings are
 identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
@@ -309,8 +309,8 @@ late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, and it costs what it was expected to:
 no engine-sized temporary, and a frame of its own of **152 bytes** over the
 ESKF's deepest path, the held-state ZUPT (160 with `f32-covariance`). That takes the ESKF's peak to
-19 120 bytes, 18 208 with `f32-covariance` and 10 688 at 15 states. The EqF's
-late fix measures 15 472 dense and 14 000 factored, no deeper than its own fix
+19 120 bytes, 18 200 with `f32-covariance` and 10 688 at 15 states. The EqF's
+late fix measures 15 480 dense and 14 008 factored, no deeper than its own fix
 step in either. All are inside
 their CI ceilings, and all are now part of the peak CI checks.
 
@@ -325,7 +325,7 @@ add only a small frame. That was correct this time. It is still how the
 | `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
 | `EqFilter<C>` (observer state + `Σ` + gravity + GCU rate) | 3 832 | 1 232 |
 | `EqfOptions` | 648 | 648 |
-| `EqfEngine<C>` total | **4 672** | **2 072** |
+| `EqfEngine<C>` total | **4 680** | **2 080** |
 
 Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
 `rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
@@ -338,10 +338,10 @@ ESKF:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 9 772 | 10 100 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 472 | 14 000 |
+| `add_imu` (propagate) | 9 780 | 10 108 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 480 | 14 008 |
 | `apply_magnetometer` | 14 392 | 12 920 |
-| **peak** | **15 472** | **14 000** |
+| **peak** | **15 480** | **14 008** |
 
 Under the ESKF's own 19 120, and both under the same 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
@@ -412,10 +412,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 240 B | 2 304 B |
+| `GinsEngine` | 3 232 B | 2 296 B |
 | peak stack | 16 480 B | **9 504 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 824 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 816 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
 covariance was factored, and again when the equivariant filter's engine joined
@@ -424,7 +424,7 @@ the harness:
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
 | 21-state, `f64` | 16 092 | 18 968 | **19 120** |
-| 21-state, `f32-covariance` | 12 428 | 18 048 | **18 208** |
+| 21-state, `f32-covariance` | 12 428 | 18 048 | **18 200** |
 | 15-state (`reduced-state`) | 9 604 | 10 536 | **10 688** |
 
 The peak is now a late fix through the rewind layer, which replays the ZUPT
@@ -454,7 +454,7 @@ Measured on the KF-GINS dataset it costs very little:
 
 | | 21-state | 15-state |
 |---|---|---|
-| horizontal residual RMS | 0.0330 m | 0.0339 m |
+| horizontal residual RMS | 0.0329 m | 0.0338 m |
 | vertical residual RMS | 0.0184 m | 0.0199 m |
 | NIS ratio | 0.486 | **0.554** |
 

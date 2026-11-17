@@ -36,6 +36,15 @@
 //! [`Ud<f32>`](covariance::Ud) holds it factored as `U D Uᵀ` instead, at a
 //! fifth of the instructions and no measurable change in any result. See
 //! [`covariance`].
+//!
+//! # Features
+//!
+//! - `defmt`: `defmt::Format` on every public type that implements `Debug`.
+//! - `serde`: `Serialize` and `Deserialize` on [`EqfOptions`] and
+//!   [`ProcessNoise`], for configuration read on a host. A partial file takes
+//!   the defaults for the rest, `null` turns an optional setting off, and an
+//!   unknown setting is an error.
+//! - `std`: passed through to `drifters-core`.
 
 #![no_std]
 #![forbid(unsafe_code)]

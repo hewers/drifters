@@ -13,9 +13,12 @@ keywords = ["navigation", "gnss", "ins", "kalman", "sensor-fusion"]
 
 [dependencies]
 drifters-core = { workspace = true }
+defmt = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = []
@@ -46,6 +49,14 @@ reduced-state = []
 f32-covariance = []
 ## Enables `std`-only conveniences inherited from `drifters-core`.
 std = ["drifters-core/std"]
+## `defmt::Format` on every public type that implements `Debug`, here and in
+## `drifters-core`. Formatting only.
+defmt = ["dep:defmt", "drifters-core/defmt"]
+## `serde` `Serialize` and `Deserialize` on [`GinsOptions`] and
+## [`StationarityConfig`], and on the `drifters-core` types they contain, for
+## configuration loaded on a host. Missing fields take their defaults; unknown
+## ones are an error.
+serde = ["dep:serde", "drifters-core/serde"]
 ## Record what a backward pass needs from the forward one, in
 ## [`engine::GinsEngine`].
 ##

@@ -34,6 +34,7 @@ use drifters_core::F;
 /// `ω` is the rotational part; `ν` and `ρ` pair with the velocity and position
 /// columns of an [`Se23`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Se23Tangent {
     /// Rotational part.
     pub omega: Vec3,
@@ -110,6 +111,7 @@ impl Se23Tangent {
 /// Addition and subtraction come from [`core::ops`] rather than inherent
 /// methods, so the algebra reads as arithmetic at call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Se3Tangent {
     /// Rotational part.
     pub omega: Vec3,
@@ -234,6 +236,7 @@ impl core::ops::Sub for Se23Tangent {
 /// [ 0  0  1 ]
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Se23 {
     /// Rotation.
     pub rotation: Mat3,
@@ -373,6 +376,7 @@ impl Se23 {
 
 /// An element of `SE(3)`, used only as the codomain of `χ`.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Se3 {
     /// Rotation.
     pub rotation: Mat3,
@@ -639,7 +643,7 @@ pub fn left_jacobian(omega: Vec3) -> Mat3 {
             1.0 / 6.0 - theta2 / 120.0 + t4 / 5040.0,
         )
     } else {
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use drifters_core::math::Real;
         let theta = Real::sqrt(theta2);
         let (sin, cos) = Real::sin_cos(theta);
@@ -666,7 +670,7 @@ pub fn left_jacobian_inverse(omega: Vec3) -> Mat3 {
         let t4 = theta2 * theta2;
         1.0 / 12.0 + theta2 / 720.0 + t4 / 30240.0
     } else {
-        #[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
         use drifters_core::math::Real;
         let theta = Real::sqrt(theta2);
         let half = 0.5 * theta;

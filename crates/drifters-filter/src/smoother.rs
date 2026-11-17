@@ -113,6 +113,7 @@ use drifters_core::types::NavState;
 /// them by hand; the covariances have to be the ones either side of the same
 /// update, and the transition the one spanning the same interval.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Checkpoint {
     /// Navigation state after this epoch's update and feedback.
     pub state: NavState,
@@ -130,6 +131,7 @@ pub struct Checkpoint {
 
 /// One smoothed epoch.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Smoothed {
     /// Navigation state with the backward correction applied.
     pub state: NavState,
@@ -150,6 +152,7 @@ pub struct Smoothed {
 
 /// Why a backward pass could not complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum SmootherError {
     /// `out` is shorter than `checkpoints`.

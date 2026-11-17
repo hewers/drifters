@@ -14,6 +14,40 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **A GNSS epoch's tolerance is a hundredth of the IMU interval, not a fixed
+  100 µs.** Breaking: `EPOCH_TOLERANCE` is gone, replaced by
+  `EPOCH_TOLERANCE_FRACTION` and `epoch_tolerance(dt)`. `place(epoch, imu)`
+  no longer takes a tolerance, so no caller can pass one the engine would not
+  use. `Rewindable::epoch_tolerance` is replaced by a required
+  `latest_interval`. The engine field's doc had said "half the IMU interval",
+  which would never split a sample, and the constant had replaced it without
+  deriving anything from the interval. At 100 Hz the value is unchanged. At
+  5 kHz and above, the fixed value made the two edge windows meet, and an epoch
+  most of the way through an interval was applied at its start.
+
+  On KF-GINS's 200 Hz the tolerance is now 50 µs, and it moved results. That
+  dataset's IMU clock runs about 99 µs ahead of the GNSS seconds. From fix 1 361
+  onward the offset had drifted just inside the old 100 µs, so 60 % of fixes
+  were applied 99 µs early, at the start of their sample. They are now split at
+  their epoch. The ESKF goes from 0.0330 to 0.0329 m horizontal, almost all of
+  it in east (0.0245 to 0.0244 m RMS, max 0.0734 to 0.0726): the car is heading
+  west at about 13 m/s, where 99 µs is 1.3 mm. The 15-state build goes from
+  0.0339 to 0.0338 m, and the EqF's horizontal sigma from 0.0228 to 0.0227. The
+  GSDC traces, at 100 Hz, are byte-identical.
+
+  `GinsEngine` is 8 bytes smaller (3 232, the field is gone), and `EqfEngine`
+  8 bytes larger (4 680, it records the interval). The stack peaks move by the
+  same 8 bytes or not at all: EqF 15 480 and 14 008, ESKF `f32-covariance`
+  18 200.
+- **`GinsOptions`, `EqfOptions` and `StationarityConfig` are
+  `#[non_exhaustive]`.** Breaking, and the last time a new setting will be:
+  outside the defining crate, build them from `Default` and assign fields, or
+  read them with `serde`. Value types (`Vec3`, `ImuSample`, `GnssFix`,
+  `ImuNoise` and the rest) stay exhaustive, because a field added to one of
+  those changes what the value means. [adr/0010](docs/adr/0010-non-exhaustive-settings.md)
+  has the rule and the cost. `drifters-proto`'s decoder named every field so
+  that a new one would break its build, and the compiler can no longer do that
+  check. `every_options_field_is_carried` replaces it.
 - **The group exponential no longer forms the integrated `SE(3)` adjoint as
   `6 × 6` products.** `Symmetry::exp` calls it twice per IMU sample, at 461
   thousand instructions a call on a Cortex-M4. `integrated_adjoint` now runs
@@ -193,6 +227,31 @@ breaking wire change becomes `v2` rather than a crate version bump.
   dataset result moves.
 
 ### Added
+
+- **A `defmt` feature** on `drifters-core`, `-filter`, `-eqf` and `-proto`:
+  `defmt::Format` on every public type that implements `Debug`, 63 of them,
+  derived beside each `Debug`. `Rewind`'s impl is written by hand, because it
+  needs a bound on `E::Aid` and because its rings are 20 KiB of log line. It
+  prints the live engine and the counters instead. CI builds it for all three
+  bare-metal targets.
+- **A `serde` feature** on `drifters-core`, `-filter` and `-eqf`, for
+  configuration loaded on a host. It covers `GinsOptions`, `EqfOptions`,
+  `StationarityConfig`, `ProcessNoise`, and the value types they are made of,
+  plus `ImuSample`, `GnssFix`, `NavState` and `PvaStd`. Options take their
+  defaults for missing fields, and every type rejects unknown ones. `Attitude`
+  is written as its quaternion alone, and `GpsTime` as `gps_nanos`, a name
+  that says which epoch it counts from. Optional settings distinguish absent
+  (the default) from `null` (off). `serde` is declared without `std` and still
+  builds for every bare-metal target. A host program that turns `serde/std` on
+  is a third way for `std`'s float methods to reach the filter, now listed in
+  [adr/0004](docs/adr/0004-linear-algebra.md).
+- **`examples/rtic-imu`**: an IMU data-ready interrupt, the engine in an RTIC
+  task, GNSS fixes 120 ms late through `RewindEngine`, and telemetry out, on
+  QEMU's STM32F405 board under `-icount`. It checks its own result: 2.8 cm from
+  the truth after 20 s, 19 of 19 fixes applied by rewinding, the longest replay
+  27 samples, the IMU backlog peaking at 11 of 32, nothing dropped. Its README
+  derives the queue depth from the rewind burst. CI runs it.
+- `From<Quat> for Attitude` and `From<Attitude> for Quat`.
 
 - **`drifters-eqf::covariance`: the equivariant filter in single
   precision.** `EqFilter`, `EqfEngine` and `EqfRewindEngine` are generic over

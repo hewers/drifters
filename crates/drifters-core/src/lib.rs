@@ -7,8 +7,20 @@
 //!
 //! This crate is `#![no_std]` and allocation-free. Every type it exposes is
 //! `Copy`, fixed size, and safe to keep in a `static` or on a small stack. The
-//! only dependency is [`libm`], which keeps scalar math bit-identical between a
-//! host test run and a Cortex-M target (see `docs/adr/0004-linear-algebra.md`).
+//! only required dependency is [`libm`], which keeps scalar math bit-identical
+//! between a host test run and a Cortex-M target (see
+//! `docs/adr/0004-linear-algebra.md`).
+//!
+//! # Features
+//!
+//! Both off by default, both additive:
+//!
+//! - `defmt`: `defmt::Format` on every public type that implements `Debug`,
+//!   for logging on target.
+//! - `serde`: `Serialize` and `Deserialize` on the value types configuration
+//!   is made of. Unknown fields are errors. [`types::Attitude`] is written as
+//!   its quaternion alone, and [`time::GpsTime`] as `gps_nanos`, which names
+//!   its epoch.
 //!
 //! # Layout
 //!

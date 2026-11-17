@@ -49,6 +49,16 @@
 //! - [`rewind`] — applying a GNSS fix that arrived after its epoch.
 //! - [`state`] — the error-state index map.
 //! - [`config`] — configuration and its validation.
+//!
+//! # Features
+//!
+//! - `reduced-state` and `f32-covariance` change what the filter computes and
+//!   are not additive; see the manifest.
+//! - `smoothing` records what [`smoother`] needs from the forward pass.
+//! - `defmt`: `defmt::Format` on every public type that implements `Debug`.
+//! - `serde`: `Serialize` and `Deserialize` on [`GinsOptions`] and
+//!   [`StationarityConfig`], for configuration read on a host.
+//! - `std`: `std::error::Error` and friends.
 
 #![cfg_attr(drifters_nightly_simd, feature(portable_simd))]
 #![no_std]

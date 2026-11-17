@@ -16,6 +16,9 @@ use crate::F;
 
 /// Geodetic position on the WGS-84 ellipsoid.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Lla {
     /// Geodetic latitude, radians, positive north.
     pub lat: F,
@@ -29,6 +32,9 @@ pub struct Lla {
 
 /// Earth-centred earth-fixed Cartesian position, metres.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Ecef {
     /// Towards the intersection of the equator and the prime meridian.
     pub x: F,
@@ -40,6 +46,9 @@ pub struct Ecef {
 
 /// A local tangent-plane displacement in metres, north-east-down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct Ned {
     /// North, metres.
     pub n: F,

@@ -42,12 +42,12 @@
 //! [`EqfRewindEngine`]: crate::rewind::EqfRewindEngine
 
 use drifters_core::estimator::{
-    place, Estimator, FilterError, GnssQueued, Placement, PvaStd, EPOCH_TOLERANCE,
+    epoch_tolerance, place, Estimator, FilterError, GnssQueued, Placement, PvaStd,
 };
 use drifters_core::frames::{Lla, Ned};
 // `Real` supplies the no_std float math; anything that links `std` makes this
 // look unused. See drifters_core::math::real.
-#[cfg_attr(any(test, feature = "std"), allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Mat3, Quat, Vec3};
 use drifters_core::time::GpsTime;
@@ -77,12 +77,15 @@ use crate::physical;
 /// [`Ud<f32>`](crate::covariance::Ud) for a part whose FPU is single
 /// precision. Build the second with [`EqfEngine::with_covariance`].
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct EqfEngine<C: Covariance = StateMatrix> {
     options: EqfOptions,
     filter: EqFilter<C>,
     anchor: Anchor,
     /// Time of the most recently processed IMU sample.
     time: GpsTime,
+    /// Length of the most recently processed IMU interval, seconds.
+    interval: F,
     pending_gnss: Option<GnssFix>,
     /// Whether a first IMU sample has fixed the time origin.
     initialised: bool,
@@ -136,6 +139,7 @@ impl<C: Covariance> EqfEngine<C> {
             filter,
             anchor,
             time: GpsTime::ZERO,
+            interval: 0.0,
             pending_gnss: None,
             initialised: false,
             last_nis: F::NAN,
@@ -255,6 +259,13 @@ impl<C: Covariance> EqfEngine<C> {
         self.initialised
     }
 
+    /// Length of the most recent IMU interval, seconds; zero before the
+    /// first sample. See [`Rewindable::latest_interval`](drifters_core::rewind::Rewindable::latest_interval).
+    #[inline]
+    pub(crate) fn latest_interval(&self) -> F {
+        self.interval
+    }
+
     /// The configuration in use.
     #[inline]
     pub fn options(&self) -> &EqfOptions {
@@ -294,8 +305,9 @@ impl<C: Covariance> EqfEngine<C> {
         }
         // The next interval starts at the current time. A fix within the
         // tolerance of it is `AtStart` of that interval and still usable;
-        // anything earlier is not.
-        if self.initialised && fix.time.seconds_since(self.time) < -EPOCH_TOLERANCE {
+        // anything earlier is not. The latest interval stands in for the next,
+        // whose length is unknown until its sample arrives.
+        if self.initialised && fix.time.seconds_since(self.time) < -epoch_tolerance(self.interval) {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
             return GnssQueued::Stale;
         }
@@ -324,6 +336,7 @@ impl<C: Covariance> EqfEngine<C> {
         // The first sample only establishes the interval's left edge.
         if !self.initialised {
             self.time = raw.time;
+            self.interval = raw.dt;
             self.initialised = true;
             return Ok(());
         }
@@ -362,14 +375,14 @@ impl<C: Covariance> EqfEngine<C> {
         }
 
         self.time = raw.time;
+        self.interval = raw.dt;
         Ok(())
     }
 
     /// The pending fix and where it falls in the interval `imu` covers, or
     /// `None` when no fix is pending.
     fn pending_placement(&self, imu: &ImuSample) -> Option<(Placement, GnssFix)> {
-        self.pending_gnss
-            .map(|fix| (place(fix.time, imu, EPOCH_TOLERANCE), fix))
+        self.pending_gnss.map(|fix| (place(fix.time, imu), fix))
     }
 
     /// Where the pending fix falls, without the fix.
@@ -805,7 +818,7 @@ mod tests {
         // table in docs/design.md with them.
         assert_eq!(size_of::<EqFilter>(), 3_832);
         assert_eq!(size_of::<EqfOptions>(), 648);
-        assert_eq!(size_of::<EqfEngine>(), 4_672);
+        assert_eq!(size_of::<EqfEngine>(), 4_680);
     }
 
     // --- the interval, and what happens to a fix -------------------------

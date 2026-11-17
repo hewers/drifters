@@ -15,12 +15,13 @@ use core::ops::{Add, AddAssign, Index, IndexMut, Mul, Neg, Sub, SubAssign};
 
 // `Real` supplies the no_std float math; see math::real for why the test
 // harness's injected `std` makes this look unused.
-#[cfg_attr(test, allow(unused_imports))]
+#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use super::{Real, Vec3};
 use crate::F;
 
 /// A row-major `R × C` matrix of [`F`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(transparent)]
 pub struct Matrix<const R: usize, const C: usize> {
     /// Row-major elements.
@@ -341,6 +342,7 @@ impl<const N: usize> Matrix<N, N> {
 /// that a measurement noise matrix was mis-specified, so [`Cholesky::new`]
 /// returns an `Option` rather than panicking.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Cholesky<const N: usize> {
     lower: Matrix<N, N>,
 }
