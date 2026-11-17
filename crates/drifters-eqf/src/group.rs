@@ -31,10 +31,10 @@
 //! them accordingly — `ρ_p` takes `b`, `ρ_v` takes `a` — which is the sanity
 //! check that the mapping is the right way round.
 
-use drifters_core::math::{Mat3, Matrix, Vec3, Vector};
+use drifters_core::math::{Mat3, Matrix, Vec3};
 use drifters_core::F;
 
-use crate::lie::{integrated_adjoint, left_jacobian, Se23, Se23Tangent, Se3, Se3Tangent};
+use crate::lie::{integrated_adjoint_apply, left_jacobian, Se23, Se23Tangent, Se3, Se3Tangent};
 
 /// An element of the symmetry group.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -223,20 +223,20 @@ impl Symmetry {
     ///            exp_{SO(3)}(u_e) )
     /// ```
     ///
-    /// The second integral is [`integrated_adjoint`]; the third is exactly the
-    /// `SO(3)` left Jacobian, which is already here for `SE₂(3)`'s own
-    /// exponential.
+    /// The second integral is
+    /// [`integrated_adjoint`](crate::lie::integrated_adjoint), applied to `u_γ` by
+    /// [`integrated_adjoint_apply`] without forming the matrix; the third is
+    /// exactly the `SO(3)` left Jacobian, which is already here for `SE₂(3)`'s
+    /// own exponential.
     ///
     /// Dropping both integrals gives `crate::group::curve`, which is a
     /// first-order retraction — correct to `O(h)` and silently wrong beyond it.
     /// That is why the tests use `curve` (a derivative sees nothing else) and
     /// the filter uses this.
     pub fn exp(u: Algebra) -> Self {
-        let psi = integrated_adjoint(u.c.pi());
-        let gamma = psi.matmul(&Vector::<6>::from_column(u.gamma.to_array()));
         Self {
             c: Se23::exp(u.c),
-            gamma: Se3Tangent::from_array(gamma.to_column()),
+            gamma: integrated_adjoint_apply(u.c.pi(), u.gamma),
             delta: left_jacobian(u.c.omega) * u.delta,
             e: drifters_core::math::Quat::from_rotation_vector(u.e).to_dcm(),
         }

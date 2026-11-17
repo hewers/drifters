@@ -13,9 +13,11 @@ generic code, written against `drifters_core::estimator::Estimator` and
 `drifters_core::rewind::Rewindable`: a plain step, a step with a GNSS fix
 inside it, and a fix fifteen samples late through the rewind layer, whose
 replay runs nested inside the call. `PEAK` is
-the ESKF's peak stack and `PEAK_EQF` the equivariant filter's; CI holds both
-under 20 KiB. `src/bin/panic_audit.rs` is a second binary that links only the
-two data paths, so that CI can check neither reaches `core::panicking`.
+the ESKF's peak stack, `PEAK_EQF` the equivariant filter's with its dense
+covariance and `PEAK_EQF_F32` with the factored single-precision one; CI holds
+all three under 20 KiB. `src/bin/panic_audit.rs` is a second binary that links only the
+data paths — both estimators, both EqF covariance forms, both rewind layers —
+so that CI can check none reaches `core::panicking`.
 
 Needs `qemu-system-arm` on `PATH` and the `thumbv7em-none-eabihf` target:
 
@@ -50,7 +52,8 @@ instruction, and the harness times `add_imu` against it with SysTick:
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
 INSTRUCTIONS add_imu = 3538560 (88464 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 5078640 (126966 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4285440 (107136 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 835800 (20895 ticks; only under -icount shift=0)
 ```
 
 Three things about that output are there because their absence was a bug:

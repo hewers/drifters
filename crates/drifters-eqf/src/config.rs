@@ -377,6 +377,10 @@ pub enum ConfigError {
     NegativeProcessNoise,
     /// The GCU rate must lie in `[0, 1]`. To turn GCU off, set it to `None`.
     InvalidGcuRate,
+    /// The initial covariance the sigmas describe could not be factored. Only
+    /// a factored covariance form checks; the sigmas are validated positive,
+    /// so this needs a prior at the edge of what the precision can hold.
+    InitialCovarianceNotPositiveDefinite,
     /// A gate threshold must be finite and positive. To disable a gate, set
     /// it to `None`.
     InvalidGate,
@@ -398,6 +402,9 @@ impl ConfigError {
             Self::NonPositiveInitialStd => "initial standard deviations must be > 0",
             Self::NegativeProcessNoise => "process noise densities must be finite and >= 0",
             Self::InvalidGcuRate => "GCU rate must lie in [0, 1]",
+            Self::InitialCovarianceNotPositiveDefinite => {
+                "the initial covariance could not be factored"
+            }
             Self::InvalidGate => "a gate threshold must be finite and > 0",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
         }

@@ -241,11 +241,11 @@ impl GinsEngine {
         }
 
         let imu = self.state.imu_error.compensate(&raw);
-        match self.classify_gnss(&imu) {
-            None | Some(Placement::Ahead) => {
+        match self.pending_placement(&imu) {
+            None | Some((Placement::Ahead, _)) => {
                 self.propagate(&imu);
             }
-            Some(Placement::Stale) => {
+            Some((Placement::Stale, _)) => {
                 // Queued before the first sample fixed the time origin, or the
                 // stream jumped. Either way it is unusable, and a slot that
                 // holds it would present the next `add_gnss` as a replacement
@@ -254,17 +254,19 @@ impl GinsEngine {
                 self.stale_fixes = self.stale_fixes.saturating_add(1);
                 self.propagate(&imu);
             }
-            Some(Placement::AtStart) => {
+            Some((Placement::AtStart, _)) => {
                 self.apply_pending_gnss()?;
                 self.propagate(&imu);
             }
-            Some(Placement::AtEnd) => {
+            Some((Placement::AtEnd, _)) => {
                 self.propagate(&imu);
                 self.apply_pending_gnss()?;
             }
-            Some(Placement::Inside) => {
-                let fix_time = self.pending_gnss.expect("placement implies a fix").time;
-                let (before, after) = imu.split_at(fix_time);
+            Some((Placement::Inside, fix)) => {
+                // The fix comes with its placement, so there is nothing to
+                // look up again and nothing to assert. This was an `expect`
+                // that only the optimiser kept off the data path.
+                let (before, after) = imu.split_at(fix.time);
                 if let Some(before) = before {
                     self.propagate(&before);
                 }
@@ -279,11 +281,17 @@ impl GinsEngine {
         Ok(())
     }
 
-    /// Where the pending fix falls in the interval `imu` covers, or `None`
-    /// when no fix is pending.
-    fn classify_gnss(&self, imu: &ImuSample) -> Option<Placement> {
+    /// The pending fix and where it falls in the interval `imu` covers, or
+    /// `None` when no fix is pending.
+    fn pending_placement(&self, imu: &ImuSample) -> Option<(Placement, GnssFix)> {
         self.pending_gnss
-            .map(|fix| place(fix.time, imu, self.epoch_tolerance))
+            .map(|fix| (place(fix.time, imu, self.epoch_tolerance), fix))
+    }
+
+    /// Where the pending fix falls, without the fix.
+    #[cfg(test)]
+    fn classify_gnss(&self, imu: &ImuSample) -> Option<Placement> {
+        self.pending_placement(imu).map(|(placement, _)| placement)
     }
 
     /// Mechanize one interval and propagate the covariance across it.

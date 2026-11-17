@@ -267,12 +267,18 @@ jobs:
           test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
           # The equivariant filter's engine, under the same ceiling. Its own
           # label, because it is the same in every feature configuration and
-          # the two below hold the ESKF to tighter ones. Measured at 13 568 B,
+          # the two below hold the ESKF to tighter ones. Measured at 15 472 B,
           # down from 28 852 B before its covariance arithmetic was done in
           # place. A late fix through its rewind layer measures the same.
           eqf=$(grep -oP '^PEAK_EQF\s+\K[0-9]+' report.txt)
           echo "equivariant filter peak stack: $eqf bytes"
           test "$eqf" -lt 20480 || { echo "equivariant filter stack budget exceeded"; exit 1; }
+          # The same filter with its covariance factored and held in f32, the
+          # form for a single-precision FPU and the one that keeps pace with
+          # an IMU on this part. Measured at 14 000 B.
+          eqf32=$(grep -oP '^PEAK_EQF_F32\s+\K[0-9]+' report.txt)
+          echo "factored equivariant filter peak stack: $eqf32 bytes"
+          test "$eqf32" -lt 20480 || { echo "factored equivariant filter stack budget exceeded"; exit 1; }
       - name: the 15-state configuration must fit a 16 KiB stack
         working-directory: cortex-m-harness
         run: |

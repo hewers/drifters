@@ -41,6 +41,7 @@
 //! [`crate::lift`].
 
 use drifters_core::math::{Mat3, Matrix, Vec3};
+use drifters_core::F;
 
 use crate::group::{act_direction, act_position, act_velocity, Symmetry};
 use crate::lie::Se23Tangent;
@@ -97,36 +98,62 @@ pub type OutputMatrix = Matrix<3, DIM>;
 /// printed one by exactly `ad_γ̂`, which is how this was found rather than
 /// assumed.
 pub fn state_matrix(x: &Symmetry, u: &Input, gravity: Vec3) -> StateMatrix {
-    let a = x.a();
     let mut m = StateMatrix::zeros();
+    state_matrix_entries(x, u, gravity, |i, j, value| m.data[i][j] = value);
+    m
+}
+
+/// [`state_matrix`]'s non-zero blocks, entry by entry, for a caller that
+/// wants them somewhere other than a dense `f64` matrix — the factored
+/// covariance narrows them straight into its own, and a `21 × 21` in `f64`
+/// that existed only to be narrowed would be 3 528 bytes on the stack of the
+/// path that sets its peak. Every entry not handed over is zero, and no entry
+/// is handed over twice.
+pub(crate) fn state_matrix_entries(
+    x: &Symmetry,
+    u: &Input,
+    gravity: Vec3,
+    mut put: impl FnMut(usize, usize, F),
+) {
+    let a = x.a();
+    let mut block = |r0: usize, c0: usize, b: &Mat3| {
+        for i in 0..3 {
+            for j in 0..3 {
+                put(r0 + i, c0 + j, b[(i, j)]);
+            }
+        }
+    };
 
     // ₁A: gravity couples attitude into velocity, velocity integrates into
     // position. The two non-zero blocks of the extended-pose dynamics.
-    m.set_block(3, 0, &gravity.skew());
-    m.set_block(6, 3, &Mat3::identity());
+    block(3, 0, &gravity.skew());
+    block(6, 3, &Mat3::identity());
 
     // The pose's dependence on the bias. The identity blocks come from the
     // input entering the lift as (ω − b_ω) and (a − b_a); the p̂^ comes from
     // Ad_Ĉ carrying the rotational part into the position column.
-    m.set_block(0, 9, &Mat3::identity());
-    m.set_block(3, 12, &Mat3::identity());
-    m.set_block(6, 9, &x.c.position.skew());
+    block(0, 9, &Mat3::identity());
+    block(3, 12, &Mat3::identity());
+    block(6, 9, &x.c.position.skew());
+
+    // ₃A, the bias-corrected rate in the global frame, on the lever arm and
+    // the magnetometer calibration.
+    let a3 = (a * u.omega + x.gamma.omega).skew();
+    block(15, 15, &a3);
+    block(18, 18, &a3);
+    block(18, 0, &-a3);
+    block(18, 9, &Mat3::identity());
 
     // ₂A, the bias block. W = (ω, a, 0), G = (0, g, 0). The γ̂ is the bias
     // correction the printed equation omits — see the doc comment.
     let w = Se23Tangent::new(u.omega, u.accel, Vec3::ZERO);
     let g = Se23Tangent::new(Vec3::ZERO, gravity, Vec3::ZERO);
-    m.set_block(9, 9, &(x.gamma + (x.c.adjoint_apply(w) + g).pi()).ad());
-
-    // ₃A, the bias-corrected rate in the global frame, on the lever arm and
-    // the magnetometer calibration.
-    let a3 = (a * u.omega + x.gamma.omega).skew();
-    m.set_block(15, 15, &a3);
-    m.set_block(18, 18, &a3);
-    m.set_block(18, 0, &-a3);
-    m.set_block(18, 9, &Mat3::identity());
-
-    m
+    let bias = (x.gamma + (x.c.adjoint_apply(w) + g).pi()).ad();
+    for i in 0..6 {
+        for j in 0..6 {
+            put(9 + i, 9 + j, bias[(i, j)]);
+        }
+    }
 }
 
 /// The linearised magnetometer output `C*_m`, equation (11).

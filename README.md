@@ -243,7 +243,8 @@ Cortex-M4, because that core's FPU is single precision and the filter's `f64`
 runs in software: at least 21 ms at 168 MHz, so it cannot follow a 100 Hz IMU
 there. `--features f32-covariance` removes 87 % of that, to 473 thousand, with
 no measurable change in any result, and is the configuration to use on that
-part. The equivariant filter is 5.1 million with no single-precision form. For
+part. The equivariant filter is 4.3 million dense, and 0.84 million with its
+covariance factored and held in `f32`, again with no measurable change. For
 a long time this repository quoted 21 398 for the default build, 165 times too
 few, from a counter in the wrong unit that had also wrapped;
 [docs/testing.md](docs/testing.md#instructions-retired) has the numbers and how

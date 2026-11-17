@@ -18,7 +18,7 @@
 
 use drifters_core::estimator::{Estimator, FilterError};
 use drifters_core::math::Vec3;
-use drifters_eqf::EqfEngine;
+use drifters_eqf::{EqfEngine, Ud};
 use drifters_filter::range::RangeObservation;
 use drifters_filter::smoother::Checkpoint;
 use drifters_filter::GinsEngine;
@@ -30,19 +30,30 @@ pub enum EngineKind {
     Eskf,
     /// The equivariant filter, `drifters-eqf`.
     Eqf,
+    /// The same filter with its covariance factored as `U D Uᵀ` and held in
+    /// `f32`: the form that suits a single-precision FPU. Not in
+    /// [`EngineKind::ALL`], which lists estimators; this is a precision of
+    /// one of them, named to be measured against it.
+    EqfF32,
 }
 
 impl EngineKind {
     /// Both, in the order reports list them.
     pub const ALL: [EngineKind; 2] = [EngineKind::Eskf, EngineKind::Eqf];
 
-    /// Parse one name: `eskf` or `eqf`.
+    /// Parse one name: `eskf`, `eqf` or `eqf-f32`.
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim() {
             "eskf" => Some(Self::Eskf),
             "eqf" => Some(Self::Eqf),
+            "eqf-f32" => Some(Self::EqfF32),
             _ => None,
         }
+    }
+
+    /// Whether this is the equivariant filter, in either precision.
+    pub fn is_eqf(self) -> bool {
+        matches!(self, Self::Eqf | Self::EqfF32)
     }
 
     /// Parse the `--engine` argument: a comma-separated list, or `all`.
@@ -55,7 +66,7 @@ impl EngineKind {
         for name in value.split(',') {
             let kind = Self::parse(name).ok_or_else(|| {
                 format!(
-                    "unknown engine `{}`: expected eskf, eqf or all",
+                    "unknown engine `{}`: expected eskf, eqf, eqf-f32 or all",
                     name.trim()
                 )
             })?;
@@ -71,6 +82,7 @@ impl EngineKind {
         match self {
             Self::Eskf => "eskf",
             Self::Eqf => "eqf",
+            Self::EqfF32 => "eqf-f32",
         }
     }
 
@@ -79,6 +91,7 @@ impl EngineKind {
         match self {
             Self::Eskf => "drifters ESKF",
             Self::Eqf => "drifters EqF",
+            Self::EqfF32 => "drifters EqF (f32)",
         }
     }
 
@@ -89,6 +102,7 @@ impl EngineKind {
         match self {
             Self::Eskf => "drifters",
             Self::Eqf => "drifters_eqf",
+            Self::EqfF32 => "drifters_eqf_f32",
         }
     }
 }
@@ -178,6 +192,19 @@ impl ReplayEngine for EqfEngine {
     }
 }
 
+impl ReplayEngine for EqfEngine<Ud<f32>> {
+    const KIND: EngineKind = EngineKind::EqfF32;
+
+    fn lever_arm(&self) -> Vec3 {
+        EqfEngine::lever_arm(self)
+    }
+
+    /// As the dense engine's, multiplied out of the factors.
+    fn std_row(&self) -> Vec<f64> {
+        self.std_deviations().to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,12 +227,15 @@ mod tests {
 
     #[test]
     fn names_round_trip_and_files_do_not_collide() {
-        for kind in EngineKind::ALL {
+        let every = [EngineKind::Eskf, EngineKind::Eqf, EngineKind::EqfF32];
+        for kind in every {
             assert_eq!(EngineKind::parse(kind.name()), Some(kind));
         }
-        assert_ne!(
-            EngineKind::Eskf.file_prefix(),
-            EngineKind::Eqf.file_prefix()
-        );
+        for (i, a) in every.iter().enumerate() {
+            for b in &every[i + 1..] {
+                assert_ne!(a.file_prefix(), b.file_prefix());
+            }
+        }
+        assert!(EngineKind::EqfF32.is_eqf() && !EngineKind::Eskf.is_eqf());
     }
 }

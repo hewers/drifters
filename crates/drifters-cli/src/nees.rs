@@ -164,9 +164,52 @@ pub struct NeesReport {
     pub final_covariance: Vec<[[f64; 15]; 15]>,
     /// Runs abandoned because the covariance stopped being invertible.
     pub singular: usize,
+    /// Each run's own mean of [`Self::overall`], in run order.
+    ///
+    /// What [`stats::run_interval`] is computed from. The per-epoch samples
+    /// above are correlated within a run, so their count overstates how much
+    /// the campaign knows; these are independent.
+    pub run_overall: Vec<f64>,
+    /// Each run's own mean of each of [`Self::blocks`].
+    pub run_blocks: Vec<[f64; 7]>,
+}
+
+/// One run's mean, from a campaign accumulator before and after it.
+fn run_mean(before: &Running, after: &Running) -> Option<f64> {
+    let n = after.count().checked_sub(before.count())?;
+    if n == 0 {
+        return None;
+    }
+    let total = |r: &Running| {
+        if r.count() == 0 {
+            0.0
+        } else {
+            r.mean() * r.count() as f64
+        }
+    };
+    Some((total(after) - total(before)) / n as f64)
 }
 
 impl NeesReport {
+    /// Record the run that ended since `mark` was taken, and move the mark.
+    /// Called at the top of every run and once after the last, so a run that
+    /// leaves early by any path is still closed.
+    fn close_run(&mut self, mark: &mut (Running, [Running; 7])) {
+        if let Some(mean) = run_mean(&mark.0, &self.overall) {
+            self.run_overall.push(mean);
+            self.run_blocks.push(core::array::from_fn(|i| {
+                run_mean(&mark.1[i], &self.blocks[i]).unwrap_or(f64::NAN)
+            }));
+        }
+        *mark = (self.overall, self.blocks);
+    }
+
+    /// The run-to-run interval for block `i`.
+    fn block_interval(&self, i: usize) -> (f64, f64) {
+        let means: Vec<f64> = self.run_blocks.iter().map(|b| b[i]).collect();
+        stats::run_interval(3.0, &means)
+    }
+
     /// Print the report with its acceptance intervals.
     pub fn print(&self) {
         println!("\n--- Monte Carlo NEES, {} runs ---", self.runs);
@@ -182,14 +225,24 @@ impl NeesReport {
             self.overall.mean(),
             verdict(self.overall.mean(), lo, hi)
         );
+        let (rlo, rhi) = stats::run_interval(DIM as f64, &self.run_overall);
+        println!(
+            "         run to run, over {} runs:        [{rlo:.2}, {rhi:.2}]  {}",
+            self.run_overall.len(),
+            verdict(self.overall.mean(), rlo, rhi)
+        );
 
         let (blo, bhi) = stats::nis_interval(3, self.blocks[0].count());
-        println!("\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]");
-        for ((name, _), r) in BLOCKS.iter().zip(self.blocks.iter()) {
+        println!(
+            "\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]; run to run, its own"
+        );
+        for (i, ((name, _), r)) in BLOCKS.iter().zip(self.blocks.iter()).enumerate() {
+            let (rlo, rhi) = self.block_interval(i);
             println!(
-                "  {name:<11} {:>8.3}   {}",
+                "  {name:<11} {:>8.3}   {:<14} [{rlo:.2}, {rhi:.2}]  {}",
                 r.mean(),
-                verdict(r.mean(), blo, bhi)
+                verdict(r.mean(), blo, bhi),
+                verdict(r.mean(), rlo, rhi)
             );
         }
         let (plo, phi) = stats::nis_interval(6, self.pairs[0][1].count().max(1));
@@ -210,7 +263,11 @@ impl NeesReport {
             "\nA block above the interval is overconfident: the filter's covariance\n\
              is smaller than its actual error. Below it is conservative. With the\n\
              data generated from exactly the model the filter assumes, either one\n\
-             is an implementation fault rather than a tuning choice."
+             is an implementation fault rather than a tuning choice.\n\
+             \n\
+             The first interval treats every scored epoch as independent; within a\n\
+             run they are not, so it is too narrow. The run-to-run interval takes\n\
+             each run's own mean as one sample, and is the one to judge by."
         );
     }
 }
@@ -266,36 +323,26 @@ fn initial_sigma() -> [f64; DIM] {
 /// block especially, where `δS = Êᵀ(ε₄ − ε₁,ω)` makes the ε-variance
 /// `σ_mag² + σ_att²` rather than `σ_mag²`, and correlates it with attitude.
 ///
-/// `J` is block lower triangular, so its inverse is written out rather than
-/// computed:
+/// The map is `drifters_eqf::physical::covariance_from_std`, the one the
+/// engine builds its own prior with:
 ///
 /// ```text
-/// ε₁,ω = δφ                ε₂ = −Ad⁻¹ δb
-/// ε₁,ν = δv + v̂^ δφ        ε₃ = −Â⁻ᵀ δt
-/// ε₁,ρ = δp + p̂^ δφ        ε₄ = Ê⁻ᵀ δS + δφ
+/// ε₁,ω = δφ                ε₂ = −Ad_B̂ δb
+/// ε₁,ν = δv + v̂^ δφ        ε₃ = −Â δt
+/// ε₁,ρ = δp + p̂^ δφ        ε₄ = Ê δS + δφ
 /// ```
+///
+/// This harness used to write the matrix out itself, with `−I`, `−I` and `I`
+/// on the last three blocks where the exact map has `−Ad_B̂`, `−Â` and `Ê`.
+/// The first is not close: `Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s
+/// the truth moves here `v̂^ δb_ω` is as large as the accelerometer-bias sigma
+/// it was being left out of. See docs/eqf.md.
 fn initial_covariance_scaled(strength: f64, estimate: &State) -> Matrix<DIM, DIM> {
     let s = initial_sigma().map(|v| v * strength);
-    let (v, p) = (estimate.pose.velocity, estimate.pose.position);
-
-    let mut m = Matrix::<DIM, DIM>::zeros();
-    m.set_block(0, 0, &Mat3::identity());
-    m.set_block(3, 0, &v.skew());
-    m.set_block(3, 3, &Mat3::identity());
-    m.set_block(6, 0, &p.skew());
-    m.set_block(6, 6, &Mat3::identity());
-    m.set_block(9, 9, &-Mat3::identity());
-    m.set_block(12, 12, &-Mat3::identity());
-    m.set_block(15, 15, &-Mat3::identity());
-    m.set_block(18, 0, &Mat3::identity());
-    m.set_block(18, 18, &Mat3::identity());
-
-    let mut d = [0.0; DIM];
-    for i in 0..DIM {
-        d[i] = s[i] * s[i];
-    }
-    let phys = Matrix::from_diagonal(&d);
-    m.matmul(&phys).mul_transpose(&m)
+    drifters_eqf::physical::covariance_from_std(
+        &drifters_eqf::group::Symmetry::from_state(estimate),
+        &s,
+    )
 }
 
 /// Run a Monte Carlo NEES campaign against the equivariant filter.
@@ -323,6 +370,20 @@ pub fn run_nees_at(runs: usize, seconds: f64, seed: u64, dt: f64) -> NeesReport 
 /// contributes shrinks with `strength`. That separates a fault in the filter
 /// from a fault in the measuring apparatus.
 pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: f64) -> NeesReport {
+    run_nees_with::<drifters_eqf::linear::StateMatrix>(runs, seconds, seed, dt, strength)
+}
+
+/// As [`run_nees_scaled`], with the filter's covariance held as `C` — the
+/// factored `Ud<f32>` form is what `drifters nees --factored` measures. The
+/// truth, the noise and the scoring are identical, so a difference between
+/// the two is the precision and nothing else.
+pub fn run_nees_with<C: drifters_eqf::Covariance>(
+    runs: usize,
+    seconds: f64,
+    seed: u64,
+    dt: f64,
+    strength: f64,
+) -> NeesReport {
     let settle = 10.0;
     let gnss_every = (1.0 / dt).round() as usize; // 1 Hz, whatever dt is
     let gnss_sigma = Vec3::new(0.5, 0.5, 1.0) * strength;
@@ -341,9 +402,13 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
         final_errors: Vec::new(),
         final_covariance: Vec::new(),
         singular: 0,
+        run_overall: Vec::new(),
+        run_blocks: Vec::new(),
     };
+    let mut mark = (report.overall, report.blocks);
 
     for run in 0..runs {
+        report.close_run(&mut mark);
         let mut rng = Rng::new(seed.wrapping_add(run as u64).wrapping_mul(0x9E37_79B9));
 
         // Truth, and an estimate displaced from it by a draw from the prior.
@@ -376,8 +441,14 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
             ),
         };
 
-        let mut filter =
-            EqFilter::new(&start, initial_covariance_scaled(strength, &start), GRAVITY);
+        let Some(mut filter) = EqFilter::<C>::with_covariance(
+            &start,
+            &initial_covariance_scaled(strength, &start),
+            GRAVITY,
+        ) else {
+            report.singular += 1;
+            continue;
+        };
         // GCU off — `None`, not `Some(0.0)`, which still inflates. This
         // measures the covariance, not a robustness policy.
         filter.alpha = None;
@@ -446,7 +517,8 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
                 }
                 let estimate = filter.nav_state();
                 let j = physical_jacobian(&filter.x, &estimate);
-                let p = j.matmul(&filter.sigma).mul_transpose(&j);
+                let sigma = filter.sigma.with_dense(|sigma| *sigma);
+                let p = j.matmul(&sigma).mul_transpose(&j);
                 let e = physical_error(&truth, &estimate);
 
                 let Some(chol) = Cholesky::new(&p) else {
@@ -464,8 +536,8 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
 
                 if std::env::var("DRIFTERS_COND").is_ok() && run == 0 {
                     use conditioning::{condition, correlation, digits};
-                    let raw = condition(&filter.sigma);
-                    let scaled = condition(&correlation(&filter.sigma));
+                    let raw = condition(&sigma);
+                    let scaled = condition(&correlation(&sigma));
                     if let (Some(r), Some(sc)) = (raw, scaled) {
                         let (rd, rud) = digits(r);
                         let (sd, sud) = digits(sc);
@@ -517,6 +589,7 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
             report.singular += 1;
         }
     }
+    report.close_run(&mut mark);
     report
 }
 
@@ -703,9 +776,13 @@ mod tests {
 
         let mean = report.overall.mean();
         let (lo, hi) = stats::nis_interval(DIM, report.overall.count());
-        // Twice the interval width, this being sized for CI rather than for
-        // the tightest bound available. It reads 21.2 here; the full forty-run
-        // campaign over the same 120 s lands at 21.007 against [20.71, 21.29].
+        // Twice the per-epoch interval's width, this being sized for CI rather
+        // than for the tightest bound available. The per-epoch interval is
+        // itself too narrow — epochs within a run are correlated — so this is
+        // stricter than the run-to-run interval the campaign is judged by: the
+        // full forty-run campaign over the same 120 s reads 20.508 against a
+        // run-to-run [19.53, 22.47], and two hundred runs 20.824 against
+        // [20.30, 21.70].
         let (wide_lo, wide_hi) = (
             DIM as f64 - (DIM as f64 - lo) * 2.0,
             hi + (hi - DIM as f64) * 2.0,
@@ -1084,9 +1161,13 @@ pub mod eskf {
             final_errors: Vec::new(),
             final_covariance: Vec::new(),
             singular: 0,
+            run_overall: Vec::new(),
+            run_blocks: Vec::new(),
         };
+        let mut mark = (report.overall, report.blocks);
 
         for run in 0..runs {
+            report.close_run(&mut mark);
             let mut rng = Rng::new(seed.wrapping_add(run as u64).wrapping_mul(0x9E37_79B9));
 
             // Gauss-Markov bias, started at its stationary distribution so the
@@ -1294,6 +1375,7 @@ pub mod eskf {
                 }
             }
         }
+        report.close_run(&mut mark);
         report
     }
 
@@ -1309,6 +1391,12 @@ pub mod eskf {
              95 % interval [{lo:.2}, {hi:.2}]  {}",
             r.overall.mean(),
             verdict(r.overall.mean(), lo, hi)
+        );
+        let (rlo, rhi) = stats::run_interval(15.0, &r.run_overall);
+        println!(
+            "         run to run, over {} runs: [{rlo:.2}, {rhi:.2}]  {}",
+            r.run_overall.len(),
+            verdict(r.overall.mean(), rlo, rhi)
         );
         let (blo, bhi) = stats::nis_interval(3, r.blocks[0].count().max(1));
         println!("\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]");

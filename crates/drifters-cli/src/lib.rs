@@ -786,7 +786,7 @@ pub fn run_gsdc(
                 );
                 gsdc_pass(GinsEngine::new(options)?, &inputs, tight, quiet)?
             }
-            EngineKind::Eqf => {
+            EngineKind::Eqf | EngineKind::EqfF32 => {
                 let options = eqf::gsdc_options(
                     first.position,
                     attitude,
@@ -795,12 +795,21 @@ pub fn run_gsdc(
                     eqf_earth_rate,
                     alpha,
                 );
-                gsdc_pass(
-                    drifters_eqf::EqfEngine::new(options)?,
-                    &inputs,
-                    tight,
-                    quiet,
-                )?
+                if kind == EngineKind::Eqf {
+                    gsdc_pass(
+                        drifters_eqf::EqfEngine::new(options)?,
+                        &inputs,
+                        tight,
+                        quiet,
+                    )?
+                } else {
+                    gsdc_pass(
+                        drifters_eqf::EqfEngine::<drifters_eqf::Ud<f32>>::with_covariance(options)?,
+                        &inputs,
+                        tight,
+                        quiet,
+                    )?
+                }
             }
         };
         report.runs.push(run);

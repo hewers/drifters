@@ -14,6 +14,22 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The group exponential no longer forms the integrated `SE(3)` adjoint as
+  `6 × 6` products.** `Symmetry::exp` calls it twice per IMU sample, at 461
+  thousand instructions a call on a Cortex-M4. `integrated_adjoint` now runs
+  its series on two `3 × 3` blocks, bit-identical to the full form, and
+  `exp` uses the new `integrated_adjoint_apply`, the same series on the one
+  vector it needs: 79 thousand. The dense filter goes from 5.08 to 4.29
+  million instructions per sample, with every KF-GINS output unchanged to the
+  precision it is written at. `integrated_adjoint`'s doc had said it ran once
+  per update and not per sample, which had stopped being true.
+- **`EqFilter::new` and `EqfEngine::new` build the dense form**, and the
+  generic `with_covariance` builds either; `EqfEngine::covariance` and
+  `std_deviations` multiply a factored covariance out. Not breaking: the
+  covariance parameter defaults to the dense form, so `EqFilter`,
+  `EqfEngine`, `EqfRewindEngine<S, E>` and `filter.sigma` mean what they did.
+  New `ConfigError::InitialCovarianceNotPositiveDefinite`, which only a
+  factored form can raise.
 - **`EqfOptions::gcu_alpha` and `EqFilter::alpha` are `Option<F>`.** Breaking.
   `None` turns GCU off; `Some(0.0)` does not, since `β` still doubles the
   state's share of the innovation covariance for about four position fixes in
@@ -112,8 +128,24 @@ breaking wire change becomes `v2` rather than a crate version bump.
   value, shows a mean along-track residual of −2.58 cm and none across, not
   scaling with speed; handed the EqF's, it improves from 0.0330 to 0.0325 m.
   The vertical component is unobservable on this drive.
+- **Neither engine re-reads its pending fix to split a sample.** The ESKF's
+  read it through an `expect` that only the optimiser kept off the data path,
+  the EqF's through a `map_or` with a fallback epoch; both now classify by
+  returning the fix with its placement. Outputs byte-identical.
+- **The NEES harness's prior used `−I` on the bias block where the exact map
+  is `−Ad_B̂`.** It wrote its own physical-to-ε map; it now uses
+  `physical::covariance_from_std`, the one the engine uses. At the harness's
+  8 m/s the missing `v̂^R̂` coupling is as large as the accelerometer-bias
+  sigma, and over 200 runs that block read 3.333, overconfident; it now reads
+  3.082 and every block is consistent, overall 20.824.
+- **The NEES harness's interval assumed independent epochs.** Within a run
+  they are correlated, and `m ± 3√(2m/N)` over epochs was about five times
+  too narrow. It now also prints a 95 % interval from the scatter of the
+  runs' own means, and the docs judge by that. The attitude-against-
+  magnetometer imbalance docs/eqf.md listed as unexplained was forty runs
+  against the narrow interval; at 200 runs both blocks are consistent.
 - **The NEES harness turned GCU "off" by setting α = 0, which does not.** It
-  now sets `None` and reads 21.102, consistent, at every range from the
+  now sets `None` and reads 21.102 over forty runs, the same at every range from the
   anchor. Under the corrected update α = 0 reads 18.43, conservative, which is
   what counting the inflation as noise should do.
 - **The GSDC replay's "1-second dead-reckoning residual" was taken after the
@@ -162,6 +194,24 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`drifters-eqf::covariance`: the equivariant filter in single
+  precision.** `EqFilter`, `EqfEngine` and `EqfRewindEngine` are generic over
+  a `Covariance`: the dense `f64` matrix by default, so every existing call
+  and result is unchanged, or `Ud<f32>` — `Σ = U D Uᵀ`, Thornton's time
+  update and Bierman's scalar one, as the ESKF's `f32-covariance` has them.
+  GNSS rows are whitened by the Cholesky factor of their noise, which GCU
+  makes dense, and Bierman's optimal-gain update is then exactly the paper's
+  GCU update. `EqfEngine::<Ud<f32>>::with_covariance(options)` builds one.
+  Against the dense form: 6 × 10⁻¹² m over a minute of closed loop in `f64`;
+  in `f32`, 0.029 mm at worst over the 57-minute KF-GINS run with identical
+  RMS and NIS, the third decimal on four GSDC traces at two tunings, and NEES
+  20.825 against 20.824 over 200 runs. On a Cortex-M4F, 835 800 instructions per `add_imu`
+  against 4 285 440 dense — a floor of 5.0 ms at 168 MHz — 2 072 bytes
+  against 4 672, and 14 000 bytes of stack, which CI now holds under 20 KiB
+  as `PEAK_EQF_F32`. The replays run it as `--engine eqf-f32`, `drifters
+  nees --factored` measures it, the contract test runs against it, and the
+  panic audit links it, where it found a reachable bounds check in the
+  factored projection before it could ship.
 - **`drifters-eqf::engine`** — `EqfEngine`, the equivariant filter as something
   an application can drive, and the counterpart of `GinsEngine` in every
   respect the two models allow. Sans-IO: `ImuSample`s and `GnssFix`es in, a
@@ -170,23 +220,21 @@ breaking wire change becomes `v2` rather than a crate version bump.
   magnetometer updates each have a chi-squared gate, and a run of rejections
   inflates the covariance rather than leaving the filter locked out. Driven
   with no gate it is `EqFilter` called in a loop, bit for bit, which a test
-  holds it to. 4 672 bytes; 13 568 bytes of stack on Cortex-M4, under the
+  holds it to. 4 672 bytes; 15 472 bytes of stack on Cortex-M4, under the
   ESKF's ceiling in CI; and no panic machinery linked.
 
   It refuses a fix that arrives after its epoch, as `GinsEngine` does, and
-  `EqfRewindEngine`, below, applies one anyway. On a
-  Cortex-M4F it is 5.08 million instructions per sample with no
-  single-precision form: at least 30 ms at 168 MHz, however the cycles fall.
-  Today this is the engine for a host, or for a part with a double-precision
-  FPU.
+  `EqfRewindEngine`, below, applies one anyway. With its default dense
+  covariance it is 4.29 million instructions per sample on a Cortex-M4F, at
+  least 25 ms at 168 MHz; with the factored one, below, 0.84 million.
 - **`drifters-eqf::rewind`** — `EqfRewindEngine`, which applies a GNSS fix to
   the equivariant filter after its epoch has passed, bit-identically to
   on-time delivery, by the same machinery as the ESKF's `RewindEngine`. Its
   tests run with Earth compensation on, magnetometer readings between samples
   and velocity fixes the gate rejects, and compare the observer state and all
-  441 covariance elements exactly. 25 608 bytes at `<120, 32>`; the late-fix
-  path is 13 568 bytes of stack on Cortex-M4, the same as the engine's own
-  peak, and links no panic machinery.
+  441 covariance elements exactly. 25 608 bytes at `<120, 32>`, 17 808 over
+  the factored engine; the late-fix path's stack on Cortex-M4 is the same as
+  the engine's own peak in each form, and links no panic machinery.
 - **`drifters-core::rewind`** — `Rewind<E>`, the rewind layer as a generic
   over any engine implementing `Rewindable`: an `Estimator` that is `Copy`,
   names its aiding calls as an `Aid` type, and reports whether it has a time

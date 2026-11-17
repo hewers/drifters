@@ -693,12 +693,57 @@ construction: a synthetic trajectory, exact truth, and noise drawn from
 precisely the densities the filter is told to assume.
 
 ```bash
-cargo run --release -p drifters-cli -- nees --runs 40 --seconds 120
+cargo run --release -p drifters-cli -- nees --runs 200 --seconds 120
 ```
 
-40 runs, scoring after a 10 s settle, with GCU off. A consistent filter
-averages the state dimension, 21. It reads **21.102**, inside the 95 % interval
-[20.71, 21.29].
+200 runs, scoring after a 10 s settle, with GCU off. A consistent filter
+averages the state dimension, 21. It reads **20.824**, inside the 95 %
+interval [20.30, 21.70] taken from the scatter of the runs' own means, and
+every block reads consistent against its own: attitude 3.047, velocity 2.955,
+position 2.959, gyro bias 2.931, accelerometer bias 3.082, lever arm 2.828,
+magnetometer 2.906. With the covariance factored and held in `f32`,
+`--factored`, it reads 20.825 and every block agrees to the third decimal.
+
+### The interval was too narrow, by about five
+
+The harness used to print one interval, `m ± 3√(2m/N)` over the `N` scored
+epochs. That treats every epoch as an independent sample, and within a run
+they are not: an error in a bias or the lever arm lasts tens of seconds and is
+scored at every epoch it lasts. Each run's mean is independent of the others',
+so the scatter of those means is what bounds the campaign's mean, and it is
+about five times wider: [19.53, 22.47] over forty runs where the per-epoch
+interval said [20.71, 21.29]. Both are printed now, the per-epoch one labelled
+for what it assumes, and the verdicts here are from the second.
+
+The narrow interval had been producing findings. At forty runs it called the
+attitude block overconfident at 3.45 and the magnetometer conservative at
+2.48, and the section that ended this one built an argument on them — that
+some redistribution between those two blocks was still wrong. At two hundred
+runs they read 3.05 and 2.91, both consistent; at forty, both were inside
+their own run-to-run intervals all along.
+
+### The bias prior was not the map
+
+This harness wrote its own physical-to-ε map for the prior, with `−I`, `−I`
+and `I` on the bias, lever-arm and magnetometer blocks where the exact map —
+`physical::jacobian_inverse`, which a numerical Jacobian checks — has
+`−Ad_B̂`, `−Â` and `Ê`. The first is not close here.
+`Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s this truth moves at,
+`v̂^ δb_ω` is as large as the accelerometer-bias sigma it was being left out
+of. It now uses `physical::covariance_from_std`, the map the engine builds its
+own prior with. Over 200 runs:
+
+| prior | overall | accelerometer bias |
+|---|---|---|
+| `−I` | 21.718, interval [20.19, 21.81] | **3.333, interval [2.68, 3.32]: overconfident** |
+| `−Ad_B̂` | 20.824, interval [20.30, 21.70] | 3.082, interval [2.71, 3.29] |
+
+The block the missing coupling feeds is the one that read overconfident, and
+neither figure moves when every error is scaled by ten (`--strength 0.1`,
+21.715 and 20.819), so this is the prior and not linearisation error. At forty
+runs, which is what this section used to quote, the difference does not
+resolve: 21.102 against 20.508, inside their run-to-run intervals of
+[19.35, 22.65] and [19.53, 22.47].
 
 It read 21.007 when this section was first written, with GCU's α = 0 still in
 the loop in the belief that α = 0 was off. It is not — `β` still inflates —
@@ -736,12 +781,14 @@ the anchor, before and after:
 
 | start position | before | after |
 |---|---|---|
-| at the anchor | 23.62 | **21.102** |
-| 1 km | 46.56 | **21.102** |
-| 10 km | 50.08 | **21.102** |
+| at the anchor | 23.62 | **20.508** |
+| 1 km | 46.56 | **20.508** |
+| 10 km | 50.08 | **20.508** |
 
-Identical to three decimals at every range, where it had doubled by a kilometre.
-(The "after" column read 21.007 at every range under the old α = 0 update.)
+Forty runs, the campaign this table was first measured with. Identical to
+three decimals at every range, where it had doubled by a kilometre. (The
+"after" column read 21.007 under the old α = 0 update and 21.102 with GCU off
+and the old bias prior, at every range each time.)
 
 ### What was ruled out on the way
 
@@ -762,12 +809,11 @@ Identical to three decimals at every range, where it had doubled by a kilometre.
 
 ### What is left
 
-The overall figure is consistent and the marginals are not uniformly so:
-attitude reads 3.447 against 3, and the magnetometer calibration 2.477. They
-offset in the joint. Since a correct filter has every marginal at 3, something
-in how a position update is allowed to redistribute uncertainty between those
-two blocks is still wrong, and it is worth about 14 % of one block rather than
-the 12 % of the whole covariance it started as.
+Nothing this harness resolves. Every block is consistent over 200 runs against
+an interval that respects how the samples are correlated. What this section
+used to list here, an attitude block reading 14 % high against a magnetometer
+block reading low, was forty runs judged against an interval five times too
+narrow; see above.
 
 ## Uncertain observation handling (Sec. VI)
 
@@ -1005,30 +1051,96 @@ exactly, at every lateness up to the ring's window.
 
 ### What it costs on a microcontroller
 
-| | |
+The covariance comes in two forms, chosen by type:
+`EqfEngine` is dense `f64`, and `EqfEngine::<Ud<f32>>::with_covariance` holds
+it factored as `U D Uᵀ` in `f32`. Measured on a Cortex-M4 by the same generic
+harness code:
+
+| | dense `f64` | factored `f32` |
+|---|---|---|
+| `EqfEngine` | 4 672 bytes | **2 072 bytes** |
+| `EqfRewindEngine<120, 32>` | 25 608 bytes | 17 808 bytes |
+| peak stack, a late fix through the rewind layer included | 15 472 bytes | **14 000 bytes** |
+| instructions per `add_imu` | 4.29 million | **0.84 million** |
+| at an instruction per cycle, 168 MHz | 25.5 ms | **5.0 ms** |
+| panic machinery linked | none | none |
+
+Both stack figures are under the ESKF's 20 KiB ceiling, and CI holds both to
+it. An instruction per cycle is the best a Cortex-M4 does, so the last row is
+a floor: the dense form cannot keep pace with an IMU on this part at any
+usual rate, and the factored one keeps pace with 100 Hz with half the
+interval to spare and with 200 Hz only at that floor. It is a floor on time,
+not a measurement of it; timing needs a board.
+
+### The factored form runs the same filter
+
+Thornton's time update and Bierman's scalar update, as the ESKF's `Ud` has
+them, with two things particular to this filter: GNSS rows are whitened by the
+Cholesky factor of their noise, which is dense whenever GCU inflates it, and
+the reset's transport is a second Gram–Schmidt pass through
+`T = I + ½ ad_Δ`. Bierman applies the optimal gain for the noise it is
+handed, which makes it exactly the paper's GCU update; the Joseph form with
+the sensor's own `R` that this filter ran before that was corrected would have
+had no factored counterpart. See
+[`covariance.rs`](../crates/drifters-eqf/src/covariance.rs).
+
+| | against dense `f64` |
 |---|---|
-| `EqfEngine` | 4 672 bytes |
-| peak stack, Cortex-M4 | **13 568 bytes**, under the ESKF's 20 KiB ceiling in CI, a late fix through the rewind layer included |
-| `EqfRewindEngine<120, 32>` | 25 608 bytes |
-| panic machinery linked | none |
-| instructions per `add_imu` | **5.08 million** |
+| factored `f64`, a minute of closed loop | 6 × 10⁻¹² m; every covariance element within 3 × 10⁻¹² of its scale |
+| factored `f32`, the same | 8 µm, against the filter's own 13 mm from the truth; within 1.1 × 10⁻⁴ |
+| factored `f32`, KF-GINS, 57 minutes | 0.029 mm, 0.007 mm/s and 0.2″ at worst; 0.0350 m RMS and NIS 1.554 for both |
+| factored `f32`, GSDC, four traces at two tunings | equal to the third decimal in every column |
+| factored `f32`, `drifters nees --factored`, 200 runs | **20.825**, against 20.824; every block within 0.001 |
 
-The stack was 28 852 bytes as first measured, for the reason the ESKF's first
-measurement was 35 328: covariance arithmetic written as expressions, each
-`21 × 21` operator result a 3 528-byte temporary. The in-place rewrite is
-bit-identical to the expressions, which are kept as a test reference. It was
-13 488 bytes until the GCU update took its inflated noise into the Joseph
-form.
+Single precision costs this filter nothing measurable, as it cost the ESKF
+nothing. `--engine eqf-f32` runs it on any dataset the replays read, and the
+contract test runs its eleven checks against it as it does the other two.
 
-The instruction count is the constraint, and nothing about the engine changes
-it. A dense `f64` covariance on a core whose FPU is single precision is
-soft-float throughout. The ESKF escapes that with `f32-covariance`, down to
-473 thousand, and can because its covariance is factored; this filter's is
-not, and has no single-precision form. At an instruction per cycle, which is
-the best a Cortex-M4 does, 5.08 million is 30 ms per sample at 168 MHz. The
-engine fits on that part and cannot keep pace with an IMU on it. A host, or a
-part with a double-precision FPU, is where it runs today; a factored `Σ` is
-what would change that.
+### Where the instructions went
+
+The dense form read 5.08 million per sample. A factored covariance alone
+brought the single-precision one to 1.66 million, which was less than the
+covariance arithmetic predicted; measured piece by piece, the rest was
+`Symmetry::exp`, at 461 thousand instructions a call and two calls a sample.
+Its semi-direct part integrates the `SE(3)` adjoint as a sixteen-term series
+of `6 × 6` products. Two changes, neither of which moved a result:
+
+- **The series on `3 × 3` blocks.** `ad_v`, its powers and every partial sum
+  are lower block triangular with equal diagonal blocks, so the series needs
+  two `3 × 3` blocks, not a `6 × 6`. Summed in the same order with the same
+  zero skips, it is bit-identical to the full form, which a test holds it to.
+- **Applied to a vector.** `exp` needs `ψ(v) u_γ`, never `ψ(v)`; the same
+  series run on the vector is three cross products a term. 461 thousand
+  instructions a call became 79 thousand.
+
+The dense form gained as much as the factored one did from that, 5.08 to 4.29
+million. The factored form's time update is now 0.52 million of its 0.84:
+226 thousand in Gram–Schmidt, which is the algorithm at the size the ESKF runs
+it, and 179 thousand building `G` in `f64`, by evaluating the lift twice per
+noise channel — the choice this document makes over a hand-written Jacobian
+that would have to be kept in step with it.
+
+### The stack, and one figure not yet explained
+
+The dense stack was 28 852 bytes as first measured, for the reason the ESKF's
+first measurement was 35 328: covariance arithmetic written as expressions,
+each `21 × 21` operator result a 3 528-byte temporary. The in-place rewrite
+is bit-identical to the expressions, which are kept as a test reference. It
+read 13 488 bytes after that, and 13 568 once the GCU update took its
+inflated noise into the Joseph form.
+
+It reads 15 472 now, on its update paths only — propagation went the other
+way, 9 856 to 9 772 — and the cause has not been isolated. The dense
+arithmetic is unchanged and its results are bit-identical; what changed
+around it is that the update now reaches it through the covariance trait.
+Keeping the dense `fuse` and `transport` out of the update's frame, which
+was the obvious suspect, moved nothing.
+
+The factored form's first measurement was 19 036, higher than the dense,
+because its time update held `A` in `f64`, `A dt` in `f32`, a whole `Φ`, the
+Gram–Schmidt rows and `G` in `f64`. `Φ` is now formed a row at a time, and
+`A` and `G` are handed over entry by entry and narrowed straight into the
+factored buffers, which neither form's results noticed: 14 000.
 
 ## Implementation plan
 
@@ -1078,6 +1190,13 @@ footprint and measured firmware budget are untouched.
     through it, which is what found that the KF-GINS divergences were neither
     the Earth nor GCU itself, but GCU's covariance update and an accelerometer
     scale factor the EqF's prior did not allow for.
+11. **Factored covariance** — done, `covariance.rs`. `EqFilter`, `EqfEngine`
+    and `EqfRewindEngine` are generic over how `Σ` is held: dense `f64` by
+    default, or `Ud<f32>`, Thornton and Bierman in single precision, for a
+    part whose FPU is single precision. Equal to the dense form to rounding in
+    `f64` and to the third decimal on every dataset in `f32`; 0.84 million
+    instructions per sample on a Cortex-M4 against the dense form's 4.29.
+    See [What it costs on a microcontroller](#what-it-costs-on-a-microcontroller).
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no
 use for `SE₂(3)`, and core's job is to stay small. Promote it if a second

@@ -160,6 +160,33 @@ pub fn nis_interval(dimension: usize, samples: u64) -> (F, F) {
     (m - 3.0 * sigma, m + 3.0 * sigma)
 }
 
+/// Two-sided 95 % interval for a Monte-Carlo campaign's mean, from the
+/// scatter of its runs' own means.
+///
+/// [`nis_interval`] treats every scored epoch as independent. Within a run they
+/// are not — an error that persists for tens of seconds is scored at every
+/// epoch it lasts — and so its interval is narrower than the campaign's real
+/// uncertainty by the square root of how many epochs one error lasts. Runs are
+/// independent of each other, so the scatter of their means measures the
+/// uncertainty of the campaign mean whatever the correlation inside a run.
+/// `expected ± 1.96 s/√n`, with `s` the sample standard deviation of the `n`
+/// run means. Non-finite entries are skipped.
+pub fn run_interval(expected: F, run_means: &[F]) -> (F, F) {
+    let finite: Vec<F> = run_means
+        .iter()
+        .copied()
+        .filter(|m| m.is_finite())
+        .collect();
+    let n = finite.len();
+    if n < 2 {
+        return (0.0, F::INFINITY);
+    }
+    let mean = finite.iter().sum::<F>() / n as F;
+    let variance = finite.iter().map(|m| (m - mean) * (m - mean)).sum::<F>() / (n - 1) as F;
+    let half = 1.96 * (variance / n as F).sqrt();
+    (expected - half, expected + half)
+}
+
 /// Judge a NIS accumulator against its measurement dimension.
 pub fn assess(nis: &Running, dimension: usize) -> Consistency {
     // Below this the interval is so wide the test says nothing useful.

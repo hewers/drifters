@@ -55,6 +55,7 @@ use drifters_core::types::{Attitude, GnssFix, ImuError, ImuSample, NavState, Pva
 use drifters_core::F;
 
 use crate::config::{ConfigError, EqfOptions};
+use crate::covariance::Covariance;
 use crate::filter::{EqFilter, Verdict};
 use crate::group::{State, Symmetry};
 use crate::lie::{Se23, Se3Tangent};
@@ -71,10 +72,14 @@ use crate::physical;
 /// `Copy`, like the engine it mirrors and everything else on the data path:
 /// it has no destructor and owns nothing, and a snapshot of it is an
 /// assignment.
+///
+/// `C` is how the filter holds its covariance: dense by default, or
+/// [`Ud<f32>`](crate::covariance::Ud) for a part whose FPU is single
+/// precision. Build the second with [`EqfEngine::with_covariance`].
 #[derive(Clone, Copy, Debug)]
-pub struct EqfEngine {
+pub struct EqfEngine<C: Covariance = StateMatrix> {
     options: EqfOptions,
-    filter: EqFilter,
+    filter: EqFilter<C>,
     anchor: Anchor,
     /// Time of the most recently processed IMU sample.
     time: GpsTime,
@@ -90,8 +95,18 @@ pub struct EqfEngine {
 }
 
 impl EqfEngine {
-    /// Build an engine, validating the configuration up front.
+    /// Build an engine with a dense covariance, validating the configuration
+    /// up front.
     pub fn new(options: EqfOptions) -> Result<Self, ConfigError> {
+        Self::with_covariance(options)
+    }
+}
+
+impl<C: Covariance> EqfEngine<C> {
+    /// Build an engine whose covariance is held as `C`, validating the
+    /// configuration up front: `EqfEngine::<Ud<f32>>::with_covariance(options)`
+    /// for single precision. [`EqfEngine::new`] is this for the dense form.
+    pub fn with_covariance(options: EqfOptions) -> Result<Self, ConfigError> {
         if let Some(e) = options.validate() {
             return Err(e);
         }
@@ -113,7 +128,8 @@ impl EqfEngine {
         // `crate::physical` for what handing over diag(σ²) here would do.
         let sigma =
             physical::covariance_from_std(&Symmetry::from_state(&start), &options.initial_std());
-        let mut filter = EqFilter::new(&start, sigma, anchor.gravity);
+        let mut filter = EqFilter::<C>::with_covariance(&start, &sigma, anchor.gravity)
+            .ok_or(ConfigError::InitialCovarianceNotPositiveDefinite)?;
         filter.alpha = options.gcu_alpha;
         Ok(Self {
             options,
@@ -186,7 +202,7 @@ impl EqfEngine {
     /// counters, the time — describes this filter, and a filter changed
     /// behind it would no longer be the one described.
     #[inline]
-    pub fn filter(&self) -> &EqFilter {
+    pub fn filter(&self) -> &EqFilter<C> {
         &self.filter
     }
 
@@ -198,14 +214,17 @@ impl EqfEngine {
     /// the map and the reason.
     #[inline]
     pub fn covariance(&self) -> StateMatrix {
-        self.filter.sigma
+        self.filter.sigma.with_dense(|sigma| *sigma)
     }
 
     /// Per-state one-sigma uncertainties in **physical** units, in block
     /// order: attitude (rad about N, E, D), velocity, position, gyroscope
     /// bias, accelerometer bias, lever arm, magnetometer calibration.
     pub fn std_deviations(&self) -> [F; DIM] {
-        physical::variances(&self.filter.x, &self.filter.sigma).map(root)
+        self.filter
+            .sigma
+            .with_dense(|sigma| physical::variances(&self.filter.x, sigma))
+            .map(root)
     }
 
     /// One-sigma uncertainty of position, velocity and attitude.
@@ -309,11 +328,11 @@ impl EqfEngine {
             return Ok(());
         }
 
-        match self.classify_gnss(&raw) {
-            None | Some(Placement::Ahead) => {
+        match self.pending_placement(&raw) {
+            None | Some((Placement::Ahead, _)) => {
                 self.propagate(&raw);
             }
-            Some(Placement::Stale) => {
+            Some((Placement::Stale, _)) => {
                 // Queued before the first sample fixed the time origin, or the
                 // stream jumped. Either way it is unusable, and a slot that
                 // holds it would present the next `add_gnss` as a replacement
@@ -322,19 +341,18 @@ impl EqfEngine {
                 self.stale_fixes = self.stale_fixes.saturating_add(1);
                 self.propagate(&raw);
             }
-            Some(Placement::AtStart) => {
+            Some((Placement::AtStart, _)) => {
                 self.apply_pending_gnss(&raw)?;
                 self.propagate(&raw);
             }
-            Some(Placement::AtEnd) => {
+            Some((Placement::AtEnd, _)) => {
                 self.propagate(&raw);
                 self.apply_pending_gnss(&raw)?;
             }
-            Some(Placement::Inside) => {
-                // The placement says a fix is pending; `map_or` rather than
-                // an `expect` so the data path has no panic to reach.
-                let epoch = self.pending_gnss.map_or(raw.time, |fix| fix.time);
-                let (before, after) = raw.split_at(epoch);
+            Some((Placement::Inside, fix)) => {
+                // The fix comes with its placement: nothing to look up again,
+                // so neither a panic nor a fallback epoch to reach.
+                let (before, after) = raw.split_at(fix.time);
                 if let Some(before) = before {
                     self.propagate(&before);
                 }
@@ -347,11 +365,17 @@ impl EqfEngine {
         Ok(())
     }
 
-    /// Where the pending fix falls in the interval `imu` covers, or `None`
-    /// when no fix is pending.
-    fn classify_gnss(&self, imu: &ImuSample) -> Option<Placement> {
+    /// The pending fix and where it falls in the interval `imu` covers, or
+    /// `None` when no fix is pending.
+    fn pending_placement(&self, imu: &ImuSample) -> Option<(Placement, GnssFix)> {
         self.pending_gnss
-            .map(|fix| place(fix.time, imu, EPOCH_TOLERANCE))
+            .map(|fix| (place(fix.time, imu, EPOCH_TOLERANCE), fix))
+    }
+
+    /// Where the pending fix falls, without the fix.
+    #[cfg(test)]
+    fn classify_gnss(&self, imu: &ImuSample) -> Option<Placement> {
+        self.pending_placement(imu).map(|(placement, _)| placement)
     }
 
     /// The filter's input for a sample: its mean rates, corrected for the
@@ -462,7 +486,7 @@ impl EqfEngine {
         noise: &Mat3,
         gate: Option<F>,
     ) -> Result<bool, FilterError> {
-        if !self.filter.sigma.is_finite() {
+        if !self.filter.sigma.all_finite() {
             return Err(FilterError::Diverged);
         }
         match self.filter.update_gated(c, innovation, noise, gate) {
@@ -553,7 +577,7 @@ fn root(variance: F) -> F {
 ///
 /// Every method is the inherent one of the same name. What the trait leaves
 /// out is in [`drifters_core::estimator`].
-impl Estimator for EqfEngine {
+impl<C: Covariance> Estimator for EqfEngine<C> {
     #[inline]
     fn add_imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
         EqfEngine::add_imu(self, sample)

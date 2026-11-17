@@ -321,15 +321,17 @@ cd cortex-m-harness && cargo run --release
 ```
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
-CI runs it on every push and fails if either estimator's peak exceeds 20 KiB:
-`PEAK` for the ESKF, `PEAK_EQF` for the equivariant filter's engine.
+CI runs it on every push and fails if any estimator's peak exceeds 20 KiB:
+`PEAK` for the ESKF, `PEAK_EQF` for the equivariant filter's engine with its
+dense covariance, and `PEAK_EQF_F32` with the factored single-precision one.
 
 | | peak stack, bytes |
 |---|---|
 | ESKF, 21-state | 19 120 |
 | ESKF, 21-state, `f32-covariance` | 18 208 |
 | ESKF, 15-state (`reduced-state`) | 10 688 |
-| EqF engine | **13 568** |
+| EqF engine, dense `f64` | **15 472** |
+| EqF engine, factored `f32` | **14 000** |
 
 The two engines are measured by the same generic code, written against
 [`Estimator`](../crates/drifters-core/src/estimator.rs) and
@@ -371,7 +373,11 @@ and keeps half a dozen 3 528-byte temporaries alive to evaluate it.
 | `apply_magnetometer` | 23 364 | **11 040** |
 
 Those are the figures the rewrite produced. Since the GCU update took its
-inflated noise into the Joseph form they read 9 856, 13 568 and 12 328.
+inflated noise into the Joseph form they read 9 856, 13 568 and 12 328, and
+since the update reached them through the covariance trait, 9 772, 15 472 and
+14 392 — the 1.9 KB on the update paths not yet explained; see
+[eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained). The factored
+form reads 10 100, 14 000 and 12 920.
 
 Each of propagation, the Joseph update and the reset's covariance transport now
 runs in two buffers, with `Σ` itself the destination of the last product, and
@@ -418,10 +424,11 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
 INSTRUCTIONS add_imu = 3538560 (88464 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 5078640 (126966 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4285440 (107136 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 835800 (20895 ticks; only under -icount shift=0)
 ```
 
-Without the flag all three lines are emulator wall-clock and mean nothing.
+Without the flag all four lines are emulator wall-clock and mean nothing.
 
 It cannot see pipeline stalls, flash wait states or FPU latency, so it is not a
 cycle count. What it measures exactly is how much *work* a change removes — and
@@ -436,14 +443,21 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps:
 | ESKF, 21-state, `f32-covariance` | **473 440** | 11 836 |
 | ESKF, 15-state (`reduced-state`) | **1 578 080** | 39 452 |
 | ESKF, 15-state, `f32-covariance` | **270 560** | 6 764 |
-| EqF engine | **5 078 640** | 126 966 |
+| EqF engine, dense `f64` | **4 285 440** | 107 136 |
+| EqF engine, factored `f32` | **835 800** | 20 895 |
 
 The single-precision covariance removes **87 %** of the work at 21 states and
 83 % at 15, having cost nothing measurable in accuracy. Dropping the six
-scale-factor states removes 55 %. The equivariant filter costs 1.44 times the
-21-state ESKF in `f64`, and nearly eleven times the ESKF with `f32-covariance`:
-its covariance is dense, 441 scalars against the ESKF's 231 factored ones, and
-it has no single-precision form.
+scale-factor states removes 55 %. For the equivariant filter, factoring the
+covariance and holding it in `f32` removes **80 %**, also at no measurable
+cost in accuracy; it lands at 1.77 times the ESKF with `f32-covariance`,
+where the dense form is 1.21 times the ESKF in `f64`.
+
+The EqF's dense figure was 5 078 640 until its group exponential stopped
+forming the integrated `SE(3)` adjoint as `6 × 6` products: at 461 thousand
+instructions a call and two calls a sample, it was more than the factored
+covariance's whole time update. See
+[eqf.md](eqf.md#where-the-instructions-went).
 
 #### The count is a floor on time, and the floor already says something
 
@@ -459,12 +473,14 @@ common M4 parts run:
 | ESKF, 21-state, `f32-covariance` | 2.8 ms | fits, if the real figure is within 1.8× of the floor |
 | ESKF, 15-state | 9.4 ms | cannot at 200 Hz; marginal at 100 Hz |
 | ESKF, 15-state, `f32-covariance` | 1.6 ms | fits with a factor of three to spare |
-| EqF engine | 30.2 ms | cannot keep up, nor at 50 Hz |
+| EqF engine, dense `f64` | 25.5 ms | cannot keep up, nor at 50 Hz |
+| EqF engine, factored `f32` | 5.0 ms | at the floor exactly; fits 100 Hz with half the interval to spare |
 
 So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
-configuration that runs. The default build and the equivariant filter both need
-a part with a double-precision FPU — a Cortex-M7 with FPv5-D16, an
-application processor — or an IMU rate set by what the filter can sustain. This
+configuration that runs, and for the equivariant filter the factored `f32`
+covariance is the same thing. The default builds of both need a part with a
+double-precision FPU — a Cortex-M7 with FPv5-D16, an application processor —
+or an IMU rate set by what the filter can sustain. This
 is the first statement this repository makes about whether its filters keep up
 with a sensor, and it is a statement about which ones cannot.
 
@@ -720,16 +736,27 @@ replay included. For the equivariant filter's engine: `add_imu` with a fix
 inside the interval that carries a velocity, so the split, both updates and
 both gates; `apply_magnetometer`; `pva_std`, which maps the covariance into
 physical units; and a late fix with a velocity through `EqfRewindEngine`,
-which is the shared rewind machinery monomorphised a second time. It does not link `apply_pseudoranges` or the smoother, and so
-says nothing about them.
+which is the shared rewind machinery monomorphised a second time. The same
+calls are made again on the factored single-precision engine and its rewind
+layer, whose Bierman, Thornton and whitening code is data path on the part it
+is for. It does not link `apply_pseudoranges` or the smoother, and so says
+nothing about them.
 
 The equivariant filter linked nothing on the first build with its engine in
 the audit, which is worth recording precisely because the ESKF needed five
 fixes to get there. Its loops run over const-generic bounds and its blocks are
-set at literal offsets, which is the form those five fixes converged on. The
-one place the engine could have panicked was written not to: the split of a
-sample at a fix reads the pending fix's epoch through `map_or`, where the
-ESKF's engine has an `expect` the optimiser happens to remove.
+set at literal offsets, which is the form those five fixes converged on. Its
+factored covariance did link one, on its first build: the projection
+`C U` indexed `C` by a position in a column slice whose length the optimiser
+could not bound. Zipped instead, it links nothing.
+
+The split of a sample at a fix used to read the pending fix's epoch a second
+time after classifying it — through an `expect` in the ESKF's engine, which
+only the optimiser kept off the data path, and through a `map_or` with a
+fallback epoch in the EqF's, which would have split at the wrong time had it
+ever been reached. Both engines now classify by returning the fix together
+with its placement, so the arm that splits already holds the epoch and there
+is nothing to assert or fall back on. No result moved.
 Construction and configuration validation are *not* in scope and may
 legitimately panic on programmer error; they run once, at startup, where a
 panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.

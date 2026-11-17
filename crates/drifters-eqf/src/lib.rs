@@ -28,12 +28,21 @@
 //! It also estimates a different set of states: GNSS lever arm and magnetometer
 //! rotation are estimated rather than configured, and IMU scale factors are not
 //! estimated at all.
+//!
+//! # Two covariance forms
+//!
+//! [`EqfEngine`] holds its covariance dense, in `f64`, by default. On a part
+//! whose FPU is single precision, [`EqfEngine::with_covariance`] with
+//! [`Ud<f32>`](covariance::Ud) holds it factored as `U D Uᵀ` instead, at a
+//! fifth of the instructions and no measurable change in any result. See
+//! [`covariance`].
 
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod config;
+pub mod covariance;
 pub mod engine;
 pub mod filter;
 pub mod gcu;
@@ -46,6 +55,7 @@ pub mod physical;
 pub mod rewind;
 
 pub use config::{ConfigError, EqfOptions};
+pub use covariance::{Covariance, Ud};
 pub use drifters_core::estimator::{Estimator, FilterError, GnssQueued};
 pub use engine::EqfEngine;
 pub use filter::{EqFilter, ProcessNoise};

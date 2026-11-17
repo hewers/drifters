@@ -441,16 +441,142 @@ impl Se3 {
 /// `M⁻¹(exp M − I)` does not apply: `ad_v v = 0`, so `ad_v` is singular for
 /// every `v`. A closed form for the `SE(3)` case exists but is long, has its own
 /// small-angle branches, and would need the same numerical care as
-/// [`left_jacobian`] for no gain — this is called once per filter update, not
-/// once per IMU sample.
+/// [`left_jacobian`].
 ///
 /// Argument reduction bounds the truncation: halve `v` until the series
 /// converges to machine precision in a fixed number of terms, then double back
 /// up with `ψ(2M) = ½(I + Ad_{exp(v)}) ψ(M)`, using the exact `Ad_{exp(v)}` at
 /// each level rather than a second series.
+///
+/// # On two `3 × 3` blocks, not one `6 × 6`
+///
+/// [`Symmetry::exp`](crate::group::Symmetry::exp) needs only `ψ(v) x` for one
+/// vector, and takes it from [`integrated_adjoint_apply`]; this, the whole
+/// matrix, is for whatever needs `ψ` itself. As fifteen `6 × 6` products it
+/// was 461 thousand instructions a call on a Cortex-M4, and `exp` called it
+/// twice per IMU sample — more than the factored covariance's whole time
+/// update. `ad_v = [[ω^, 0], [ν^, ω^]]`, and every power of it,
+/// every partial sum and both factors of the doubling step keep that shape:
+/// lower block triangular with equal diagonal blocks. So the series runs on
+/// the diagonal block and the lower-left one, three `3 × 3` products a term
+/// where the `6 × 6` form spent the equivalent of eight.
+///
+/// Each element is accumulated in the order the `6 × 6` product accumulated
+/// it, skipping the same zero factors, and what the zero blocks contributed
+/// there was signed zeros added to a positive zero. The result is
+/// bit-identical, which `the_block_series_is_the_full_one_bit_for_bit` holds
+/// it to against the `6 × 6` form, kept as a test reference.
 pub fn integrated_adjoint(v: Se3Tangent) -> Matrix<6, 6> {
     // amax of ad_v is max(|ω|∞, |ν|∞); at 1/16 the 16-term truncation is below
     // one ulp even against the crude ‖M‖ ≤ 6·amax bound.
+    let mut halvings = 0;
+    let mut w = v;
+    while w.omega.amax().max(w.nu.amax()) > 0.0625 && halvings < 64 {
+        w = Se3Tangent::new(w.omega * 0.5, w.nu * 0.5);
+        halvings += 1;
+    }
+
+    // term = [[a, 0], [b, a]], psi likewise; M = [[ω^, 0], [ν^, ω^]].
+    let (omega, nu) = (w.omega.skew(), w.nu.skew());
+    let mut a = Mat3::identity();
+    let mut b = Mat3::zeros();
+    let (mut psi_a, mut psi_b) = (a, b);
+    for k in 1..16 {
+        // term · M = [[a ω^, 0], [b ω^ + a ν^, a ω^]], the lower-left summed
+        // over b's columns first, as the 6 × 6 product's k ran.
+        let mut next_a = Mat3::zeros();
+        accumulate(&mut next_a, &a, &omega);
+        let mut next_b = Mat3::zeros();
+        accumulate(&mut next_b, &b, &omega);
+        accumulate(&mut next_b, &a, &nu);
+        let scale = 1.0 / (k + 1) as F;
+        a = next_a.scaled(scale);
+        b = next_b.scaled(scale);
+        psi_a += &a;
+        psi_b += &b;
+    }
+
+    for _ in 0..halvings {
+        // (I + Ad_{exp(w)}) ψ / 2, with Ad = [[R, 0], [p^R, R]].
+        let step = Se3::exp(w);
+        let left_a = Mat3::identity() + step.rotation;
+        let left_b = step.translation.skew().matmul(&step.rotation);
+        let mut next_a = Mat3::zeros();
+        accumulate(&mut next_a, &left_a, &psi_a);
+        let mut next_b = Mat3::zeros();
+        accumulate(&mut next_b, &left_b, &psi_a);
+        accumulate(&mut next_b, &left_a, &psi_b);
+        psi_a = next_a.scaled(0.5);
+        psi_b = next_b.scaled(0.5);
+        w = Se3Tangent::new(w.omega * 2.0, w.nu * 2.0);
+    }
+
+    let mut psi = Matrix::<6, 6>::zeros();
+    psi.set_block(0, 0, &psi_a);
+    psi.set_block(3, 0, &psi_b);
+    psi.set_block(3, 3, &psi_a);
+    psi
+}
+
+/// `ψ(v) x`, without forming `ψ(v)`: the series of [`integrated_adjoint`] run
+/// on a vector.
+///
+/// `ψ(v) x = Σ_{k≥0} ad_v^k x / (k+1)!`, and each term is the previous one's
+/// bracket with `v` divided by `k + 1` — three cross products where a term of
+/// the matrix series is three `3 × 3` products. The argument reduction is the
+/// same, and so is the doubling, which applies to vectors unchanged:
+/// `ψ(2v) x = ½ (y + Ad_{exp(v)} y)` with `y = ψ(v) x`.
+///
+/// What [`Symmetry::exp`](crate::group::Symmetry::exp) uses, twice per IMU
+/// sample. Equal to `integrated_adjoint(v) · x` to rounding, not bit for bit:
+/// the sums associate differently.
+pub fn integrated_adjoint_apply(v: Se3Tangent, x: Se3Tangent) -> Se3Tangent {
+    let mut halvings = 0;
+    let mut w = v;
+    while w.omega.amax().max(w.nu.amax()) > 0.0625 && halvings < 64 {
+        w = Se3Tangent::new(w.omega * 0.5, w.nu * 0.5);
+        halvings += 1;
+    }
+
+    let mut term = x;
+    let mut sum = x;
+    for k in 1..16 {
+        let scale = 1.0 / (k + 1) as F;
+        let next = w.bracket(term);
+        term = Se3Tangent::new(next.omega * scale, next.nu * scale);
+        sum = sum + term;
+    }
+
+    for _ in 0..halvings {
+        let moved = Se3::exp(w).adjoint_apply(sum);
+        sum = Se3Tangent::new((sum.omega + moved.omega) * 0.5, (sum.nu + moved.nu) * 0.5);
+        w = Se3Tangent::new(w.omega * 2.0, w.nu * 2.0);
+    }
+    sum
+}
+
+/// `out += left · right`, element by element in the order and with the zero
+/// skips of [`Matrix::matmul`], so that a block computed in pieces matches the
+/// whole product bit for bit.
+#[inline]
+fn accumulate(out: &mut Mat3, left: &Mat3, right: &Mat3) {
+    for i in 0..3 {
+        for k in 0..3 {
+            let a = left.data[i][k];
+            if a == 0.0 {
+                continue;
+            }
+            for j in 0..3 {
+                out.data[i][j] += a * right.data[k][j];
+            }
+        }
+    }
+}
+
+/// The series as first written, as `6 × 6` products: the reference
+/// [`integrated_adjoint`] is held to bit for bit.
+#[cfg(test)]
+fn integrated_adjoint_full(v: Se3Tangent) -> Matrix<6, 6> {
     let mut halvings = 0;
     let mut w = v;
     while w.omega.amax().max(w.nu.amax()) > 0.0625 && halvings < 64 {
@@ -555,6 +681,64 @@ pub fn left_jacobian_inverse(omega: Vec3) -> Mat3 {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+
+    #[test]
+    fn the_vector_series_is_the_matrix_times_the_vector() {
+        let mut state: u64 = 0x0fed_cba9_8765_4321;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 11) as F / (1u64 << 53) as F) * 2.0 - 1.0
+        };
+        for scale in [1e-6, 1e-3, 0.05, 0.3, 2.0, 5.0] {
+            for _ in 0..200 {
+                let v = Se3Tangent::new(
+                    Vec3::new(next(), next(), next()) * scale,
+                    Vec3::new(next(), next(), next()) * (3.0 * scale),
+                );
+                let x = Se3Tangent::new(
+                    Vec3::new(next(), next(), next()),
+                    Vec3::new(next(), next(), next()),
+                );
+                let want = integrated_adjoint(v)
+                    .matmul(&Matrix::<6, 1>::from_column(x.to_array()))
+                    .to_column();
+                let got = integrated_adjoint_apply(v, x).to_array();
+                let size = want.iter().fold(0.0_f64, |m, w| m.max(w.abs()));
+                for (w, g) in want.iter().zip(got.iter()) {
+                    assert!((w - g).abs() <= 1e-14 * size, "{v:?}: {w} against {g}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_block_series_is_the_full_one_bit_for_bit() {
+        // From the sizes propagation sees, through ones that need argument
+        // reduction, to a correction large enough to halve six times; and
+        // the zero vector, where every block is a signed-zero question.
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 11) as F / (1u64 << 53) as F) * 2.0 - 1.0
+        };
+        assert_eq!(
+            integrated_adjoint(Se3Tangent::ZERO),
+            integrated_adjoint_full(Se3Tangent::ZERO)
+        );
+        for scale in [1e-6, 1e-3, 0.05, 0.3, 2.0, 5.0] {
+            for _ in 0..200 {
+                let v = Se3Tangent::new(
+                    Vec3::new(next(), next(), next()) * scale,
+                    Vec3::new(next(), next(), next()) * (3.0 * scale),
+                );
+                assert_eq!(integrated_adjoint(v), integrated_adjoint_full(v), "{v:?}");
+            }
+        }
+    }
 
     fn assert_mat_eq<const R: usize, const C: usize>(
         a: &Matrix<R, C>,

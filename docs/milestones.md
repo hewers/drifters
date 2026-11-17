@@ -336,7 +336,8 @@ single-precision is most of the soft-float question. Per `add_imu` on
 | ESKF, 21-state, `f32-covariance` | **473 440** |
 | ESKF, 15-state (`reduced-state`) | 1 578 080 |
 | ESKF, 15-state, `f32-covariance` | **270 560** |
-| EqF engine | 5 078 640 |
+| EqF engine, dense `f64` | 4 285 440 |
+| EqF engine, factored `f32` | **835 800** |
 
 **This table replaced one that was wrong.** It read 21 398, 11 868 and 5 911,
 labelled instructions. They were SysTick ticks, forty instructions each, and
@@ -444,13 +445,20 @@ measured firmware budget is untouched. Specification and scoping in
       fixes interleaved, hold it to on-time delivery bit for bit; the
       contract test runs the shared layer over both. 25 608 bytes at
       `<120, 32>`, and the late-fix path measured on Cortex-M4 at the same
-      peak as the engine's own, 13 568 bytes now
+      peak as the engine's own, 15 472 bytes now and 14 000 factored
 - [x] Every replay through the engine. `--engine eskf,eqf` selects; one
       loop per dataset, generic over `Estimator`, drives whichever is chosen.
       The ESKF's outputs are bit-identical through the move — output files,
       every GSDC table row on four traces, and per-epoch position and NIS
       loose and tight. The EqF's moved, and the measurements below are
       through the engine
+- [x] A factored covariance, for a single-precision FPU. `EqFilter`,
+      `EqfEngine` and `EqfRewindEngine` are generic over how `Σ` is held:
+      dense `f64` by default, or `Ud<f32>` — Thornton's time update and
+      Bierman's scalar one, the ESKF's factorisation. Equal to the dense
+      form to the third decimal on every dataset and in NEES, 20.825 against
+      20.824 over 200 runs; 835 800 instructions per sample on a Cortex-M4 against
+      4 285 440, and 14 000 bytes of stack. `--engine eqf-f32` runs it
 - [x] What the engine's numbers exposed, fixed. GCU's covariance update is
       the paper's, counting its inflation as measurement noise; `None` turns
       GCU off, where `α = 0` never did; the accelerometer scale factor the
@@ -1043,7 +1051,9 @@ the cheapest way to not repeat this is to keep the instrument that caught it.
 The pairwise score runs for the equivariant filter too, and there it exonerated
 the correlations: the pairs tracked two overconfident marginals rather than a
 coupling. That pointed at the prior, and the EqF now reads **21.007 against 21**
-(21.102 since GCU can be turned off for it, which `α = 0` never did).
+(21.102 since GCU can be turned off for it, which `α = 0` never did; 20.824
+over 200 runs once its bias prior used the exact map, against an interval that
+counts each run once, with every block consistent).
 See [eqf.md](eqf.md).
 
 **What it cost.** The claim was in five documents and had been used to argue for

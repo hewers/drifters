@@ -30,6 +30,12 @@ configuration in physical units, GNSS fixes applied at their own epoch inside
 the IMU interval, and gated updates. It implements `drifters_core`'s
 `Estimator` trait, as the ESKF's engine does.
 
+The covariance is dense `f64` by default. For a microcontroller whose FPU is
+single precision, `EqfEngine::<Ud<f32>>::with_covariance(options)` holds it
+factored as `U D Uᵀ` in `f32` instead: equal to the dense form to the third
+decimal on every dataset in this repository, and 0.84 million instructions per
+IMU sample on a Cortex-M4 against 4.29 million.
+
 ```rust
 use drifters_core::prelude::*;
 use drifters_eqf::{EqfEngine, EqfOptions};

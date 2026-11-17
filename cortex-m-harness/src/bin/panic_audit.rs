@@ -21,7 +21,7 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
-use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine};
+use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine, Ud};
 use drifters_filter::{GinsEngine, GinsOptions, RewindEngine};
 
 /// Abort without formatting. `panic-semihosting` would drag in `core::fmt`,
@@ -62,6 +62,20 @@ fn main() -> ! {
     // And its rewind layer, with rings as small as the ESKF's below so that
     // every branch of the shared machinery is reached within a few loops.
     let mut eqf_rewind = EqfRewindEngine::<16, 4>::from_engine(eqf);
+    // The same filter with its covariance factored and held in f32: Bierman,
+    // Thornton and the whitening are data path on a part that runs it.
+    let Ok(mut eqf32) =
+        EqfEngine::<Ud<f32>>::with_covariance(EqfOptions::default().with_initial_state(
+            Lla::from_degrees(30.4, 114.4, 20.0),
+            Ned::ZERO,
+            Euler::new(0.0, 0.0, 0.0),
+        ))
+    else {
+        loop {
+            core::hint::spin_loop();
+        }
+    };
+    let mut eqf32_rewind = EqfRewindEngine::<16, 4, Ud<f32>>::from_engine(eqf32);
     // The rewind layer is data path too: on a device every fix goes through
     // it. Small rings, so that rotation, eviction from a full event ring and
     // a replay past the newer anchor all happen within a few iterations.
@@ -131,6 +145,34 @@ fn main() -> ! {
         late_eqf.velocity_std = Vec3::splat(0.1);
         let _ = eqf_rewind.add_gnss(late_eqf);
 
+        // The factored engine, through the same calls.
+        let mut fix32 = GnssFix::position_only(
+            GpsTime::from_tow(t + 0.002),
+            eqf32.antenna_position(),
+            Vec3::splat(1.0),
+        );
+        fix32.velocity = Some(Ned::ZERO);
+        fix32.velocity_std = Vec3::splat(0.1);
+        let _ = eqf32.add_gnss(fix32);
+        let _ = eqf32.add_imu(ImuSample {
+            time: GpsTime::from_tow(t + 0.005),
+            ..sample
+        });
+        let _ = eqf32.apply_magnetometer(
+            Vec3::new(0.48, 0.02, 0.88),
+            Vec3::new(0.48, 0.0, 0.88),
+            0.02,
+        );
+        let _ = eqf32_rewind.add_imu(sample);
+        let mut late32 = GnssFix::position_only(
+            GpsTime::from_tow(t - 0.022),
+            eqf32_rewind.antenna_position(),
+            Vec3::splat(1.0),
+        );
+        late32.velocity = Some(Ned::ZERO);
+        late32.velocity_std = Vec3::splat(0.1);
+        let _ = eqf32_rewind.add_gnss(late32);
+
         // SAFETY: single-threaded, no interrupts enabled, and the write only
         // exists to keep the work above from being optimised out.
         unsafe {
@@ -138,7 +180,10 @@ fn main() -> ! {
                 + rewind.nav_state().position().height
                 + eqf.nav_state().position().height
                 + eqf.pva_std().position.x
-                + eqf_rewind.nav_state().position().height;
+                + eqf_rewind.nav_state().position().height
+                + eqf32.nav_state().position().height
+                + eqf32.pva_std().position.x
+                + eqf32_rewind.nav_state().position().height;
         }
     }
 }

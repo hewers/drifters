@@ -64,12 +64,13 @@
 //!
 //! # Cost
 //!
-//! A replay is that many `add_imu`, and here an `add_imu` is the expensive
-//! one in the workspace: 5.07 million instructions on Cortex-M4, against 473
-//! thousand for the ESKF with `f32-covariance` (docs/testing.md, Layer 9). A
-//! fix 20 samples late replays between 20 and 39 of them, so 100 to 200
-//! million instructions at once. That is a burst for a host, and on a
-//! Cortex-M4F this engine cannot keep pace with an IMU even without one.
+//! A replay is that many `add_imu`. On a Cortex-M4 that is 4.29 million
+//! instructions each with the dense covariance and 0.84 million with the
+//! factored `f32` one, against 473 thousand for the ESKF with
+//! `f32-covariance` (docs/testing.md, Layer 9). A fix 20 samples late replays
+//! between 20 and 39 of them: 17 to 33 million instructions at once in the
+//! factored form, a burst of 0.1 to 0.2 s at 168 MHz that a device has to
+//! schedule around.
 //!
 //! # Memory
 //!
@@ -89,6 +90,7 @@ use drifters_core::types::{GnssFix, ImuSample, NavState};
 use drifters_core::F;
 
 use crate::config::{ConfigError, EqfOptions};
+use crate::covariance::Covariance;
 use crate::engine::EqfEngine;
 use crate::group::State;
 use crate::linear::{StateMatrix, DIM};
@@ -112,7 +114,7 @@ pub enum Aid {
     },
 }
 
-impl Rewindable for EqfEngine {
+impl<C: Covariance> Rewindable for EqfEngine<C> {
     type Aid = Aid;
 
     fn apply_aid(&mut self, aid: &Aid) -> Result<bool, FilterError> {
@@ -142,23 +144,35 @@ impl Rewindable for EqfEngine {
 /// `Clone` but deliberately not `Copy`, unlike the engine it wraps. It is
 /// three of them and two rings, and a type this size should not be copied by
 /// an assignment that did not say so.
+///
+/// `C` is the wrapped engine's covariance form; see
+/// [`EqfEngine::with_covariance`].
 #[derive(Clone, Debug)]
-pub struct EqfRewindEngine<const SAMPLES: usize, const EVENTS: usize> {
-    inner: Rewind<EqfEngine, SAMPLES, EVENTS>,
+pub struct EqfRewindEngine<const SAMPLES: usize, const EVENTS: usize, C: Covariance = StateMatrix> {
+    inner: Rewind<EqfEngine<C>, SAMPLES, EVENTS>,
 }
 
 impl<const SAMPLES: usize, const EVENTS: usize> EqfRewindEngine<SAMPLES, EVENTS> {
-    /// The lateness, in samples, that is always covered.
-    pub const WINDOW: usize = Rewind::<EqfEngine, SAMPLES, EVENTS>::WINDOW;
-
-    /// Build an engine from its configuration, validating it up front.
+    /// Build an engine with a dense covariance from its configuration,
+    /// validating it up front.
     pub fn new(options: EqfOptions) -> Result<Self, ConfigError> {
         EqfEngine::new(options).map(Self::from_engine)
+    }
+}
+
+impl<const SAMPLES: usize, const EVENTS: usize, C: Covariance> EqfRewindEngine<SAMPLES, EVENTS, C> {
+    /// The lateness, in samples, that is always covered.
+    pub const WINDOW: usize = Rewind::<EqfEngine<C>, SAMPLES, EVENTS>::WINDOW;
+
+    /// Build an engine whose covariance is held as `C`. [`Self::new`] is
+    /// this for the dense form.
+    pub fn with_covariance(options: EqfOptions) -> Result<Self, ConfigError> {
+        EqfEngine::<C>::with_covariance(options).map(Self::from_engine)
     }
 
     /// Wrap an engine. Its current state becomes both anchors, so nothing
     /// before this call can be rewound to.
-    pub fn from_engine(engine: EqfEngine) -> Self {
+    pub fn from_engine(engine: EqfEngine<C>) -> Self {
         Self {
             inner: Rewind::new(engine),
         }
@@ -166,7 +180,7 @@ impl<const SAMPLES: usize, const EVENTS: usize> EqfRewindEngine<SAMPLES, EVENTS>
 
     /// The machinery itself, for code written against [`Rewind`] generically.
     #[inline]
-    pub fn rewind(&self) -> &Rewind<EqfEngine, SAMPLES, EVENTS> {
+    pub fn rewind(&self) -> &Rewind<EqfEngine<C>, SAMPLES, EVENTS> {
         &self.inner
     }
 
@@ -175,7 +189,7 @@ impl<const SAMPLES: usize, const EVENTS: usize> EqfRewindEngine<SAMPLES, EVENTS>
     /// Read-only because any call that changed it without going through this
     /// type would be absent from the record a replay works from.
     #[inline]
-    pub fn engine(&self) -> &EqfEngine {
+    pub fn engine(&self) -> &EqfEngine<C> {
         self.inner.engine()
     }
 
@@ -678,5 +692,50 @@ mod tests {
             "three engines, the two rings, and 72 bytes of bookkeeping"
         );
         assert_eq!(size_of::<Representative>(), 25_608);
+    }
+
+    /// The factored, single-precision engine through the same layer. The
+    /// layer knows nothing of how the covariance is held, so a late fix must
+    /// land exactly as it would have on time for this form too: observer
+    /// state and every factor, bit for bit.
+    #[test]
+    fn a_late_fix_lands_exactly_with_a_single_precision_covariance() {
+        use crate::covariance::Ud;
+        type Narrow = Ud<f32>;
+        let fixes: [GnssFix; 3] = [fix_at(0.305, 1), fix_at(0.705, 2), fix_at(1.105, 3)];
+        let samples = 160;
+
+        let mut on_time = EqfEngine::<Narrow>::with_covariance(options()).unwrap();
+        let mut late = EqfRewindEngine::<120, 32, Narrow>::with_covariance(options()).unwrap();
+        let lateness = 15;
+        for i in 1..=samples {
+            for f in fixes.iter().filter(|f| consumer(f.time.tow()) == i) {
+                assert_eq!(on_time.add_gnss(*f), GnssQueued::Queued);
+            }
+            on_time.add_imu(sample(i)).unwrap();
+            late.add_imu(sample(i)).unwrap();
+            for f in fixes
+                .iter()
+                .filter(|f| consumer(f.time.tow()) + lateness == i)
+            {
+                let outcome = late.add_gnss(*f).unwrap();
+                assert!(matches!(outcome, FixOutcome::Rewound { .. }), "{outcome:?}");
+            }
+        }
+        assert_eq!(late.engine().filter().x, on_time.filter().x);
+        assert_eq!(late.engine().filter().sigma, on_time.filter().sigma);
+        assert!(late.engine().is_healthy());
+    }
+
+    #[test]
+    fn the_single_precision_wrapper_is_smaller() {
+        use crate::covariance::Ud;
+        use core::mem::size_of;
+        // 231 factors in f32 where the dense form holds 441 in f64: 924
+        // bytes against 3 528, three times over in the wrapper.
+        assert_eq!(size_of::<Ud<f32>>(), 924);
+        assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_232);
+        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_072);
+        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_808);
     }
 }

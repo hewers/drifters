@@ -33,7 +33,7 @@ use drifters_core::math::{Euler, Vec3};
 use drifters_core::rewind::{FixOutcome, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
-use drifters_eqf::{EqfEngine, EqfOptions};
+use drifters_eqf::{EqfEngine, EqfOptions, Ud};
 use drifters_filter::{GinsEngine, GinsOptions};
 
 fn origin() -> Lla {
@@ -96,6 +96,31 @@ impl Fixture for Eqf {
     /// Still in this model's world: no rotation at all, and gravity as the
     /// constant the anchor holds.
     fn sample(engine: &EqfEngine, dt: f64, t: f64) -> ImuSample {
+        let rotation = engine.state().pose.rotation;
+        ImuSample {
+            time: GpsTime::from_tow(t),
+            dt,
+            dtheta: Vec3::ZERO,
+            dvel: rotation.transpose() * (-engine.anchor().gravity) * dt,
+        }
+    }
+}
+
+/// The equivariant filter with its covariance factored and held in `f32`.
+/// The contract is the interface's, so the precision a covariance is kept in
+/// must not be able to break it.
+struct EqfF32;
+
+impl Fixture for EqfF32 {
+    type Engine = EqfEngine<Ud<f32>>;
+
+    fn engine(velocity: Ned) -> EqfEngine<Ud<f32>> {
+        let options =
+            EqfOptions::default().with_initial_state(origin(), velocity, Euler::default());
+        EqfEngine::<Ud<f32>>::with_covariance(options).expect("valid configuration")
+    }
+
+    fn sample(engine: &EqfEngine<Ud<f32>>, dt: f64, t: f64) -> ImuSample {
         let rotation = engine.state().pose.rotation;
         ImuSample {
             time: GpsTime::from_tow(t),
@@ -469,6 +494,14 @@ macro_rules! contract {
                 #[test]
                 fn $test() {
                     super::$test::<super::Eqf>();
+                }
+            )*
+        }
+        mod eqf_f32 {
+            $(
+                #[test]
+                fn $test() {
+                    super::$test::<super::EqfF32>();
                 }
             )*
         }

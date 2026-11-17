@@ -293,8 +293,9 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 608 bytes**: the
-rings are identical and the engines are larger. It is also the one
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 608 bytes** with
+the dense covariance and 17 808 with the factored `f32` one: the rings are
+identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
 
@@ -309,7 +310,8 @@ late with an aid recorded every third sample. The replay runs nested inside
 no engine-sized temporary, and a frame of its own of **152 bytes** over the
 ESKF's deepest path, the held-state ZUPT (160 with `f32-covariance`). That takes the ESKF's peak to
 19 120 bytes, 18 208 with `f32-covariance` and 10 688 at 15 states. The EqF's
-late fix measures 13 568, no deeper than its own fix step. All are inside
+late fix measures 15 472 dense and 14 000 factored, no deeper than its own fix
+step in either. All are inside
 their CI ceilings, and all are now part of the peak CI checks.
 
 It was unmeasured for a while, with a sentence here saying that it *should*
@@ -318,42 +320,42 @@ add only a small frame. That was correct this time. It is still how the
 
 ### The equivariant filter
 
-| item | bytes |
-|---|---|
-| `Σ`, a dense `Matrix<21, 21>` | 3 528 |
-| `EqFilter` (observer state + `Σ` + gravity + GCU rate) | 3 832 |
-| `EqfOptions` | 648 |
-| `EqfEngine` total | **4 672** |
+| item | dense `f64` | factored `f32` |
+|---|---|---|
+| `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
+| `EqFilter<C>` (observer state + `Σ` + gravity + GCU rate) | 3 832 | 1 232 |
+| `EqfOptions` | 648 | 648 |
+| `EqfEngine<C>` total | **4 672** | **2 072** |
 
-Asserted by `engine::tests::the_engine_has_its_documented_footprint`. The
-covariance is dense where the ESKF's is factored, which is most of the
-difference from `GinsEngine`'s 3 240: 441 scalars against 231.
+Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
+`rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
+the default and what every accuracy figure was first measured with; the
+factored one, `EqfEngine::<Ud<f32>>::with_covariance`, is the ESKF's
+factorisation applied to this filter, and is the one for a microcontroller.
 
 Peak stack on Cortex-M4, by the same generic harness code that measures the
 ESKF:
 
-| operation | bytes |
-|---|---|
-| `add_imu` (propagate) | 9 856 |
-| `add_imu` with a GNSS fix, with or without velocity | 13 568 |
-| `apply_magnetometer` | 12 328 |
-| **peak** | **13 568** |
+| operation | dense `f64` | factored `f32` |
+|---|---|---|
+| `add_imu` (propagate) | 9 772 | 10 100 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 472 | 14 000 |
+| `apply_magnetometer` | 14 392 | 12 920 |
+| **peak** | **15 472** | **14 000** |
 
-Under the ESKF's own 19 120, and under the same 20 KiB ceiling in CI. A late
-fix through `EqfRewindEngine` measures the same 13 568. It was
-28 852 as first measured, and 13 488 until the GCU update took its inflated
-noise into the Joseph form; [testing.md](testing.md), Layer 9, has how it got
-here and why the result is bit-identical.
+Under the ESKF's own 19 120, and both under the same 20 KiB ceiling in CI. A
+late fix through `EqfRewindEngine` measures the same as each form's own fix
+step. The dense form was 28 852 as first measured; [testing.md](testing.md),
+Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained)
+the 1.9 KB its update paths have gained since, which is not yet explained.
 
-Stack is not this engine's constraint on a small part. Work is: 5.08 million
-instructions per `add_imu` on Cortex-M4, against 473 thousand for the ESKF
-with `f32-covariance`. A dense `f64` covariance on a core whose FPU is single
-precision is soft-float throughout, and there is no single-precision form of
-it to switch to — the factorisation is what made that safe for the ESKF, and
-this filter does not have one. At an instruction per cycle that is at least
-30 ms a sample at 168 MHz. So the engine is `no_std` and allocation-free and
-fits, and on a Cortex-M4F it still cannot keep pace with an IMU. A factored
-`Σ` is the piece of work that would change that.
+On a small part the constraint was never stack. It was work: the dense form
+is 4.29 million instructions per `add_imu` on a Cortex-M4, soft-float
+throughout on a core whose FPU is single precision, and at an instruction per
+cycle that is at least 25 ms a sample at 168 MHz. The factored form is 0.84
+million, a floor of 5.0 ms — inside a 100 Hz IMU's interval with half of it
+to spare, and a 200 Hz one's only at that floor — against 473 thousand for the
+ESKF with `f32-covariance`. See [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4
 

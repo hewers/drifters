@@ -8,7 +8,7 @@
 //! drifters replay --config <kf-gins.yaml> [options]
 //!
 //!   --config <path>    configuration file (required)
-//!   --engine <list>    eskf, eqf, or both as `eskf,eqf` (default: eskf)
+//!   --engine <list>    eskf, eqf, eqf-f32, or several as `eskf,eqf` (default: eskf)
 //!   --imu <path>       IMU data, overriding the config's path
 //!   --gnss <path>      GNSS data, overriding the config's path
 //!   --out <dir>        output directory (default: alongside the config)
@@ -93,6 +93,12 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             if args.iter().any(|a| a == "--eskf") {
                 let r = drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength);
                 drifters_cli::nees::eskf::print(&r);
+            } else if args.iter().any(|a| a == "--factored") {
+                // The EqF with its covariance factored and held in f32.
+                drifters_cli::nees::run_nees_with::<drifters_eqf::Ud<f32>>(
+                    runs, seconds, seed, dt, strength,
+                )
+                .print();
             } else {
                 drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
             }
@@ -160,7 +166,7 @@ fn run_replay_command(
     // Bias stability is per-axis in the config; the ratio is a property of
     // the part, so the largest axis stands for it. Resolved only when the EqF
     // runs, so that a gyroscope it refuses does not stop the ESKF.
-    let compensate = if engines.contains(&EngineKind::Eqf) {
+    let compensate = if engines.iter().any(|kind| kind.is_eqf()) {
         earth.compensate(config.options.imu_noise.gyro_bias_std.amax())?
     } else {
         false
@@ -208,10 +214,16 @@ fn run_replay_command(
                 report.print();
                 report
             }
-            EngineKind::Eqf => {
+            EngineKind::Eqf | EngineKind::EqfF32 => {
                 let options = eqf::kfgins_options(&config, &gnss, compensate, alpha);
-                let engine = drifters_eqf::EqfEngine::new(options)?;
-                let report = replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?;
+                let report = if *kind == EngineKind::Eqf {
+                    let engine = drifters_eqf::EqfEngine::new(options)?;
+                    replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?
+                } else {
+                    let engine =
+                        drifters_eqf::EqfEngine::<drifters_eqf::Ud<f32>>::with_covariance(options)?;
+                    replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?
+                };
                 report.print();
                 println!("{}", eqf::describe_alpha(alpha));
                 eqf::ModelError::of(&config, &options, &report).print(&report);
@@ -227,6 +239,10 @@ fn run_replay_command(
             "drifters EqF (flat Earth + input-side Earth compensation)"
         }
         EngineKind::Eqf => "drifters EqF (flat Earth, as the paper writes it)",
+        EngineKind::EqfF32 if compensate => {
+            "drifters EqF, f32 factored (flat Earth + input-side Earth compensation)"
+        }
+        EngineKind::EqfF32 => "drifters EqF, f32 factored (flat Earth)",
     };
 
     if let Some(figure) = flag(args, "--compare") {
@@ -241,7 +257,7 @@ fn run_replay_command(
                 label: label(r.engine),
                 colour: match r.engine {
                     EngineKind::Eskf => plot::ESKF,
-                    EngineKind::Eqf => plot::EQF,
+                    EngineKind::Eqf | EngineKind::EqfF32 => plot::EQF,
                 },
                 width: 1.8,
                 track: r.epochs.iter().map(|p| (p.ned.1, p.ned.0)).collect(),
@@ -255,7 +271,7 @@ fn run_replay_command(
                         "{:.3} m RMS",
                         r.residual_north.rms().hypot(r.residual_east.rms())
                     ),
-                    EngineKind::Eqf => format!(
+                    EngineKind::Eqf | EngineKind::EqfF32 => format!(
                         "{:.3} m RMS, {:.3} m at the last fix",
                         r.residual_north.rms().hypot(r.residual_east.rms()),
                         r.final_residual
@@ -279,14 +295,14 @@ fn run_replay_command(
     }
 
     let figure = flag(args, "--figure").or(make_figure.then_some(match engines.first() {
-        Some(EngineKind::Eqf) => "docs/figures/kf-gins-eqf.svg",
+        Some(EngineKind::Eqf | EngineKind::EqfF32) => "docs/figures/kf-gins-eqf.svg",
         _ => "docs/figures/kf-gins.svg",
     }));
     if let (Some(figure), Some(report)) = (figure, reports.first()) {
         let caption = plot::Caption {
             dataset: flag(args, "--name").unwrap_or(match report.engine {
                 EngineKind::Eskf => "KF-GINS demo dataset",
-                EngineKind::Eqf => "KF-GINS demo dataset — EqF",
+                EngineKind::Eqf | EngineKind::EqfF32 => "KF-GINS demo dataset — EqF",
             }),
             horizontal_rms: report
                 .residual_north
@@ -559,7 +575,10 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             report.gnss_only.count()
         );
     }
-    if let Some(run) = report.run(EngineKind::Eqf) {
+    if let Some(run) = report
+        .run(EngineKind::Eqf)
+        .or_else(|| report.run(EngineKind::EqfF32))
+    {
         println!(
             "\nEqF: {}; Earth rate {}",
             eqf::describe_alpha(report.eqf_alpha),
@@ -629,10 +648,11 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 label: match run.engine {
                     EngineKind::Eskf => "drifters ESKF (Earth-referenced, 21 states)",
                     EngineKind::Eqf => "drifters EqF (flat Earth, self-calibrating)",
+                    EngineKind::EqfF32 => "drifters EqF, f32 factored (flat Earth)",
                 },
                 colour: match run.engine {
                     EngineKind::Eskf => plot::ESKF,
-                    EngineKind::Eqf => plot::EQF,
+                    EngineKind::Eqf | EngineKind::EqfF32 => plot::EQF,
                 },
                 width: 1.8,
                 track: run.epochs.iter().map(|p| (p.ned.1, p.ned.0)).collect(),
@@ -715,6 +735,7 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let name = |kind: EngineKind| match kind {
         EngineKind::Eskf => "ESKF",
         EngineKind::Eqf => "EqF",
+        EngineKind::EqfF32 => "EqF32",
     };
     print!("\n{:>8}", "scale");
     for kind in &engines {

@@ -51,7 +51,8 @@ use drifters_core::math::{Euler, Vec3};
 use drifters_core::rewind::{FixOutcome, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
-use drifters_eqf::{EqFilter, EqfEngine, EqfOptions};
+use drifters_eqf::linear::StateMatrix as DenseEqf;
+use drifters_eqf::{Covariance, EqFilter, EqfEngine, EqfOptions, Ud};
 use drifters_filter::state::{StateMatrix, N_STATE};
 use drifters_filter::{GinsEngine, GinsOptions};
 
@@ -353,6 +354,94 @@ fn fix_step<E: Estimator>(bottom: usize, engine: &mut E, t: f64, velocity: bool)
     measure(bottom, || engine.add_imu(sample(t))).1
 }
 
+/// One covariance form of the equivariant filter through every measurement:
+/// a plain step, a step with a fix, one with a fix and a velocity, a
+/// magnetometer update, a late fix through the rewind layer, and the
+/// instructions per `add_imu`. `suffix` goes on the `INSTRUCTIONS_EQF` and
+/// `PEAK_EQF` labels CI reads. Returns whether the filter is healthy after.
+fn measure_eqf<C: Covariance>(
+    bottom: usize,
+    syst: &mut Option<SYST>,
+    calibration: Option<u32>,
+    suffix: &str,
+    name: &str,
+) -> bool {
+    let mut eqf = match EqfEngine::<C>::with_covariance(eqf_options()) {
+        Ok(e) => e,
+        Err(e) => {
+            hprintln!("configuration rejected: {}", e.as_str());
+            debug::exit(debug::EXIT_FAILURE);
+            loop {}
+        }
+    };
+    let _ = eqf.add_imu(sample(0.005));
+
+    hprintln!("");
+    hprintln!(
+        "--- equivariant filter, {}: stack high-water (bytes) ---",
+        name
+    );
+    let eqf_imu = plain_step(bottom, &mut eqf, 0.010);
+    hprintln!("add_imu (propagate)            {}", eqf_imu);
+    let eqf_fix = fix_step(bottom, &mut eqf, 0.015, false);
+    hprintln!("add_imu with GNSS fix          {}", eqf_fix);
+    let eqf_velocity = fix_step(bottom, &mut eqf, 0.020, true);
+    hprintln!("add_imu with fix + velocity    {}", eqf_velocity);
+    let (_, eqf_mag) = measure(bottom, || {
+        eqf.apply_magnetometer(
+            Vec3::new(0.48, 0.02, 0.88),
+            Vec3::new(0.48, 0.0, 0.88),
+            0.02,
+        )
+    });
+    hprintln!("apply_magnetometer             {}", eqf_mag);
+    let eqf_rewind = late_fix_step(
+        bottom,
+        eqf,
+        drifters_eqf::rewind::Aid::Magnetometer {
+            measured: Vec3::new(0.48, 0.02, 0.88),
+            reference: Vec3::new(0.48, 0.0, 0.88),
+            sigma: 0.02,
+        },
+    );
+    hprintln!("late fix through the rewind    {}", eqf_rewind);
+    let eqf_peak = eqf_imu
+        .max(eqf_fix)
+        .max(eqf_velocity)
+        .max(eqf_mag)
+        .max(eqf_rewind);
+    hprintln!("");
+    let step = syst
+        .as_mut()
+        .and_then(|syst| ticks_per_step(syst, &mut eqf));
+    // Labels built by hand: there is no allocator for `format!`.
+    match suffix {
+        "" => report_instructions("INSTRUCTIONS_EQF", step, calibration),
+        _ => report_instructions("INSTRUCTIONS_EQF_F32", step, calibration),
+    }
+    hprintln!("PEAK_EQF{}{}{}", suffix, padding(suffix), eqf_peak);
+
+    let healthy = eqf.is_healthy()
+        && eqf.covariance().asymmetry() < 1.0e-9
+        && eqf.nav_state().position().is_valid()
+        && eqf.last_nis().is_some();
+    hprintln!("");
+    hprintln!(
+        "equivariant filter ({}) healthy after run: {}",
+        name,
+        healthy
+    );
+    healthy
+}
+
+/// Spaces to align a `PEAK_EQF…` label's value with the other columns.
+fn padding(suffix: &str) -> &'static str {
+    match suffix.len() {
+        0 => "                       ",
+        _ => "                   ",
+    }
+}
+
 #[entry]
 fn main() -> ! {
     let bottom = cortex_m_rt::heap_start() as usize;
@@ -458,71 +547,22 @@ fn main() -> ! {
     hprintln!("");
     hprintln!("filter healthy after run: {}", healthy);
 
-    // The equivariant filter, through the same two generic measurements and
-    // against the same ceiling. Its numbers do not depend on the ESKF's
-    // features, so they are the same in every configuration this is built in.
+    // The equivariant filter, through the same generic measurements and
+    // against the same ceiling, in both covariance forms. Its numbers do not
+    // depend on the ESKF's features, so they are the same in every
+    // configuration this is built in.
     hprintln!("");
     hprintln!("--- equivariant filter: static sizes (bytes) ---");
     hprintln!("EqFilter        {}", size_of::<EqFilter>());
     hprintln!("EqfEngine       {}", size_of::<EqfEngine>());
+    hprintln!("EqfEngine<f32>  {}", size_of::<EqfEngine<Ud<f32>>>());
     hprintln!("EqfOptions      {}", size_of::<EqfOptions>());
-    hprintln!("");
 
-    let mut eqf = match EqfEngine::new(eqf_options()) {
-        Ok(e) => e,
-        Err(e) => {
-            hprintln!("configuration rejected: {}", e.as_str());
-            debug::exit(debug::EXIT_FAILURE);
-            loop {}
-        }
-    };
-    let _ = eqf.add_imu(sample(0.005));
-
-    hprintln!("--- equivariant filter: stack high-water (bytes) ---");
-    let eqf_imu = plain_step(bottom, &mut eqf, 0.010);
-    hprintln!("add_imu (propagate)            {}", eqf_imu);
-    let eqf_fix = fix_step(bottom, &mut eqf, 0.015, false);
-    hprintln!("add_imu with GNSS fix          {}", eqf_fix);
-    let eqf_velocity = fix_step(bottom, &mut eqf, 0.020, true);
-    hprintln!("add_imu with fix + velocity    {}", eqf_velocity);
-    let (_, eqf_mag) = measure(bottom, || {
-        eqf.apply_magnetometer(
-            Vec3::new(0.48, 0.02, 0.88),
-            Vec3::new(0.48, 0.0, 0.88),
-            0.02,
-        )
-    });
-    hprintln!("apply_magnetometer             {}", eqf_mag);
-    let eqf_rewind = late_fix_step(
-        bottom,
-        eqf,
-        drifters_eqf::rewind::Aid::Magnetometer {
-            measured: Vec3::new(0.48, 0.02, 0.88),
-            reference: Vec3::new(0.48, 0.0, 0.88),
-            sigma: 0.02,
-        },
-    );
-    hprintln!("late fix through the rewind    {}", eqf_rewind);
-    let eqf_peak = eqf_imu
-        .max(eqf_fix)
-        .max(eqf_velocity)
-        .max(eqf_mag)
-        .max(eqf_rewind);
-    hprintln!("");
-    let step = syst
-        .as_mut()
-        .and_then(|syst| ticks_per_step(syst, &mut eqf));
-    report_instructions("INSTRUCTIONS_EQF", step, calibration);
     // Not `PEAK`: CI reads that label for the ESKF's ceilings, two of which
     // are tighter than this estimator has any reason to meet.
-    hprintln!("PEAK_EQF                       {}", eqf_peak);
-
-    let eqf_healthy = eqf.is_healthy()
-        && eqf.covariance().asymmetry() < 1.0e-9
-        && eqf.nav_state().position().is_valid()
-        && eqf.last_nis().is_some();
-    hprintln!("");
-    hprintln!("equivariant filter healthy after run: {}", eqf_healthy);
+    let dense = measure_eqf::<DenseEqf>(bottom, &mut syst, calibration, "", "dense f64");
+    let factored = measure_eqf::<Ud<f32>>(bottom, &mut syst, calibration, "_F32", "factored f32");
+    let eqf_healthy = dense && factored;
     let healthy = healthy && eqf_healthy;
 
     if healthy {
