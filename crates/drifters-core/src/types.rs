@@ -100,6 +100,24 @@ impl ImuSample {
     }
 }
 
+/// True when `sigma` can serve as a one-sigma uncertainty: positive, and still
+/// a positive finite number once squared into a variance.
+///
+/// The second half is not pedantry. `1e-170` is positive and squares to zero,
+/// an infinitely confident measurement, and `1e155` is finite and squares to
+/// infinity.
+#[inline]
+pub fn usable_sigma(sigma: F) -> bool {
+    let variance = sigma * sigma;
+    sigma > 0.0 && variance > 0.0 && variance.is_finite()
+}
+
+/// [`usable_sigma`] for all three components.
+#[inline]
+pub fn usable_sigmas(sigma: Vec3) -> bool {
+    usable_sigma(sigma.x) && usable_sigma(sigma.y) && usable_sigma(sigma.z)
+}
+
 /// A GNSS position fix, the loosely-coupled measurement.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -131,15 +149,16 @@ impl GnssFix {
         }
     }
 
-    /// True when the position is physically plausible and every sigma is
-    /// finite and strictly positive.
+    /// True when the position is physically plausible, every position sigma
+    /// is [usable](usable_sigma), and any velocity is finite.
+    ///
+    /// `velocity_std` is not part of this. A velocity without a usable sigma
+    /// is left out of the update and the position is still taken.
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.position.is_valid()
-            && self.position_std.is_finite()
-            && self.position_std.x > 0.0
-            && self.position_std.y > 0.0
-            && self.position_std.z > 0.0
+            && usable_sigmas(self.position_std)
+            && self.velocity.is_none_or(|v| v.to_vec3().is_finite())
     }
 }
 
@@ -230,6 +249,18 @@ pub struct Pva {
     pub attitude: Attitude,
 }
 
+impl Pva {
+    /// True when no component has gone non-finite.
+    #[inline]
+    pub fn is_finite(&self) -> bool {
+        self.position.lat.is_finite()
+            && self.position.lon.is_finite()
+            && self.position.height.is_finite()
+            && self.velocity.to_vec3().is_finite()
+            && self.attitude.quat.is_finite()
+    }
+}
+
 /// Estimated IMU deterministic errors.
 ///
 /// The mechanization removes these from every raw sample:
@@ -272,6 +303,15 @@ impl ImuError {
             dtheta: (imu.dtheta - self.gyro_bias * imu.dt).component_div(gyro_gain),
             dvel: (imu.dvel - self.accel_bias * imu.dt).component_div(accel_gain),
         }
+    }
+
+    /// True when no component has gone non-finite.
+    #[inline]
+    pub fn is_finite(&self) -> bool {
+        self.gyro_bias.is_finite()
+            && self.accel_bias.is_finite()
+            && self.gyro_scale.is_finite()
+            && self.accel_scale.is_finite()
     }
 }
 
@@ -363,11 +403,7 @@ impl NavState {
 
     /// True when nothing in the state has gone non-finite.
     pub fn is_finite(&self) -> bool {
-        self.pva.position.lat.is_finite()
-            && self.pva.position.lon.is_finite()
-            && self.pva.position.height.is_finite()
-            && self.pva.velocity.to_vec3().is_finite()
-            && self.pva.attitude.quat.is_finite()
+        self.pva.is_finite() && self.imu_error.is_finite()
     }
 }
 
@@ -505,6 +541,45 @@ mod tests {
         let mut s = NavState::default();
         assert!(s.is_finite());
         s.pva.position.lat = F::NAN;
+        assert!(!s.is_finite());
+    }
+
+    #[test]
+    fn a_sigma_is_usable_only_when_its_variance_is() {
+        for good in [1e-100, 0.5, 1e100] {
+            assert!(usable_sigma(good), "{good}");
+        }
+        // The last two are positive and finite, and square to 0 and infinity.
+        for bad in [0.0, -1.0, F::NAN, F::INFINITY, 1e-200, 1e200] {
+            assert!(!usable_sigma(bad), "{bad}");
+        }
+        assert!(usable_sigmas(Vec3::new(1.0, 2.0, 3.0)));
+        assert!(!usable_sigmas(Vec3::new(1.0, 1e200, 3.0)));
+    }
+
+    #[test]
+    fn a_fix_with_an_unusable_part_is_invalid() {
+        let t = GpsTime::from_tow(1.0);
+        let p = Lla::from_degrees(30.0, 114.0, 20.0);
+        let fix = GnssFix::position_only(t, p, Vec3::splat(2.0));
+        assert!(!GnssFix::position_only(t, p, Vec3::splat(1e200)).is_valid());
+        assert!(!GnssFix::position_only(t, p, Vec3::splat(1e-200)).is_valid());
+        let moving = GnssFix {
+            velocity: Some(Ned::new(1.0, 2.0, 3.0)),
+            ..fix
+        };
+        assert!(moving.is_valid());
+        let nonsense = GnssFix {
+            velocity: Some(Ned::new(1.0, F::NAN, 3.0)),
+            ..fix
+        };
+        assert!(!nonsense.is_valid());
+    }
+
+    #[test]
+    fn nav_state_finiteness_covers_the_sensor_errors() {
+        let mut s = NavState::default();
+        s.imu_error.accel_scale.z = F::INFINITY;
         assert!(!s.is_finite());
     }
 }

@@ -149,6 +149,17 @@ pub trait Rewindable: Estimator + Copy {
     /// was applied, as the named method would.
     fn apply_aid(&mut self, aid: &Self::Aid) -> Result<bool, FilterError>;
 
+    /// Whether `aid`'s arguments are ones [`Rewindable::apply_aid`] can use at
+    /// all, whatever the state.
+    ///
+    /// One that is not is refused by [`Rewind::aid`] without being recorded:
+    /// the engine would have ignored it, and it would only take a place in the
+    /// event ring from a call that mattered.
+    #[inline]
+    fn aid_is_valid(_aid: &Self::Aid) -> bool {
+        true
+    }
+
     /// Whether a first IMU sample has fixed the time origin.
     ///
     /// Before it has, [`Estimator::timestamp`] says nothing about where the
@@ -489,8 +500,12 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
     /// Make an aiding call on the engine, and record it for any replay that
     /// passes this point. Returns what [`Rewindable::apply_aid`] returns.
     ///
-    /// A call that fails with an error is not recorded.
+    /// A call that fails with an error is not recorded, and neither is one
+    /// whose arguments are unusable, which returns `Ok(false)`.
     pub fn aid(&mut self, aid: E::Aid) -> Result<bool, FilterError> {
+        if !E::aid_is_valid(&aid) {
+            return Ok(false);
+        }
         let accepted = self.live.apply_aid(&aid)?;
         self.record(self.seq, Action::Aid(aid));
         Ok(accepted)

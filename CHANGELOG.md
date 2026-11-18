@@ -14,6 +14,23 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **`add_imu` can now return `FilterError::Diverged`, and invalid input is refused
+  rather than absorbed, in both engines.** A finite sample that would overflow the
+  mechanization leaves the state and covariance as they were, and the next sample
+  carries on from them. `Diverged` now means the step was refused and the last good
+  values kept. `Eskf::predict`, `Eskf::predict_recording` and
+  `EqFilter::propagate` return whether they took the step.
+- **`GnssFix::is_valid` is stricter.** Every position sigma must now be
+  [usable](crates/drifters-core/src/types.rs), and a velocity, if present, finite.
+  An aiding call with unusable arguments returns `Ok(false)` without counting as a
+  rejection, and the rewind layers do not record it.
+- **`NavState::is_finite` covers the IMU errors,** which it used to skip.
+- **Covariances are limited to `MAX_VARIANCE`, `1e30`.** A time update or an
+  inflation that would pass it leaves the covariance where it was, and a measurement
+  update or a reset that would pass it is refused.
+- **Those checks have a cost.** An `add_imu` takes 0.7 % to 2.1 % more instructions
+  on a Cortex-M4 and 2.0 % to 4.9 % more on a Cortex-M7, and the harness firmware's
+  code grows by about 5 % and 6 %. Peak stack moves by at most 48 bytes either way.
 - **The Cortex-M4 instruction counts are re-measured**, and sit 1 % to 4 % above
   what the documents quoted: 3.63 million for the default ESKF, 479 thousand with
   `f32-covariance`, 4.45 million for the dense equivariant filter and 854
@@ -148,6 +165,17 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Fixed
 
+- **`single_differences` matched satellites to the wrong observations.** After
+  skipping an unusable pseudorange it indexed the original list with its count of
+  usable lines, so every later satellite took a neighbour's constellation, elevation
+  and noise. One bad observation in an epoch was enough.
+- **A sigma that squares to zero or infinity is no longer accepted.** `1e-170` was
+  an infinitely confident measurement and `1e155` an infinite variance, and both
+  passed as positive and finite.
+- **Non-finite results no longer reach the state or covariance.** An overflowing IMU
+  sample could leave NaN in the state, a failed `U D Uᵀ` time update could leave half
+  of each of two covariances, finite factors could multiply out to an infinite
+  covariance, and a NaN gate passed every measurement.
 - **GCU's covariance update is the paper's.** The paper inflates the
   innovation covariance and then updates as the EqF paper does,
   `Σ⁺ = (I − KC*)Σ`, which counts the inflation as measurement noise. This
@@ -248,6 +276,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Engine-level fuzzing.** A new `engine` target in `fuzz/` drives arbitrary IMU,
+  GNSS and aiding sequences through both engines, every covariance form and both
+  rewind layers. After every call it asserts no panic, finite output, finite factors
+  with non-negative `D`, and that invalid input was reported and changed nothing.
+  CI runs it in each filter configuration. The same properties run on stable as
+  `engine_robustness`, with seeded scripts and a sweep putting every awkward value
+  into every argument. See [Layer 14](docs/testing.md).
+- **`usable_sigma`, `usable_sigmas`, `Pva::is_finite`, `ImuError::is_finite`,
+  `Measurement::is_finite`, `Aid::is_valid`, `Rewindable::aid_is_valid` and
+  `GinsEngine::filter`.**
 - **Initial alignment: `drifters_core::align` produces the starting state and its
   sigmas, so a caller no longer has to supply them.** The `Aligner` is fed the
   same IMU samples and GNSS fixes as an engine. It detects a rest, levels, and

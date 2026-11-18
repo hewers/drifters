@@ -51,7 +51,7 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::Real;
 use drifters_core::math::{Mat3, Quat, Vec3};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{Attitude, GnssFix, ImuError, ImuSample, NavState, Pva};
+use drifters_core::types::{usable_sigmas, Attitude, GnssFix, ImuError, ImuSample, NavState, Pva};
 use drifters_core::F;
 
 use crate::config::{ConfigError, EqfOptions};
@@ -66,6 +66,7 @@ use crate::linear::{
 };
 use crate::local::{compensate_earth, Anchor};
 use crate::physical;
+use crate::rewind::Aid;
 
 /// A loosely-coupled GNSS/INS engine over the equivariant filter.
 ///
@@ -327,6 +328,12 @@ impl<C: Covariance> EqfEngine<C> {
     /// sample's own `dt` and not a difference of timestamps: the rates are
     /// the increments divided by it, so integrating over anything else
     /// rescales the input.
+    ///
+    /// A sample that fails [`ImuSample::is_valid`] is dropped. A valid one that
+    /// cannot be propagated through returns [`FilterError::Diverged`] with the
+    /// estimate as it was, and the next sample carries on from there.
+    /// Timestamps are not required to increase: a clock can step, and refusing
+    /// everything after a step would stop the filter for good.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
         if !raw.is_valid() {
             // A malformed sample must not be allowed to poison the state.
@@ -341,10 +348,11 @@ impl<C: Covariance> EqfEngine<C> {
             return Ok(());
         }
 
-        match self.pending_placement(&raw) {
-            None | Some((Placement::Ahead, _)) => {
-                self.propagate(&raw);
-            }
+        // A fix that fails does not stop the interval it fell in: time still
+        // has to pass. It is reported once the interval is done.
+        let mut fix_outcome = Ok(());
+        let step = match self.pending_placement(&raw) {
+            None | Some((Placement::Ahead, _)) => self.propagate(&raw),
             Some((Placement::Stale, _)) => {
                 // Queued before the first sample fixed the time origin, or the
                 // stream jumped. Either way it is unusable, and a slot that
@@ -352,31 +360,42 @@ impl<C: Covariance> EqfEngine<C> {
                 // of something that never had a chance.
                 self.pending_gnss = None;
                 self.stale_fixes = self.stale_fixes.saturating_add(1);
-                self.propagate(&raw);
+                self.propagate(&raw)
             }
             Some((Placement::AtStart, _)) => {
-                self.apply_pending_gnss(&raw)?;
-                self.propagate(&raw);
+                fix_outcome = self.apply_pending_gnss(&raw);
+                self.propagate(&raw)
             }
             Some((Placement::AtEnd, _)) => {
-                self.propagate(&raw);
-                self.apply_pending_gnss(&raw)?;
+                let step = self.propagate(&raw);
+                if step.is_ok() {
+                    fix_outcome = self.apply_pending_gnss(&raw);
+                }
+                step
             }
             Some((Placement::Inside, fix)) => {
                 // The fix comes with its placement: nothing to look up again,
                 // so neither a panic nor a fallback epoch to reach.
                 let (before, after) = raw.split_at(fix.time);
-                if let Some(before) = before {
-                    self.propagate(&before);
+                let first = before.map_or(Ok(()), |before| self.propagate(&before));
+                if first.is_ok() {
+                    fix_outcome = self.apply_pending_gnss(&raw);
+                    let rest = self.propagate(&after);
+                    if rest.is_err() {
+                        // The estimate did get this far.
+                        self.time = fix.time;
+                    }
+                    rest
+                } else {
+                    first
                 }
-                self.apply_pending_gnss(&raw)?;
-                self.propagate(&after);
             }
-        }
+        };
+        step?;
 
         self.time = raw.time;
         self.interval = raw.dt;
-        Ok(())
+        fix_outcome
     }
 
     /// The pending fix and where it falls in the interval `imu` covers, or
@@ -411,10 +430,16 @@ impl<C: Covariance> EqfEngine<C> {
         )
     }
 
-    fn propagate(&mut self, imu: &ImuSample) {
+    fn propagate(&mut self, imu: &ImuSample) -> Result<(), FilterError> {
         let input = self.input(imu);
-        self.filter
-            .propagate(&input, imu.dt, &self.options.process_noise);
+        if self
+            .filter
+            .propagate(&input, imu.dt, &self.options.process_noise)
+        {
+            Ok(())
+        } else {
+            Err(FilterError::Diverged)
+        }
     }
 
     /// Apply the pending fix at the current state. `imu` is the sample whose
@@ -433,10 +458,7 @@ impl<C: Covariance> EqfEngine<C> {
         // A fix carrying velocity gives a second measurement. A zero sigma
         // would be an infinitely confident one, so an unset sigma means
         // "velocity not usable" rather than "perfect".
-        let velocity_usable = fix.velocity_std.is_finite()
-            && fix.velocity_std.x > 0.0
-            && fix.velocity_std.y > 0.0
-            && fix.velocity_std.z > 0.0;
+        let velocity_usable = usable_sigmas(fix.velocity_std);
         if let Some(velocity) = fix.velocity.filter(|_| velocity_usable) {
             // The antenna moves with the body's rotation about the IMU, so its
             // velocity needs the rate over the interval the epoch is in: the
@@ -472,8 +494,12 @@ impl<C: Covariance> EqfEngine<C> {
         reference: Vec3,
         sigma: F,
     ) -> Result<bool, FilterError> {
-        let usable = |v: Vec3| v.is_finite() && v.norm_squared() > 0.0;
-        if !(usable(measured) && usable(reference) && sigma.is_finite() && sigma > 0.0) {
+        let aid = Aid::Magnetometer {
+            measured,
+            reference,
+            sigma,
+        };
+        if !aid.is_valid() {
             return Ok(false);
         }
         let north = reference.normalized();
@@ -1543,5 +1569,57 @@ mod tests {
         );
         assert_eq!(e.inflation_count(), 0, "a consistent run needs no rescue");
         assert!(e.nav_state().position().ned_from(origin()).norm() < 0.2);
+    }
+
+    /// An engine two samples in, so that the next one propagates.
+    fn running_engine() -> EqfEngine {
+        let mut e: EqfEngine = EqfEngine::new(options()).unwrap();
+        for i in 0..2 {
+            let s = coasting_sample(&e, 0.01, i as F * 0.01);
+            e.add_imu(s).unwrap();
+        }
+        e
+    }
+
+    #[test]
+    fn a_sample_that_overflows_is_refused_and_the_next_one_carries_on() {
+        let mut e = running_engine();
+        let (state, p) = (e.nav_state(), e.covariance());
+
+        let mut overflowing = coasting_sample(&e, 0.01, 0.02);
+        overflowing.dvel.z = F::MAX;
+        assert!(overflowing.is_valid(), "finite, so not dropped on sight");
+        assert_eq!(e.add_imu(overflowing), Err(FilterError::Diverged));
+        assert_eq!(e.nav_state(), state);
+        assert_eq!(e.covariance(), p);
+
+        let next = coasting_sample(&e, 0.01, 0.03);
+        assert_eq!(e.add_imu(next), Ok(()));
+        assert!(e.nav_state().is_finite());
+    }
+
+    #[test]
+    fn an_invalid_magnetometer_reading_is_refused_without_counting() {
+        let mut e = running_engine();
+        let (state, p) = (e.nav_state(), e.covariance());
+        let field = Vec3::new(0.48, -0.05, 0.88);
+
+        assert_eq!(e.apply_magnetometer(Vec3::ZERO, field, 0.1), Ok(false));
+        assert_eq!(e.apply_magnetometer(field, Vec3::ZERO, 0.1), Ok(false));
+        assert_eq!(
+            e.apply_magnetometer(Vec3::splat(F::NAN), field, 0.1),
+            Ok(false)
+        );
+        assert_eq!(
+            e.apply_magnetometer(Vec3::splat(1e200), field, 0.1),
+            Ok(false),
+            "its squared norm overflows, so it has no direction"
+        );
+        assert_eq!(e.apply_magnetometer(field, field, 0.0), Ok(false));
+        assert_eq!(e.apply_magnetometer(field, field, F::NAN), Ok(false));
+
+        assert_eq!(e.nav_state(), state);
+        assert_eq!(e.covariance(), p);
+        assert_eq!(e.consecutive_rejections(), 0);
     }
 }

@@ -28,6 +28,7 @@
 //!
 //! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
+use drifters_core::estimator::MAX_VARIANCE;
 use drifters_core::math::{Cholesky, Matrix};
 use drifters_core::F;
 
@@ -153,7 +154,8 @@ impl Ud {
     ///
     /// Returns `None` if it is not positive definite, which is the last point
     /// at which that can be true: everything downstream of here keeps `D`
-    /// non-negative on its own.
+    /// non-negative on its own. Also `None` if the factors would not pass
+    /// [`Self::is_usable`].
     pub fn from_covariance(p: &StateMatrix) -> Option<Self> {
         let mut work = *p;
         Self::from_covariance_in_place(&mut work)
@@ -188,7 +190,7 @@ impl Ud {
                 }
             }
         }
-        Some(ud)
+        ud.is_usable().then_some(ud)
     }
 
     /// Multiply the factors out. For tests, reporting and the measurement
@@ -236,6 +238,22 @@ impl Ud {
             .sum()
     }
 
+    /// Every `Pᵢᵢ`, in one pass over the factors.
+    ///
+    /// Walking whole columns rather than asking [`Self::variance`] for each
+    /// state also keeps this free of indexing, which matters because the limit
+    /// checks that use it are on the data path; see docs/testing.md Layer 10.
+    fn variances(&self) -> [F; N_STATE] {
+        let mut variances = self.diagonal();
+        for (k, d) in self.diagonal.iter().enumerate() {
+            for (variance, u) in variances.iter_mut().zip(self.column_of(k)) {
+                let u = *u as F;
+                *variance += u * u * *d as F;
+            }
+        }
+        variances
+    }
+
     /// `h P hᵀ`, without forming `P`.
     ///
     /// `P = U D Uᵀ`, so this is `Σₖ Dₖ (Uᵀh)ₖ²` — one triangular product and a
@@ -254,7 +272,12 @@ impl Ud {
 
     /// Scale the whole covariance by `factor`, which scales `D` alone: `U`
     /// carries the correlations and a uniform scaling leaves them alone.
+    ///
+    /// Does nothing when that would take a variance past [`MAX_VARIANCE`].
     pub fn inflate(&mut self, factor: F) {
+        if !self.variances().iter().all(|v| *v * factor <= MAX_VARIANCE) {
+            return;
+        }
         for d in self.diagonal.iter_mut() {
             *d *= factor as Scalar;
         }
@@ -279,6 +302,15 @@ impl Ud {
     pub fn is_healthy(&self) -> bool {
         self.diagonal.iter().all(|d| d.is_finite() && *d >= 0.0)
             && self.upper.iter().all(|u| u.is_finite())
+    }
+
+    /// [`Self::is_healthy`], and every variance is within [`MAX_VARIANCE`].
+    ///
+    /// Finite factors can multiply out to an infinite covariance, so this and
+    /// not `is_healthy` is what a result has to pass to be kept. By
+    /// Cauchy-Schwarz the bound on the diagonal also bounds every covariance.
+    pub fn is_usable(&self) -> bool {
+        self.is_healthy() && self.variances().iter().all(|v| *v <= MAX_VARIANCE)
     }
 
     /// Bierman's measurement update for one scalar observation.
@@ -359,7 +391,8 @@ impl Ud {
     ///
     /// `None` if a pivot goes non-positive, which requires a degenerate
     /// transition — a state that no channel drives and that `Φ` maps to
-    /// nothing.
+    /// nothing — or if the result would pass [`MAX_VARIANCE`]. The factors are
+    /// then exactly what they were.
     pub fn predict(
         &mut self,
         transition: &StateMatrix,
@@ -512,6 +545,12 @@ impl Ud {
     /// contiguous slices, which vectorise. Reading the pivot through the same
     /// `&mut` that writes the other row does not, and that was how this was
     /// first written.
+    ///
+    /// All or nothing. A row is dead once it has been pivoted on, so its result
+    /// is kept in it, `D` on the diagonal and `U`'s column to the left, and
+    /// `self` is written only after every pivot has succeeded and the result
+    /// has been found to fit. A failure partway must not leave half of one
+    /// covariance and half of another looking like a whole one.
     fn orthogonalise<const W: usize>(
         &mut self,
         w: &mut [[Scalar; W]; N_STATE],
@@ -519,8 +558,9 @@ impl Ud {
     ) -> Option<()> {
         let mut pivot = [0.0 as Scalar; W];
         let mut weighted = [0.0 as Scalar; W];
-        for i in (0..N_STATE).rev() {
-            pivot.copy_from_slice(&w[i]);
+        let mut rest: &mut [[Scalar; W]] = w.as_mut_slice();
+        while let Some((row, above)) = core::mem::take(&mut rest).split_last_mut() {
+            pivot.copy_from_slice(row);
             for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
                 *x = q * p;
             }
@@ -528,19 +568,65 @@ impl Ud {
             if !sigma.is_finite() || sigma <= 0.0 {
                 return None;
             }
-            self.diagonal[i] = sigma;
+            if let Some(slot) = row.get_mut(above.len()) {
+                *slot = sigma;
+            }
             let inverse = 1.0 / sigma;
-            for (j, row) in w.iter_mut().enumerate().take(i) {
-                let cross: Scalar = lane_dot(row, &weighted);
+            for (other, slot) in above.iter_mut().zip(row.iter_mut()) {
+                let cross: Scalar = lane_dot(other, &weighted);
                 let u = cross * inverse;
-                self.set_upper_at(j, i, u);
-                for (a, b) in row.iter_mut().zip(pivot.iter()) {
+                *slot = u;
+                for (a, b) in other.iter_mut().zip(pivot.iter()) {
                     *a -= u * b;
                 }
+            }
+            rest = above;
+        }
+
+        if !orthogonalised_fits(w) {
+            return None;
+        }
+        for (i, row) in w.iter().enumerate() {
+            let (column, d) = pivoted(row, i)?;
+            if let Some(slot) = self.diagonal.get_mut(i) {
+                *slot = d;
+            }
+            for (slot, u) in self.column_of_mut(i).iter_mut().zip(column) {
+                *slot = *u;
             }
         }
         Some(())
     }
+}
+
+/// What [`Ud::orthogonalise`] left in row `i`: `U`'s column `i`, and `Dᵢ`.
+///
+/// `None` needs a row narrower than the state, which no caller has. It is
+/// written this way because indexing a row here links a panic path into the
+/// data path; see docs/testing.md Layer 10.
+#[inline]
+fn pivoted<const W: usize>(row: &[Scalar; W], i: usize) -> Option<(&[Scalar], Scalar)> {
+    let (column, rest) = row.split_at_checked(i)?;
+    Some((column, *rest.first()?))
+}
+
+/// Whether the factors [`Ud::orthogonalise`] left in `w` are within
+/// [`MAX_VARIANCE`]: `Pᵢᵢ = Σₖ Uᵢₖ² Dₖ` over `k ≥ i`. Every `D` here is positive,
+/// so a non-finite `U` makes its sum non-finite and is caught by the same test.
+fn orthogonalised_fits<const W: usize>(w: &[[Scalar; W]; N_STATE]) -> bool {
+    let mut variances = [0.0 as Scalar; N_STATE];
+    for (k, row) in w.iter().enumerate() {
+        let Some((column, d)) = pivoted(row, k) else {
+            return false;
+        };
+        for (variance, u) in variances.iter_mut().zip(column) {
+            *variance += u * u * d;
+        }
+        if let Some(variance) = variances.get_mut(k) {
+            *variance += d;
+        }
+    }
+    variances.iter().all(|v| *v <= MAX_VARIANCE as Scalar)
 }
 
 /// A correlated measurement turned into independent rows.
@@ -1135,5 +1221,44 @@ mod tests {
             ud.update(&h, F::NAN).is_none(),
             "non-finite measurement noise"
         );
+    }
+
+    #[test]
+    fn a_refused_time_update_leaves_the_factors_alone() {
+        let mut ud = Ud::from_covariance(&covariance(41, 1.0e4)).unwrap();
+        let (diagonal, p) = (ud.diagonal(), ud.to_covariance());
+        let g = NoiseMatrix::zeros();
+        let density = [0.0; N_NOISE];
+
+        // Finite, and far past what a variance may reach.
+        let growth = StateMatrix::identity().scaled(1.0e20);
+        assert!(ud.predict(&growth, &g, &density).is_none());
+        assert_eq!(ud.diagonal(), diagonal);
+        assert_eq!(ud.to_covariance(), p);
+
+        let mut poisoned = StateMatrix::identity();
+        poisoned[(0, 1)] = F::NAN;
+        assert!(ud.predict(&poisoned, &g, &density).is_none());
+        assert_eq!(ud.diagonal(), diagonal);
+        assert_eq!(ud.to_covariance(), p);
+    }
+
+    #[test]
+    fn a_covariance_past_the_variance_limit_is_refused() {
+        let within = StateMatrix::identity().scaled(0.5 * MAX_VARIANCE);
+        assert!(Ud::from_covariance(&within).is_some());
+        let past = StateMatrix::identity().scaled(2.0 * MAX_VARIANCE);
+        assert!(Ud::from_covariance(&past).is_none());
+    }
+
+    #[test]
+    fn inflation_stops_at_the_variance_limit() {
+        let mut ud = Ud::from_variances(&[0.1 * MAX_VARIANCE; N_STATE]);
+        let before = ud.diagonal();
+        ud.inflate(100.0);
+        assert_eq!(ud.diagonal(), before, "past the limit, nothing moves");
+        ud.inflate(2.0);
+        assert!(ud.diagonal()[0] > before[0], "within it, inflation applies");
+        assert!(ud.is_usable());
     }
 }

@@ -129,7 +129,7 @@ use drifters_core::frames::Lla;
 use drifters_core::math::Vec3;
 use drifters_core::rewind::{Record, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{GnssFix, ImuSample, NavState};
+use drifters_core::types::{usable_sigma, usable_sigmas, GnssFix, ImuSample, NavState};
 use drifters_core::F;
 
 use crate::config::{ConfigError, GinsOptions};
@@ -187,8 +187,33 @@ pub enum Aid {
     },
 }
 
+impl Aid {
+    /// True when the engine can use these arguments at all: every sigma is
+    /// [usable](usable_sigma) and every value finite.
+    ///
+    /// The engine's own aiding calls answer `Ok(false)` to anything failing
+    /// this, and it says nothing about whether the state will accept the
+    /// measurement once it is applied.
+    pub fn is_valid(&self) -> bool {
+        match *self {
+            Aid::Zupt { sigma } => usable_sigmas(sigma),
+            Aid::Nonholonomic { sigma, min_speed } => {
+                usable_sigma(sigma.0) && usable_sigma(sigma.1) && min_speed.is_finite()
+            }
+            Aid::WheelSpeed { speed, sigma } => speed.is_finite() && usable_sigma(sigma),
+            Aid::Height { height, sigma } => height.is_finite() && usable_sigma(sigma),
+            Aid::Heading { heading, sigma } => heading.is_finite() && usable_sigma(sigma),
+        }
+    }
+}
+
 impl Rewindable for GinsEngine {
     type Aid = Aid;
+
+    #[inline]
+    fn aid_is_valid(aid: &Aid) -> bool {
+        aid.is_valid()
+    }
 
     fn apply_aid(&mut self, aid: &Aid) -> Result<bool, FilterError> {
         match *aid {
@@ -921,5 +946,28 @@ mod tests {
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
             assert_eq!(size_of::<Representative>(), 21_288);
         }
+    }
+
+    #[test]
+    fn an_invalid_aid_is_refused_and_never_recorded() {
+        let mut e = RewindEngine::<40, 32>::new(options()).unwrap();
+        e.add_imu(sample(0)).unwrap();
+        e.add_imu(sample(1)).unwrap();
+        let (recorded, state) = (e.history().len(), e.nav_state());
+
+        let invalid = Aid::Height {
+            height: F::NAN,
+            sigma: 1.0,
+        };
+        assert!(!invalid.is_valid());
+        assert_eq!(e.aid(invalid), Ok(false));
+        assert_eq!(e.apply_height(25.0, 0.0), Ok(false));
+        assert_eq!(e.apply_zupt(Vec3::splat(F::NAN)), Ok(false));
+        assert_eq!(e.history().len(), recorded, "a replay must not meet it");
+        assert_eq!(e.dropped_event_count(), 0);
+        assert_eq!(e.nav_state(), state);
+
+        assert!(e.apply_height(25.0, 1.0).is_ok());
+        assert_eq!(e.history().len(), recorded + 1);
     }
 }

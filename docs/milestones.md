@@ -29,7 +29,7 @@ Workspace, licences, lint configuration, CI, and this documentation set.
 | `docs` | rustdoc with `-D warnings` — broken intra-doc links |
 | `deny` | licences and advisories, **and** that the AGPL guard actually fires |
 | `proto` | the checked-in bindings still match the `.proto` sources |
-| `fuzz` | the decode fuzz target still builds and runs |
+| `fuzz` | the decode and engine fuzz targets still build and run, the engine one in each filter configuration |
 | `interop` | the permissive `nav-types` adapter |
 | `cortex_m` | stack budget under QEMU, and no panic machinery on the data path |
 
@@ -342,6 +342,10 @@ single-precision is most of the soft-float question. Per `add_imu` on
 | EqF engine, dense `f64` | 4 447 560 |
 | EqF engine, factored `f32` | **853 560** |
 
+Those are the figures from when this was done. The input checks added since cost
+0.7 % to 2.1 %, and [testing.md](testing.md#instructions-retired) has the current
+ones.
+
 **This table replaced one that was wrong.** It read 21 398, 11 868 and 5 911,
 labelled instructions. They were SysTick ticks, forty instructions each, and
 two of the three were aliased: the counter is 24 bits and the batch being timed
@@ -380,7 +384,8 @@ predate the correction are in ticks, and the ones taken in the `f64` or
       `-C target-cpu=cortex-m7` and run on `mps2-an500`, no `f64` arithmetic
       stays in software and an `add_imu` is 295 440 instructions for the ESKF,
       261 760 for the dense equivariant filter and 326 480 for the factored
-      `f32` one. `f32-covariance` saves 1.9 %. Instruction counts again, and
+      `f32` one, before input checks that have since added 2.0 % to 4.9 %.
+      `f32-covariance` saves 1.9 %. Instruction counts again, and
       double-precision instructions take longer, so the choice between them
       waits on the item below. See [testing.md](testing.md#the-cortex-m7-with-f64-in-hardware).
 

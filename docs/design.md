@@ -360,9 +360,9 @@ Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, and it costs what it was expected to:
 no engine-sized temporary, and a frame of its own of **152 bytes** over the
-ESKF's deepest path, the held-state ZUPT (160 with `f32-covariance`). That takes the ESKF's peak to
-20 800 bytes, 20 808 with `f32-covariance` and 11 528 at 15 states. The EqF's
-late fix measures 15 488 dense and 14 016 factored, no deeper than its own fix
+ESKF's deepest path, the held-state ZUPT. That takes the ESKF's peak to
+20 808 bytes, 20 824 with `f32-covariance` and 11 536 at 15 states. The EqF's
+late fix measures 15 448 dense and 14 064 factored, no deeper than its own fix
 step in either. All are inside
 their CI ceilings, and all are now part of the peak CI checks.
 
@@ -390,23 +390,23 @@ ESKF:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 9 780 | 10 108 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 480 | 14 008 |
-| `apply_magnetometer` | 14 392 | 12 920 |
-| **peak** | **15 480** | **14 008** |
+| `add_imu` (propagate) | 11 280 | 10 460 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 448 | 14 064 |
+| `apply_magnetometer` | 14 456 | 13 072 |
+| **peak** | **15 448** | **14 064** |
 
-Under the ESKF's own 20 800, and both under a 20 KiB ceiling in CI. A
+Under the ESKF's own 20 808, and both under a 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
 step. The dense form was 28 852 as first measured; [testing.md](testing.md),
 Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained)
 the 1.9 KB its update paths have gained since, which is not yet explained.
 
 On a small part the constraint was never stack. It was work: the dense form
-is 4.45 million instructions per `add_imu` on a Cortex-M4, soft-float
+is 4.48 million instructions per `add_imu` on a Cortex-M4, soft-float
 throughout on a core whose FPU is single precision, and at an instruction per
-cycle that is at least 26 ms a sample at 168 MHz. The factored form is 0.85
-million, a floor of 5.1 ms — inside a 100 Hz IMU's interval with about half of
-it to spare, and just over a 200 Hz one's — against 479 thousand for the
+cycle that is at least 26.7 ms a sample at 168 MHz. The factored form is 0.87
+million, a floor of 5.2 ms — inside a 100 Hz IMU's interval with about half of
+it to spare, and just over a 200 Hz one's — against 486 thousand for the
 ESKF with `f32-covariance`. See [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4
@@ -475,9 +475,9 @@ the harness:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 096 | 20 648 | **20 800** |
-| 21-state, `f32-covariance` | 12 440 | 20 656 | **20 808** |
-| 15-state (`reduced-state`) | 9 624 | 11 376 | **11 528** |
+| 21-state, `f64` | 17 088 | 20 656 | **20 808** |
+| 21-state, `f32-covariance` | 13 124 | 20 672 | **20 824** |
+| 15-state (`reduced-state`) | 10 360 | 11 384 | **11 536** |
 
 Re-measured with Rust 1.100, after `Matrix::identity` became an iterator to
 satisfy clippy. That cost 1 680, 2 608 and 840 bytes on `apply_zupt`, which

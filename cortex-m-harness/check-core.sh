@@ -47,14 +47,14 @@ rm -f "$reports/$core"-*
 # Peak stack ceilings. They are ceilings, not targets, and each leaves headroom
 # over what was measured, a late fix through the rewind layer included.
 #
-# - 22 KiB for 21 states, measured at 20 808 B at most. It still fails if a
+# - 22 KiB for 21 states, measured at 20 824 B at most. It still fails if a
 #   change reintroduces the expression-chained form that cost 35.3 KiB. It was
 #   20 KiB until `Matrix::identity` became an iterator to satisfy clippy, which
 #   cost 1 672 B on the ZUPT path; that trade was made deliberately.
-# - 12 KiB for 15 states, measured at 11 536 B at most: fitting where 21 states
+# - 12 KiB for 15 states, measured at 11 552 B at most: fitting where 21 states
 #   do not is the whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
-#   every configuration. Measured at 15 488 B dense and 14 016 B factored.
+#   every configuration. Measured at 15 448 B dense and 14 064 B factored.
 # - 8 KiB for the initial alignment, which runs before an engine exists and so
 #   is not added to either figure above.
 #

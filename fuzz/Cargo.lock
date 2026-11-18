@@ -46,6 +46,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "drifters-eqf"
+version = "0.1.0"
+dependencies = [
+ "drifters-core",
+]
+
+[[package]]
 name = "drifters-filter"
 version = "0.1.0"
 dependencies = [
@@ -57,6 +64,7 @@ name = "drifters-fuzz"
 version = "0.0.0"
 dependencies = [
  "drifters-core",
+ "drifters-eqf",
  "drifters-filter",
  "drifters-proto",
  "libfuzzer-sys",

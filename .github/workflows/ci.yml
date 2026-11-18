@@ -41,6 +41,8 @@ jobs:
       - run: cargo test -p drifters-filter --features f32-covariance
       # The whole campaign at single precision, against the same expectations.
       - run: cargo test -p drifters-cli --features f32-covariance
+      # The engine properties at 15 states.
+      - run: cargo test -p drifters-cli --features reduced-state --test engine_robustness
 
   lint:
     name: fmt + clippy
@@ -214,11 +216,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask proto --check
 
-  # The fuzz target needs nightly, so it cannot run in the main test job. A
-  # short run on every push catches a target that stopped compiling; depth comes
-  # from running it out of band.
+  # The fuzz targets need nightly, so they cannot run in the main test job. A
+  # short run on every push catches a target that stopped compiling and anything
+  # shallow; depth comes from running them out of band. The engine target runs
+  # once per filter configuration, because `f32-covariance` and `reduced-state`
+  # change what the filter computes.
   fuzz:
-    name: fuzz decode (smoke)
+    name: fuzz (smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -226,6 +230,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
       - run: cargo fuzz run decode -- -max_total_time=60
+        working-directory: fuzz
+      - run: cargo fuzz run engine -- -max_total_time=60 -max_len=4096 -timeout=30
+        working-directory: fuzz
+      - run: cargo fuzz run --features f32-covariance engine -- -max_total_time=60 -max_len=4096 -timeout=30
+        working-directory: fuzz
+      - run: cargo fuzz run --features reduced-state engine -- -max_total_time=60 -max_len=4096 -timeout=30
         working-directory: fuzz
 
   # The interop adapters are off by default, so the main test job never

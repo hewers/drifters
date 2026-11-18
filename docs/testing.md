@@ -258,7 +258,8 @@ rather than to the strict interval for exactly this reason.
   dependency and nothing on a host build will notice.
 - **`libm` pinning.** Golden literals captured from `libm`, asserted with
   fully-qualified `Real::sin(x)` calls. See below.
-- **Fuzzing** protobuf decode (M5).
+- **Fuzzing** protobuf decode (M5), and the engines themselves: see
+  [Layer 14](#layer-14--arbitrary-input-through-the-engines).
 - **Property tests** via `proptest` for the algebraic layer.
 - **The non-additive features run separately.** `reduced-state` and
   `f32-covariance` each change what the filter computes rather than adding
@@ -330,11 +331,11 @@ ceiling: 22 KiB for `PEAK`, the ESKF (12 KiB at 15 states), and 20 KiB for
 
 | | peak stack, bytes |
 |---|---|
-| ESKF, 21-state | 20 800 |
-| ESKF, 21-state, `f32-covariance` | 20 808 |
-| ESKF, 15-state (`reduced-state`) | 11 528 |
-| EqF engine, dense `f64` | **15 488** |
-| EqF engine, factored `f32` | **14 016** |
+| ESKF, 21-state | 20 808 |
+| ESKF, 21-state, `f32-covariance` | 20 824 |
+| ESKF, 15-state (`reduced-state`) | 11 536 |
+| EqF engine, dense `f64` | **15 448** |
+| EqF engine, factored `f32` | **14 064** |
 
 Measured with Rust 1.100. The ESKF figures rose by 1.7 KiB, 2.6 KiB and
 0.8 KiB when `Matrix::identity` was written as an iterator rather than an
@@ -387,7 +388,9 @@ since the update reached them through the covariance trait, 9 772, 15 472 and
 [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained). The factored
 form reads 10 100, 14 000 and 12 920. Each engine-sized frame grew by 8 bytes
 when the engine began recording its last IMU interval: 9 780, 15 480 and
-10 108, 14 008.
+10 108, 14 008. Refusing a bad update whole, which
+[Layer 14](#layer-14--arbitrary-input-through-the-engines) requires, took them to
+11 280, 15 448 and 14 456 dense, and 10 460, 14 064 and 13 072 factored.
 
 Each of propagation, the Joseph update and the reset's covariance transport now
 runs in two buffers, with `Σ` itself the destination of the last product, and
@@ -433,9 +436,9 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 3634560 (90864 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4447560 (111189 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 853560 (21339 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 3697080 (92427 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4480560 (112014 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 866480 (21662 ticks; only under -icount shift=0)
 ```
 
 Without the flag all four lines are emulator wall-clock and mean nothing.
@@ -449,19 +452,23 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 
 | configuration | instructions | SysTick ticks |
 |---|---|---|
-| ESKF, 21-state, `f64` | **3 634 560** | 90 864 |
-| ESKF, 21-state, `f32-covariance` | **478 520** | 11 963 |
-| ESKF, 15-state (`reduced-state`) | **1 626 560** | 40 664 |
-| ESKF, 15-state, `f32-covariance` | **274 680** | 6 867 |
-| EqF engine, dense `f64` | **4 447 560** | 111 189 |
-| EqF engine, factored `f32` | **853 560** | 21 339 |
+| ESKF, 21-state, `f64` | **3 697 080** | 92 427 |
+| ESKF, 21-state, `f32-covariance` | **486 200** | 12 155 |
+| ESKF, 15-state (`reduced-state`) | **1 660 400** | 41 510 |
+| ESKF, 15-state, `f32-covariance` | **279 520** | 6 988 |
+| EqF engine, dense `f64` | **4 480 560** | 112 014 |
+| EqF engine, factored `f32` | **866 480** | 21 662 |
 
 The single-precision covariance removes **87 %** of the work at 21 states and
 83 % at 15, having cost nothing measurable in accuracy. Dropping the six
 scale-factor states removes 55 %. For the equivariant filter, factoring the
 covariance and holding it in `f32` removes **81 %**, also at no measurable
 cost in accuracy; it lands at 1.78 times the ESKF with `f32-covariance`,
-where the dense form is 1.22 times the ESKF in `f64`.
+where the dense form is 1.21 times the ESKF in `f64`.
+
+Refusing bad input is not free. The checks behind
+[Layer 14](#layer-14--arbitrary-input-through-the-engines) added 0.7 % to 2.1 % to
+these counts, and 2.0 % to 4.9 % to the Cortex-M7's below.
 
 The EqF's dense figure was 5 078 640 until its group exponential stopped
 forming the integrated `SE(3)` adjoint as `6 × 6` products: at 461 thousand
@@ -479,12 +486,12 @@ common M4 parts run:
 
 | configuration | at best | against a 200 Hz IMU's 5 ms |
 |---|---|---|
-| ESKF, 21-state, `f64` | 21.6 ms | cannot keep up, nor at 100 Hz |
-| ESKF, 21-state, `f32-covariance` | 2.8 ms | fits, if the real figure is within 1.7× of the floor |
-| ESKF, 15-state | 9.7 ms | cannot at 200 Hz; marginal at 100 Hz |
-| ESKF, 15-state, `f32-covariance` | 1.6 ms | fits with a factor of three to spare |
-| EqF engine, dense `f64` | 26.5 ms | cannot keep up, nor at 50 Hz |
-| EqF engine, factored `f32` | 5.1 ms | cannot at 200 Hz, by 2 %; fits 100 Hz with about half the interval to spare |
+| ESKF, 21-state, `f64` | 22.0 ms | cannot keep up, nor at 100 Hz |
+| ESKF, 21-state, `f32-covariance` | 2.9 ms | fits, if the real figure is within 1.7× of the floor |
+| ESKF, 15-state | 9.9 ms | cannot at 200 Hz; marginal at 100 Hz |
+| ESKF, 15-state, `f32-covariance` | 1.7 ms | fits with a factor of three to spare |
+| EqF engine, dense `f64` | 26.7 ms | cannot keep up, nor at 50 Hz |
+| EqF engine, factored `f32` | 5.2 ms | cannot at 200 Hz, by 3 %; fits 100 Hz with about half the interval to spare |
 
 So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
 configuration that runs, and for the equivariant filter the factored `f32`
@@ -660,29 +667,29 @@ Instructions per `add_imu`, the mean of 200 steps:
 
 | configuration | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
 |---|---|---|---|
-| ESKF, 21-state, `f64` | 3 634 560 | **295 440** | 142 520 |
-| ESKF, 21-state, `f32-covariance` | 478 520 | **289 920** | 134 120 |
-| ESKF, 15-state (`reduced-state`) | 1 626 560 | **133 000** | |
-| ESKF, 15-state, `f32-covariance` | 274 680 | **128 360** | |
-| EqF engine, dense `f64` | 4 447 560 | **261 760** | 106 640 |
-| EqF engine, factored `f32` | 853 560 | **326 480** | 145 080 |
+| ESKF, 21-state, `f64` | 3 697 080 | **304 000** | 146 920 |
+| ESKF, 21-state, `f32-covariance` | 486 200 | **297 800** | 136 480 |
+| ESKF, 15-state (`reduced-state`) | 1 660 400 | **138 520** | |
+| ESKF, 15-state, `f32-covariance` | 279 520 | **133 080** | |
+| EqF engine, dense `f64` | 4 480 560 | **274 560** | 111 520 |
+| EqF engine, factored `f32` | 866 480 | **333 160** | 148 880 |
 
 Hardware `f64` removes 92 % of the ESKF's instructions and 94 % of the dense
 equivariant filter's, and it changes which configuration to choose:
 
-- **`f32-covariance` stops mattering.** It saves 1.9 % at 21 states and 3.5 % at
+- **`f32-covariance` stops mattering.** It saves 2.0 % at 21 states and 3.9 % at
   15, where it saves 87 % and 83 % on the Cortex-M4. What it was saving there was
   the soft-float, and here there is none.
 - **The factored `f32` equivariant filter costs more than the dense one**, by
-  25 %. On the Cortex-M4 it is 81 % cheaper. The dense form is the cheapest
-  21-state configuration measured, 11 % under the ESKF.
+  21 %. On the Cortex-M4 it is 81 % cheaper. The dense form is the cheapest
+  21-state configuration measured, 10 % under the ESKF.
 - **`opt-level = 3` is now the larger lever.** It halves the instructions, 52 %
-  fewer for the ESKF and 59 % for the dense filter, and takes code from 109 KB
-  to 200 KB.
+  fewer for the ESKF and 59 % for the dense filter, and takes code from 145 KB
+  to 256 KB.
 
-Peak stack is 20 692 bytes for the ESKF (11 420 at 15 states), 14 492 for the
-dense equivariant filter and 13 124 for the factored one. Code is 29 % smaller
-than the Cortex-M4 build, 108 656 bytes against 153 356, because the call
+Peak stack is 20 684 bytes for the ESKF (11 420 at 15 states), 14 500 for the
+dense equivariant filter and 13 212 for the factored one. Code is 30 % smaller
+than the Cortex-M4 build, 145 456 bytes against 206 676, because the call
 sequences are gone.
 
 **These are still instruction counts, and two things stop them being read as
@@ -692,8 +699,8 @@ all for division and square root. The counts say the `f32` builds do not do less
 *work*. They do not say the `f32` builds are not faster, and the cycle counter is
 what will settle that. The second is that the Cortex-M4 floor above does not
 carry over. A Cortex-M7 can issue two instructions in a cycle, so the most a count
-supports is half a cycle per instruction: 0.37 ms for the ESKF at 400 MHz, 0.33 ms
-for the dense filter and 0.41 ms for the factored one. All are far inside a 200 Hz
+supports is half a cycle per instruction: 0.38 ms for the ESKF at 400 MHz, 0.34 ms
+for the dense filter and 0.42 ms for the factored one. All are far inside a 200 Hz
 IMU's 5 ms, so the floor rules nothing out, and it rules nothing in, since FPU
 latency, cache misses and flash wait states all push the other way.
 
@@ -956,7 +963,9 @@ with its placement, so the arm that splits already holds the epoch and there
 is nothing to assert or fall back on. No result moved.
 Construction and configuration validation are *not* in scope and may
 legitimately panic on programmer error; they run once, at startup, where a
-panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing.
+panic is diagnosable. Decoding is covered separately by Layer 5's fuzzing, and
+what the engines do with arbitrary input by
+[Layer 14](#layer-14--arbitrary-input-through-the-engines).
 
 ## Layer 11 — error against ground truth
 
@@ -1269,3 +1278,153 @@ draw from it. The 10 % allowance was not changed.
 - Every phone trace is the same phone model.
 - No test runs on hardware. The bare-metal figures in
   [Layer 9](#the-aligner) come from QEMU.
+
+## Layer 14 — arbitrary input through the engines
+
+Every layer above feeds the filters something a sensor could have produced. This
+one feeds them anything. The damage bad input does to a filter is the quiet kind:
+a state that has gone non-finite goes on being reported, and a covariance
+poisoned once stays poisoned for the rest of the run.
+
+```bash
+cargo test -p drifters-cli --test engine_robustness
+```
+
+```bash
+cd fuzz
+cargo +nightly fuzz run engine
+cargo +nightly fuzz run --features f32-covariance engine
+cargo +nightly fuzz run --features reduced-state engine
+```
+
+`crates/drifters-cli/tests/robustness/mod.rs` turns a byte string into a script
+of up to 256 calls: IMU samples, GNSS fixes, every aiding call, pseudoranges and
+measurements of the caller's own. Most arguments land near plausible values,
+because a script of pure noise is refused at the first check and tests nothing
+behind it. Any argument can instead be raw bits, or one of twenty values chosen
+to break arithmetic: NaN, the infinities, signed zero, subnormals, `f64::MAX`, and
+magnitudes like `1e155` and `1e-170`, whose squares overflow and vanish.
+
+Each script runs through seven subjects: the ESKF engine and its rewind layer,
+the equivariant filter's engine with dense `f64`, factored `f32` and factored
+`f64` covariance, and its rewind layer with dense and factored `f32`.
+
+### What is asserted
+
+After **every** call, whatever it was given:
+
+| property | what is checked |
+|---|---|
+| no panic | the call returned |
+| finite output | navigation state, IMU errors, antenna position, standard deviations, covariance and last NIS |
+| non-negative `D` | every covariance factor is finite and every `D` is at least zero; the dense form has no `D`, and round-off may leave a variance a hair below zero, so it is held to being finite |
+| rejection, not absorption | input that is invalid was reported, and the engine is bit for bit what it was |
+
+Finite output is asserted for all input and not only for finite input, because
+the last property makes those the same thing: non-finite input never gets in.
+The harder case is input that is finite and absurd. An engine may absorb that if
+it stays finite, or refuse it. A sample that would overflow the mechanization now
+returns `FilterError::Diverged`, keeps the last good state and covariance, and
+the next sample carries on from them.
+
+"Invalid" is decided by checks written out in the harness, not by calling
+`is_valid`. A property that asked the engine's own predicate could not notice the
+predicate was wrong. It is also one-way: invalid input must be refused, but
+refusing valid input is not a failure here, since a filter may reasonably decline
+a measurement it finds inconsistent. Whether it declines too much is what the
+accuracy layers measure.
+
+### Three ways it runs
+
+The fuzz target searches. CI gives it 60 seconds per configuration, which catches
+a target that stopped compiling and anything shallow. Depth comes from longer
+runs out of band.
+
+`engine_robustness` runs on stable in every `cargo test`, under each feature set
+CI builds, and is where a string the fuzzer finds gets pinned. It replays 24
+seeded scripts and a few degenerate ones, and then
+`every_argument_takes_every_special_value` puts each of the twenty values into
+each argument of each operation, alone and as a run of three. That last test
+exists because the seeded scripts were not enough: see below.
+
+### What it found
+
+Building this and running it turned up these, all now fixed and each pinned by a
+unit test beside the code:
+
+- **A sigma could be positive, finite and still useless.** `1e-170` squares to
+  zero, an infinitely confident measurement, and `1e155` squares to infinity.
+  The checks asked only for a positive finite sigma. `usable_sigma` now asks about
+  the variance as well.
+- **A finite IMU sample could put NaN in the state.** Large enough rates overflow
+  the mechanization, and the result was kept.
+- **A failed covariance update left a mixture.** The `U D Uᵀ` time update wrote
+  its result as it went, so a bad pivot partway through left half of one
+  covariance and half of another, which looked like a whole one. It now commits
+  only after every pivot has succeeded.
+- **Finite factors could multiply out to an infinite covariance.** Covariances are
+  now held to `MAX_VARIANCE`, and the equivariant filter's observer to a similar
+  limit.
+- **A NaN gate passed everything,** because `statistic > NaN` is false. A NaN
+  statistic passed any gate the same way.
+- **`single_differences` read the wrong observation.** After skipping an unusable
+  pseudorange it used its own count of usable lines to index the original list, so
+  every later satellite took the constellation, elevation and noise of a neighbour.
+  This one did not need hostile input: one bad observation in a real epoch was
+  enough.
+- **Rewind layers recorded aiding that could never apply,** spending a place in the
+  event ring on it.
+
+### Whether it can detect anything
+
+A property nobody has seen fail is not yet evidence. Each check below was disabled
+in a copy of the tree, and `engine_robustness` run against the result, without the
+fuzzer's help:
+
+| disabled | noticed by |
+|---|---|
+| `D` written negated, ESKF and factored EqF | `engine_robustness` |
+| the IMU check, in each engine and in the rewind layer | `engine_robustness` |
+| the GNSS check, in each engine and in the rewind layer | `engine_robustness` |
+| the argument check of each of the five ESKF aids, and of the magnetometer | `engine_robustness` |
+| the check before a rewind layer records an aid, both layers | `engine_robustness` |
+| refusing a step that left a non-finite state, both engines | `engine_robustness` |
+| `usable_sigma` asking about the sigma and not its square | `engine_robustness` |
+| refusing a non-finite statistic, ESKF | `engine_robustness` |
+| refusing a non-finite statistic, EqF | a unit test only: with GCU on, as here, the inflated noise fails its factorisation anyway |
+| a NaN gate passing nothing, ESKF | a unit test only: the engine refuses such a measurement before it gets that far |
+| a NaN gate passing nothing, EqF | a unit test only: its gates come from the options, which scripts do not vary |
+| `MAX_VARIANCE` on the time update and on a new covariance, ESKF | unit tests only: scripts start from the default options and never drive a variance that far |
+
+Twenty of the twenty-five are caught here. The other five guard things a script
+cannot reach, and each has a unit test that fails without it.
+
+The magnetometer check is why the sweep exists. The seeded scripts alone did not
+notice it was gone. The sweep does, on its first magnetometer call with a NaN in it.
+
+### How far it has been run
+
+Ten minutes per configuration, six workers each, on the commit that added this
+layer, continuing from the corpus of earlier and shorter runs:
+
+| configuration | executions | coverage points | corpus entries | crashes, timeouts, out-of-memory |
+|---|---|---|---|---|
+| default | 1 767 940 | 3 931 | 1 187 | 0 |
+| `f32-covariance` | 1 395 088 | 4 160 | 1 440 | 0 |
+| `reduced-state` | 1 491 774 | 4 007 | 1 495 | 0 |
+
+The corpus is not committed, so CI's minute per configuration starts from nothing
+and reaches less than this.
+
+### What this does not show
+
+- That accepted input was handled *well*. Finite is not right; the accuracy layers
+  are for that.
+- Anything about the target. The fuzzer runs on the host, on x86-64.
+- That no input can panic. These runs found none, which is weaker than
+  [Layer 10](#layer-10--the-data-path-links-no-panic-machinery), and Layer 10 is
+  what caught an indexing slip in the new limit checks that no script could have
+  reached.
+- The aligner, the smoother or the CLI's parsers. None of them is driven here.
+- Long-horizon behaviour. A script is at most 256 calls, enough to wrap the rewind
+  rings and reach the rejection limit, and nowhere near a drive.

@@ -11,13 +11,14 @@ use drifters_core::frames::Ned;
 use drifters_core::math::Quat;
 use drifters_core::math::{Mat3, Matrix, Vec3};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{Attitude, GnssFix, ImuSample, NavState, Pva};
+use drifters_core::types::{usable_sigmas, Attitude, GnssFix, ImuSample, NavState, Pva};
 use drifters_core::F;
 
 use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
 use crate::measurement::{self, Measurement};
 use crate::mechanization::mechanize;
+use crate::rewind::Aid;
 #[cfg(feature = "smoothing")]
 use crate::state::StateMatrix;
 use crate::state::{StateVector, BA_ID, BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
@@ -151,6 +152,13 @@ impl GinsEngine {
         }
     }
 
+    /// The filter underneath, read-only: its covariance factors and error
+    /// state, for inspection. The counterpart of `EqfEngine::filter`.
+    #[inline]
+    pub fn filter(&self) -> &Eskf {
+        &self.filter
+    }
+
     /// True when the navigation state and the covariance are both finite.
     #[inline]
     pub fn is_healthy(&self) -> bool {
@@ -229,6 +237,14 @@ impl GinsEngine {
 
     /// Process one IMU sample, applying any pending GNSS fix at the right point
     /// inside the interval.
+    ///
+    /// A sample that fails [`ImuSample::is_valid`] is dropped. A valid one that
+    /// cannot be propagated through, because its rates overflow the
+    /// mechanization, returns [`FilterError::Diverged`] with the state and
+    /// covariance as they were, and the next sample carries on from them.
+    ///
+    /// Timestamps are not required to increase. A receiver clock can step, and
+    /// refusing everything after a step would stop the filter for good.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
         if !raw.is_valid() {
             // A malformed sample must not be allowed to poison the state; drop
@@ -245,10 +261,11 @@ impl GinsEngine {
         }
 
         let imu = self.state.imu_error.compensate(&raw);
-        match self.pending_placement(&imu) {
-            None | Some((Placement::Ahead, _)) => {
-                self.propagate(&imu);
-            }
+        // A fix that fails does not stop the interval it fell in: time still
+        // has to pass. It is reported once the interval is done.
+        let mut fix_outcome = Ok(());
+        let step = match self.pending_placement(&imu) {
+            None | Some((Placement::Ahead, _)) => self.propagate(&imu),
             Some((Placement::Stale, _)) => {
                 // Queued before the first sample fixed the time origin, or the
                 // stream jumped. Either way it is unusable, and a slot that
@@ -256,33 +273,55 @@ impl GinsEngine {
                 // of something that never had a chance.
                 self.pending_gnss = None;
                 self.stale_fixes = self.stale_fixes.saturating_add(1);
-                self.propagate(&imu);
+                self.propagate(&imu)
             }
             Some((Placement::AtStart, _)) => {
-                self.apply_pending_gnss()?;
-                self.propagate(&imu);
+                fix_outcome = self.apply_pending_gnss();
+                self.propagate(&imu)
             }
             Some((Placement::AtEnd, _)) => {
-                self.propagate(&imu);
-                self.apply_pending_gnss()?;
+                let step = self.propagate(&imu);
+                if step.is_ok() {
+                    fix_outcome = self.apply_pending_gnss();
+                }
+                step
             }
             Some((Placement::Inside, fix)) => {
                 // The fix comes with its placement, so there is nothing to
                 // look up again and nothing to assert. This was an `expect`
                 // that only the optimiser kept off the data path.
                 let (before, after) = imu.split_at(fix.time);
-                if let Some(before) = before {
-                    self.propagate(&before);
+                let first = before.map_or(Ok(()), |before| self.propagate(&before));
+                if first.is_ok() {
+                    fix_outcome = self.apply_pending_gnss();
+                    let rest = self.propagate(&after);
+                    if rest.is_err() {
+                        // The state did get this far.
+                        self.state.time = fix.time;
+                    }
+                    rest
+                } else {
+                    first
                 }
-                self.apply_pending_gnss()?;
-                self.propagate(&after);
             }
+        };
+
+        if let Err(error) = step {
+            // Zero increments, so the coning and sculling terms vanish: this
+            // sample could not be used, and as the next step's partner it could
+            // make that one fail too, and so on for as long as samples arrive.
+            self.previous_imu = ImuSample {
+                dtheta: Vec3::ZERO,
+                dvel: Vec3::ZERO,
+                ..imu
+            };
+            return Err(error);
         }
 
         self.state.time = raw.time;
         self.previous_imu = imu;
         self.previous_pva = self.state.pva;
-        Ok(())
+        fix_outcome
     }
 
     /// The pending fix and where it falls in the interval `imu` covers, or
@@ -297,17 +336,27 @@ impl GinsEngine {
         self.pending_placement(imu).map(|(placement, _)| placement)
     }
 
-    /// Mechanize one interval and propagate the covariance across it.
-    fn propagate(&mut self, imu: &ImuSample) {
+    /// Mechanize one interval and propagate the covariance across it, or
+    /// refuse the interval and change nothing.
+    fn propagate(&mut self, imu: &ImuSample) -> Result<(), FilterError> {
         let previous = self.state.pva;
-        self.state.pva = mechanize(&previous, &self.previous_imu, imu);
+        let next = mechanize(&previous, &self.previous_imu, imu);
+        if !admissible(&next) {
+            return Err(FilterError::Diverged);
+        }
         #[cfg(feature = "smoothing")]
         let accumulate = self.recorder.as_mut().map(|r| &mut r.transition);
         #[cfg(not(feature = "smoothing"))]
         let accumulate = None;
-        self.filter
-            .predict_recording(&previous, imu, &self.options.imu_noise, accumulate);
+        let propagated =
+            self.filter
+                .predict_recording(&previous, imu, &self.options.imu_noise, accumulate);
+        if !propagated {
+            return Err(FilterError::Diverged);
+        }
+        self.state.pva = next;
         self.previous_pva = previous;
+        Ok(())
     }
 
     /// Record what [`crate::smoother`] needs from the forward pass.
@@ -408,7 +457,7 @@ impl GinsEngine {
         let r = fix.position_std.squared().to_diag();
         self.note_prior();
         self.filter.update(&z, &h, &r)?;
-        self.feedback();
+        self.feedback()?;
 
         // A fix carrying velocity gives a second, independent measurement.
         // Applied after the position feedback so its Jacobian is evaluated at
@@ -416,10 +465,7 @@ impl GinsEngine {
         // A zero sigma here would be an infinitely confident measurement, which
         // collapses the velocity covariance and effectively freezes the state.
         // Treat an unset sigma as "velocity not usable" rather than "perfect".
-        let velocity_usable = fix.velocity_std.is_finite()
-            && fix.velocity_std.x > 0.0
-            && fix.velocity_std.y > 0.0
-            && fix.velocity_std.z > 0.0;
+        let velocity_usable = usable_sigmas(fix.velocity_std);
         if let Some(velocity) = fix.velocity.filter(|_| velocity_usable) {
             let m = measurement::gnss_velocity(
                 &self.state.pva,
@@ -437,8 +483,9 @@ impl GinsEngine {
     /// Apply an auxiliary measurement and feed the correction back.
     ///
     /// Returns `false` when the measurement failed its chi-squared gate and was
-    /// discarded, leaving the filter untouched. Constructors for the supported
-    /// sensors are in [`crate::measurement`].
+    /// discarded, leaving the filter untouched, and also when it is not
+    /// [finite](Measurement::is_finite), which does not count as a rejection.
+    /// Constructors for the supported sensors are in [`crate::measurement`].
     pub fn apply<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
         let accepted = self.apply_inner(m)?;
         self.seal_checkpoint();
@@ -449,6 +496,12 @@ impl GinsEngine {
     /// applies several measurements at one epoch produces one checkpoint
     /// rather than one per measurement.
     fn apply_inner<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+        // Before anything is recorded or counted. Repeated rejection inflates
+        // the covariance, on the grounds that good measurements are being
+        // turned away, and a stream of NaN says nothing of the kind.
+        if !m.is_finite() {
+            return Ok(false);
+        }
         self.note_prior();
         let accepted = self.filter.update_gated_holding(
             &m.innovation,
@@ -459,9 +512,9 @@ impl GinsEngine {
         )?;
         if accepted {
             self.consecutive_rejections = 0;
-            self.feedback();
+            self.feedback()?;
         } else {
-            self.consecutive_rejections += 1;
+            self.consecutive_rejections = self.consecutive_rejections.saturating_add(1);
             let limit = self.options.max_consecutive_rejections;
             if limit > 0 && self.consecutive_rejections >= limit {
                 // The measurements are not the problem; the covariance is.
@@ -519,7 +572,13 @@ impl GinsEngine {
     ///
     /// See [`measurement::zero_velocity`]; the caller decides *when*, usually
     /// from a [`measurement::StationarityDetector`].
+    ///
+    /// Like every aiding call here, returns `Ok(false)` and does nothing when
+    /// its arguments are [unusable](Aid::is_valid).
     pub fn apply_zupt(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
+        if !(Aid::Zupt { sigma }).is_valid() {
+            return Ok(false);
+        }
         let mut m = measurement::zero_velocity(&self.state.pva, sigma);
         if self.options.zupt_holds_attitude {
             m = m.holding(crate::eskf::HeldStates::ATTITUDE);
@@ -534,6 +593,9 @@ impl GinsEngine {
     /// it does, so this returns `Ok(false)` below `min_speed` rather than
     /// applying a measurement that would over-tighten the covariance.
     pub fn apply_nonholonomic(&mut self, sigma: (F, F), min_speed: F) -> Result<bool, FilterError> {
+        if !(Aid::Nonholonomic { sigma, min_speed }).is_valid() {
+            return Ok(false);
+        }
         if self.state.speed() < min_speed {
             return Ok(false);
         }
@@ -543,12 +605,18 @@ impl GinsEngine {
 
     /// Apply an odometer / wheel-speed update, m/s along the body forward axis.
     pub fn apply_wheel_speed(&mut self, speed: F, sigma: F) -> Result<bool, FilterError> {
+        if !(Aid::WheelSpeed { speed, sigma }).is_valid() {
+            return Ok(false);
+        }
         let m = measurement::wheel_speed(&self.state.pva, speed, sigma);
         self.apply(&m)
     }
 
     /// Apply a height update. `height` is above the WGS-84 **ellipsoid**.
     pub fn apply_height(&mut self, height: F, sigma: F) -> Result<bool, FilterError> {
+        if !(Aid::Height { height, sigma }).is_valid() {
+            return Ok(false);
+        }
         let m = measurement::height(&self.state.pva, height, sigma);
         self.apply(&m)
     }
@@ -589,13 +657,24 @@ impl GinsEngine {
     /// Apply a heading update. `heading` is **true** heading in radians,
     /// declination already removed.
     pub fn apply_heading(&mut self, heading: F, sigma: F) -> Result<bool, FilterError> {
+        if !(Aid::Heading { heading, sigma }).is_valid() {
+            return Ok(false);
+        }
         let m = measurement::magnetic_heading(&self.state.pva, heading, sigma);
         self.apply(&m)
     }
 
     /// Apply the estimated error state to the navigation state and reset it.
-    fn feedback(&mut self) {
+    ///
+    /// A correction that would carry the state somewhere it cannot be is
+    /// dropped, and the state stays where it was.
+    fn feedback(&mut self) -> Result<(), FilterError> {
         let dx = self.filter.take_correction();
+        let mut corrected = self.state;
+        apply_correction(&mut corrected, &dx);
+        if !admissible(&corrected.pva) || !corrected.imu_error.is_finite() {
+            return Err(FilterError::Diverged);
+        }
         // Summed, not replaced. A GNSS fix updates position and then velocity,
         // and a checkpoint spans everything since the previous one, so the
         // smoother needs the total the epoch applied. Summing the error-state
@@ -606,7 +685,8 @@ impl GinsEngine {
             r.epoch_correction += &dx;
             r.updated = true;
         }
-        apply_correction(&mut self.state, &dx);
+        self.state = corrected;
+        Ok(())
     }
 
     /// Capture the covariance before the first update since the last
@@ -689,6 +769,20 @@ impl Estimator for GinsEngine {
     fn is_healthy(&self) -> bool {
         GinsEngine::is_healthy(self)
     }
+}
+
+/// Lowest height the engine will hold, metres.
+///
+/// Every geodetic conversion divides by a radius of curvature plus the height,
+/// and the smallest radius is above 6.33e6 m, so stopping here keeps those
+/// denominators away from zero. It is not a statement about where a vehicle can
+/// be: [`drifters_core::frames::Lla::is_valid`] is that, and an estimate
+/// wandering outside it must still be able to come back.
+const MIN_HEIGHT: F = -6.0e6;
+
+/// Whether a navigation solution can be kept and computed from.
+fn admissible(pva: &Pva) -> bool {
+    pva.is_finite() && pva.position.height > MIN_HEIGHT
 }
 
 /// Apply an error-state correction to a navigation state.
@@ -1729,5 +1823,71 @@ mod tests {
             "bias estimate {estimated} did not track the injected {bias}"
         );
         assert!(e.filter.is_healthy());
+    }
+
+    /// An engine two stationary samples in, so that the next one propagates.
+    fn running_engine() -> GinsEngine {
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 0..2 {
+            let s = stationary_sample(&e, 0.01, i as F * 0.01);
+            e.add_imu(s).unwrap();
+        }
+        e
+    }
+
+    #[test]
+    fn a_sample_that_overflows_is_refused_and_the_next_one_carries_on() {
+        let mut e = running_engine();
+        let (state, p) = (e.nav_state(), e.covariance());
+
+        let mut overflowing = stationary_sample(&e, 0.01, 0.02);
+        overflowing.dvel.z = F::MAX;
+        assert!(overflowing.is_valid(), "finite, so not dropped on sight");
+        assert_eq!(e.add_imu(overflowing), Err(FilterError::Diverged));
+        assert_eq!(e.nav_state(), state);
+        assert_eq!(e.covariance(), p);
+
+        let next = stationary_sample(&e, 0.01, 0.03);
+        assert_eq!(e.add_imu(next), Ok(()));
+        assert!(e.nav_state().is_finite());
+        assert!(e.nav_state().position().ned_from(origin()).norm() < 1.0);
+    }
+
+    #[test]
+    fn invalid_aiding_is_refused_without_counting_as_a_rejection() {
+        let mut e = running_engine();
+        let (state, p) = (e.nav_state(), e.covariance());
+        let nan = F::NAN;
+
+        assert_eq!(e.apply_zupt(Vec3::new(0.1, nan, 0.1)), Ok(false));
+        assert_eq!(e.apply_zupt(Vec3::splat(1e200)), Ok(false));
+        assert_eq!(e.apply_nonholonomic((nan, 0.1), 0.0), Ok(false));
+        assert_eq!(e.apply_nonholonomic((0.1, 0.1), nan), Ok(false));
+        assert_eq!(e.apply_wheel_speed(nan, 0.1), Ok(false));
+        assert_eq!(e.apply_wheel_speed(1.0, 0.0), Ok(false));
+        assert_eq!(e.apply_height(nan, 1.0), Ok(false));
+        assert_eq!(e.apply_height(25.0, -1.0), Ok(false));
+        assert_eq!(e.apply_heading(F::INFINITY, 0.1), Ok(false));
+        assert_eq!(e.apply_heading(0.0, nan), Ok(false));
+
+        let unusable = measurement::Measurement::<3> {
+            innovation: Matrix::from_column([nan, 0.0, 0.0]),
+            jacobian: Matrix::zeros(),
+            noise: Matrix::identity(),
+            gate: None,
+            held: crate::eskf::HeldStates::NONE,
+        };
+        assert_eq!(e.apply(&unusable), Ok(false));
+
+        let fix = GnssFix {
+            velocity: Some(Ned::new(nan, 0.0, 0.0)),
+            ..GnssFix::position_only(GpsTime::from_tow(0.02), origin(), Vec3::splat(1.0))
+        };
+        assert_eq!(e.add_gnss(fix), GnssQueued::Invalid);
+
+        assert_eq!(e.nav_state(), state);
+        assert_eq!(e.covariance(), p);
+        assert_eq!(e.consecutive_rejections(), 0);
+        assert_eq!(e.inflation_count(), 0);
     }
 }

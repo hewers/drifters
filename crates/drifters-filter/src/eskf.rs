@@ -298,6 +298,13 @@ pub fn process_noise(state: &Pva, noise: &ImuNoise) -> StateMatrix {
     q
 }
 
+/// Whether `statistic` fails `gate`. A threshold that is not a number passes
+/// nothing.
+#[inline]
+fn fails_gate(statistic: F, gate: Option<F>) -> bool {
+    gate.is_some_and(|threshold| statistic > threshold || threshold.is_nan())
+}
+
 /// `νᵀ S⁻¹ ν`, given the Cholesky factorisation of `S`.
 #[inline]
 fn nis<const M: usize>(chol: &Cholesky<M>, innovation: &Matrix<M, 1>) -> F {
@@ -424,8 +431,10 @@ impl Eskf {
     /// Discretises with `Φ = I + F·dt` and a trapezoidal `Q_d`, which is what
     /// KF-GINS uses and is accurate whenever `‖F‖·dt ≪ 1` — true for any IMU
     /// running at 50 Hz or above.
-    pub fn predict(&mut self, state: &Pva, imu: &ImuSample, noise: &ImuNoise) {
-        self.predict_recording(state, imu, noise, None);
+    ///
+    /// Returns what [`Eskf::predict_recording`] returns.
+    pub fn predict(&mut self, state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> bool {
+        self.predict_recording(state, imu, noise, None)
     }
 
     /// Propagate, and accumulate this interval's transition matrix.
@@ -435,13 +444,16 @@ impl Eskf {
     /// smoother needs between the epochs it checkpoints. Separate from
     /// [`Eskf::predict`] because it costs a 21×21 product per sample and the
     /// on-target path should not pay for a facility it does not use.
+    ///
+    /// Returns `false`, having changed nothing, when the transition or what it
+    /// produces is not finite: the sample cannot be propagated through.
     pub fn predict_recording(
         &mut self,
         state: &Pva,
         imu: &ImuSample,
         noise: &ImuNoise,
         accumulated: Option<&mut StateMatrix>,
-    ) {
+    ) -> bool {
         let dt = imu.dt;
 
         // Φ = I + F·dt, the same first-order discretisation the dense form
@@ -456,6 +468,22 @@ impl Eskf {
             }
             row[i] += 1.0;
         }
+        if !phi.is_finite() {
+            return false;
+        }
+        let dx = phi.matmul(&self.dx);
+        if !dx.is_finite() {
+            return false;
+        }
+        if let Some(accumulated) = accumulated {
+            let mut product = StateMatrix::zeros();
+            phi.matmul_into(accumulated, &mut product);
+            if !product.is_finite() {
+                return false;
+            }
+            *accumulated = product;
+        }
+        self.dx = dx;
 
         // Thornton, with the process noise integrated over the interval as
         // `G (q dt) Gᵀ`.
@@ -475,18 +503,11 @@ impl Eskf {
         for d in density.iter_mut() {
             *d *= dt;
         }
-        // A degenerate transition is the only way this fails, and leaving the
-        // covariance untouched is what the dense form did when its
-        // symmetrisation had nothing to fix.
+        // A degenerate transition or a variance past `MAX_VARIANCE` is the only
+        // way this fails, and it leaves the covariance untouched, which is
+        // what the dense form did when its symmetrisation had nothing to fix.
         let _ = self.covariance.predict(&phi, &mapping, &density);
-
-        self.dx = phi.matmul(&self.dx);
-
-        if let Some(accumulated) = accumulated {
-            let mut product = StateMatrix::zeros();
-            phi.matmul_into(accumulated, &mut product);
-            *accumulated = product;
-        }
+        true
     }
 
     /// Apply a measurement update in Joseph form.
@@ -636,11 +657,12 @@ impl Eskf {
         }
         let correction = running;
 
+        if !statistic.is_finite() {
+            return Err(FilterError::SingularInnovation);
+        }
         self.last_nis = statistic;
-        if let Some(threshold) = gate {
-            if statistic > threshold {
-                return Ok(false);
-            }
+        if fails_gate(statistic, gate) {
+            return Ok(false);
         }
 
         // The correction the measurement implies, against the error state the
@@ -656,9 +678,14 @@ impl Eskf {
                 prior_effect[(j, 0)] += gain[(j, 0)] * projected;
             }
         }
+        let mut dx = self.dx;
+        dx += &correction;
+        dx -= &prior_effect;
+        if !dx.is_finite() || !trial.is_usable() {
+            return Err(FilterError::Diverged);
+        }
         self.covariance = trial;
-        self.dx += &correction;
-        self.dx -= &prior_effect;
+        self.dx = dx;
         Ok(true)
     }
 
@@ -686,11 +713,12 @@ impl Eskf {
         let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
 
         let statistic = nis(&chol, innovation);
+        if !statistic.is_finite() {
+            return Err(FilterError::SingularInnovation);
+        }
         self.last_nis = statistic;
-        if let Some(threshold) = gate {
-            if statistic > threshold {
-                return Ok(false);
-            }
+        if fails_gate(statistic, gate) {
+            return Ok(false);
         }
 
         let mut k = chol.solve(&hp).transpose();
@@ -700,8 +728,13 @@ impl Eskf {
             }
         }
 
+        // Held back until the covariance has been accepted too.
         let residual = *innovation - h.matmul(&self.dx);
-        self.dx += k.matmul(&residual);
+        let mut dx = self.dx;
+        dx += k.matmul(&residual);
+        if !dx.is_finite() {
+            return Err(FilterError::Diverged);
+        }
 
         // Three `StateMatrix` temporaries were live here at once, which on the
         // 21-state filter is 10 584 bytes of stack before counting `covariance`
@@ -726,6 +759,7 @@ impl Eskf {
         if !self.set_covariance_in_place(&mut covariance) {
             return Err(FilterError::Diverged);
         }
+        self.dx = dx;
         Ok(true)
     }
 
@@ -1251,5 +1285,62 @@ mod tests {
         // With a diagonal prior, a position-only measurement carries no
         // information about gyro scale factor.
         assert_relative_eq!(f.covariance().diagonal()[probe], before, epsilon = 1e-12);
+    }
+
+    /// A filter whose error state is not zero, so that a step that wrongly
+    /// touched it would show.
+    fn filter_holding_a_correction() -> Eskf {
+        let mut f = Eskf::new(&std_vector());
+        f.dx[(P_ID, 0)] = 0.25;
+        f
+    }
+
+    #[test]
+    fn a_sample_that_cannot_be_propagated_changes_nothing() {
+        let mut f = filter_holding_a_correction();
+        let (dx, p) = (f.dx, f.covariance());
+        let imu = ImuSample {
+            dvel: Vec3::new(0.0, 0.0, F::MAX),
+            ..test_imu()
+        };
+        let noise = ImuNoise::default();
+        assert!(!f.predict(&test_state(), &imu, &noise));
+
+        let mut accumulated = StateMatrix::identity();
+        assert!(!f.predict_recording(&test_state(), &imu, &noise, Some(&mut accumulated)));
+        assert_eq!(accumulated, StateMatrix::identity());
+        assert_eq!(f.dx, dx);
+        assert_eq!(f.covariance(), p);
+    }
+
+    #[test]
+    fn a_gate_that_is_not_a_number_passes_nothing() {
+        let mut f = filter_holding_a_correction();
+        let (dx, p) = (f.dx, f.covariance());
+        let accepted = f.update_gated(
+            &Matrix::<3, 1>::from_column([0.0, 0.0, 0.0]),
+            &position_h(),
+            &Mat3::identity(),
+            F::NAN,
+        );
+        assert_eq!(accepted, Ok(false));
+        assert_eq!(f.dx, dx);
+        assert_eq!(f.covariance(), p);
+    }
+
+    #[test]
+    fn an_innovation_too_large_to_score_changes_nothing() {
+        // Finite, but its square is not, on the factored path and the dense.
+        let huge = Matrix::<3, 1>::from_column([1.0e200, 0.0, 0.0]);
+        for held in [HeldStates::NONE, HeldStates::ATTITUDE] {
+            let mut f = filter_holding_a_correction();
+            let (dx, p) = (f.dx, f.covariance());
+            let result =
+                f.update_gated_holding(&huge, &position_h(), &Mat3::identity(), None, held);
+            assert_eq!(result, Err(FilterError::SingularInnovation));
+            assert_eq!(f.dx, dx);
+            assert_eq!(f.covariance(), p);
+            assert_eq!(f.last_nis(), None, "nothing was scored");
+        }
     }
 }

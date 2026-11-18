@@ -167,16 +167,26 @@ pub enum FilterError {
     /// mis-specified measurement noise, or a covariance that has already
     /// diverged.
     SingularInnovation,
-    /// The covariance contains a non-finite element.
+    /// The step would have left a non-finite or out-of-range state or
+    /// covariance, so it was refused and they keep their last good values.
     Diverged,
 }
+
+/// The largest variance a filter will carry, in whatever units the state has.
+///
+/// One-sigma `1e15` is far outside anything a navigation filter means, and far
+/// inside what both `f64` and `f32` factors can hold, with enough margin that
+/// the products reporting does with a variance cannot overflow. A time update
+/// that would pass it leaves the covariance where it was, and a measurement
+/// update or a reset that would pass it is refused.
+pub const MAX_VARIANCE: F = 1e30;
 
 impl FilterError {
     /// A short human-readable description.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SingularInnovation => "innovation covariance is not positive definite",
-            Self::Diverged => "covariance is not finite",
+            Self::Diverged => "the step would have left a non-finite state or covariance",
         }
     }
 }

@@ -33,7 +33,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 622, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 647, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -239,18 +239,18 @@ been on a board. See [docs/milestones.md](docs/milestones.md) for the full
 roadmap and what each milestone actually proved.
 
 What emulation does say about timing is a floor, and it is not a comfortable
-one. An IMU sample costs 3.6 million instructions in the default build on a
+one. An IMU sample costs 3.7 million instructions in the default build on a
 Cortex-M4, because that core's FPU is single precision and the filter's `f64`
 runs in software: at least 22 ms at 168 MHz, so it cannot follow a 100 Hz IMU
-there. `--features f32-covariance` removes 87 % of that, to 479 thousand, with
+there. `--features f32-covariance` removes 87 % of that, to 486 thousand, with
 no measurable change in any result, and is the configuration to use on that
-part. The equivariant filter is 4.4 million dense, and 0.85 million with its
+part. The equivariant filter is 4.5 million dense, and 0.87 million with its
 covariance factored and held in `f32`, again with no measurable change.
 
 A Cortex-M7 with a double-precision FPU is a different problem, once built with
-`-C target-cpu=cortex-m7`. The same sample is 295 thousand instructions for the
-ESKF and 262 thousand for the dense equivariant filter. `f32-covariance` then
-saves under 2 %, and the factored `f32` filter costs 25 % more than the dense
+`-C target-cpu=cortex-m7`. The same sample is 304 thousand instructions for the
+ESKF and 275 thousand for the dense equivariant filter. `f32-covariance` then
+saves about 2 %, and the factored `f32` filter costs 21 % more than the dense
 one. Those are instruction counts, and double-precision instructions take that
 core longer, so which build is fastest there still needs a board.
 
@@ -452,7 +452,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
 - [frames.md](docs/frames.md) — coordinate frames and conventions
-- [testing.md](docs/testing.md) — eleven layers, and what each one can prove
+- [testing.md](docs/testing.md) — fourteen layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it

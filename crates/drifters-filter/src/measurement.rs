@@ -80,6 +80,17 @@ impl<const M: usize> Measurement<M> {
         self.held = held;
         self
     }
+
+    /// True when the innovation, Jacobian and noise are finite and the gate,
+    /// if there is one, is a number. A measurement that is not says nothing
+    /// a filter can use.
+    #[inline]
+    pub fn is_finite(&self) -> bool {
+        self.innovation.is_finite()
+            && self.jacobian.is_finite()
+            && self.noise.is_finite()
+            && self.gate.is_none_or(|gate| !gate.is_nan())
+    }
 }
 
 /// `(∂v_body/∂δv, ∂v_body/∂φ)` — the pair every body-frame velocity

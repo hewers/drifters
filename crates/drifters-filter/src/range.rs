@@ -45,7 +45,7 @@ use drifters_core::frames::{Ecef, Ned};
 #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Matrix, Vec3};
-use drifters_core::types::Pva;
+use drifters_core::types::{usable_sigma, Pva};
 use drifters_core::F;
 
 use crate::eskf::HeldStates;
@@ -150,8 +150,11 @@ pub fn single_differences<const M: usize>(
     // Geometry once per satellite, in the local frame the error state uses.
     let mut usable = 0usize;
     let mut lines: [(Vec3, F, F); 64] = [(Vec3::ZERO, 0.0, 0.0); 64];
-    for o in observations.iter().take(64) {
-        if !o.sigma.is_finite() || o.sigma <= 0.0 || !o.pseudorange.is_finite() {
+    // Which observation each line came from. Skipping one shifts every line
+    // after it, so the two sets of indices are not interchangeable.
+    let mut source = [0u8; 64];
+    for (index, o) in observations.iter().take(64).enumerate() {
+        if !usable_sigma(o.sigma) || !o.pseudorange.is_finite() {
             continue;
         }
         // Is this a plausible satellite position? Checking the distance from
@@ -169,13 +172,22 @@ pub fn single_differences<const M: usize>(
         }
         let unit_ned = ecef_from_ned.transpose() * unit_ecef;
         lines[usable] = (unit_ned, range, o.pseudorange);
+        source[usable] = index as u8;
         usable += 1;
     }
+    let observation_of = |line: usize| {
+        source
+            .get(line)
+            .and_then(|&index| observations.get(usize::from(index)))
+    };
 
     // Reference per constellation: the highest satellite, whose range is the
     // least affected by everything that gets worse toward the horizon.
     let mut reference = [usize::MAX; 8];
-    for (i, o) in observations.iter().take(usable).enumerate() {
+    for i in 0..usable {
+        let Some(o) = observation_of(i) else {
+            continue;
+        };
         let c = (o.constellation as usize).min(7);
         let higher = match reference[c] {
             usize::MAX => true,
@@ -189,19 +201,25 @@ pub fn single_differences<const M: usize>(
     // Keep the best `M` differences by elevation, inserting as we go so that
     // nothing is allocated and nothing is sorted twice.
     let mut kept: [Option<Difference>; M] = [None; M];
-    for (i, o) in observations.iter().take(usable).enumerate() {
+    for i in 0..usable {
+        let Some(o) = observation_of(i) else {
+            continue;
+        };
         let c = (o.constellation as usize).min(7);
         let r = reference[c];
         if r == usize::MAX || r == i {
             continue;
         }
+        let Some(reference_observation) = observation_of(r) else {
+            continue;
+        };
         let (unit_i, range_i, measured_i) = lines[i];
         let (unit_r, range_r, measured_r) = lines[r];
         let candidate = Difference {
             direction: unit_i - unit_r,
             innovation: (range_i - range_r) - (measured_i - measured_r),
             variance: o.sigma * o.sigma,
-            reference_variance: observations[r].sigma * observations[r].sigma,
+            reference_variance: reference_observation.sigma * reference_observation.sigma,
             constellation: o.constellation,
             elevation: unit_i.z.clamp(-1.0, 1.0).asin(),
         };
@@ -550,5 +568,26 @@ mod tests {
             m.noise[(0, 0)] > 0.0 && lowest.noise[(7, 7)] > 0.0,
             "both configurations should be well formed"
         );
+    }
+
+    #[test]
+    fn a_skipped_observation_leaves_the_others_their_own_noise() {
+        // Lines are numbered among the usable observations, and the sigma and
+        // constellation of each have to come from the observation it was built
+        // from. Dropping the first one must make no difference to the rest.
+        let truth = receiver();
+        let satellites = sky::<7>(truth);
+        let mut obs = observe(truth, &satellites, 40.0, &[1, 2]);
+        for (i, o) in obs.iter_mut().enumerate() {
+            o.sigma = 1.0 + i as F;
+        }
+        let state = state_at(truth);
+        let without = single_differences::<4>(&state, Vec3::ZERO, &obs[1..]).unwrap();
+
+        obs[0].sigma = F::NAN;
+        let skipping = single_differences::<4>(&state, Vec3::ZERO, &obs).unwrap();
+        assert_eq!(skipping.noise, without.noise);
+        assert_eq!(skipping.innovation, without.innovation);
+        assert_eq!(skipping.jacobian, without.jacobian);
     }
 }

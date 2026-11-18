@@ -45,6 +45,7 @@
 use core::fmt::Debug;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use drifters_core::estimator::MAX_VARIANCE;
 use drifters_core::math::{Cholesky, Mat3, Matrix, Vec3, Vector};
 use drifters_core::F;
 
@@ -104,6 +105,10 @@ pub trait Covariance: Copy + Debug + private::Sealed {
     fn with_dense<R>(&self, f: impl FnOnce(&StateMatrix) -> R) -> R;
 
     /// `Σ ← Φ Σ Φᵀ + G Q Gᵀ |dt|`, with `Φ = I + A dt + ½(A dt)²`.
+    ///
+    /// All or nothing: a result that is not finite, would pass
+    /// [`MAX_VARIANCE`], or for the factored form has a pivot that is not
+    /// positive, leaves `Σ` as it was.
     fn propagate(&mut self, step: &Propagation<'_>);
 
     /// `C* Σ C*ᵀ`, the state's share of the innovation covariance.
@@ -112,13 +117,16 @@ pub trait Covariance: Copy + Debug + private::Sealed {
     /// Fuse an innovation whose noise is `noise`, with the optimal gain for
     /// that noise: `K = ΣC*ᵀ(C*ΣC*ᵀ + noise)⁻¹`, `Σ ← (I − KC*)Σ`. Returns
     /// the correction `K ỹ`, or `None` — and leaves `Σ` untouched — when the
-    /// innovation covariance is not positive definite.
+    /// innovation covariance is not positive definite, or when the correction
+    /// or the new `Σ` would not be finite and within [`MAX_VARIANCE`].
     fn fuse(&mut self, c: &OutputMatrix, innovation: &Vector<3>, noise: &Mat3) -> Option<[F; DIM]>;
 
-    /// Carry `Σ` through the reset by `Δ`: `T Σ Tᵀ`, `T = I + ½ ad_Δ`.
+    /// Carry `Σ` through the reset by `Δ`: `T Σ Tᵀ`, `T = I + ½ ad_Δ`. All or
+    /// nothing, as [`Covariance::propagate`] is.
     fn transport(&mut self, step: Algebra);
 
-    /// Scale the whole covariance by `factor`.
+    /// Scale the whole covariance by `factor`, unless that would take it past
+    /// [`MAX_VARIANCE`], in which case nothing changes.
     fn inflate(&mut self, factor: F);
 
     /// True when every element is finite and, for the factored form, `D` is
@@ -140,17 +148,21 @@ impl Covariance for StateMatrix {
     }
 
     fn propagate(&mut self, step: &Propagation<'_>) {
-        dense_transition(self, step.midpoint, step.input, step.gravity, step.dt);
+        let mut next = state_matrix(step.midpoint, step.input, step.gravity);
+        dense_transition(self, &mut next, step.dt);
         // |dt|, not dt: see `EqFilter::propagate` on negative dt.
         dense_process_noise(
-            self,
+            &mut next,
             step.observer,
             step.estimate,
             step.gravity,
             step.noise,
             step.dt.abs(),
         );
-        self.symmetrize();
+        next.symmetrize();
+        if dense_usable(&next) {
+            *self = next;
+        }
     }
 
     #[inline]
@@ -166,16 +178,36 @@ impl Covariance for StateMatrix {
         // inverse — S is symmetric, so the transpose is free.
         let gain = chol.solve(&c_sigma).transpose(); // 21 × 3
         let delta = gain.matmul(innovation);
-        dense_joseph(self, c, &gain, noise);
+        if !delta.is_finite() {
+            return None;
+        }
+        let mut next = StateMatrix::zeros();
+        dense_joseph(self, &mut next, c, &gain, noise);
+        if !dense_usable(&next) {
+            return None;
+        }
+        *self = next;
         Some(delta.to_column())
     }
 
     fn transport(&mut self, step: Algebra) {
-        dense_transport(self, step);
-        self.symmetrize();
+        let mut next = StateMatrix::zeros();
+        dense_transport(self, &mut next, step);
+        next.symmetrize();
+        if dense_usable(&next) {
+            *self = next;
+        }
     }
 
     fn inflate(&mut self, factor: F) {
+        let fits = self
+            .data
+            .iter()
+            .flatten()
+            .all(|value| within_variance_limit(value * factor));
+        if !fits {
+            return;
+        }
         for row in self.data.iter_mut() {
             for value in row.iter_mut() {
                 *value *= factor;
@@ -189,7 +221,42 @@ impl Covariance for StateMatrix {
     }
 }
 
-/// `Σ ← Φ Σ Φᵀ`, with `Φ = I + A dt + ½(A dt)²`.
+/// Whether a covariance element is a number no larger than [`MAX_VARIANCE`].
+/// For a covariance, Cauchy-Schwarz puts every element within the largest
+/// variance, so the limit is the same one the factored form applies.
+#[inline]
+fn within_variance_limit(value: F) -> bool {
+    (-MAX_VARIANCE..=MAX_VARIANCE).contains(&value)
+}
+
+/// Whether a dense result can replace the covariance.
+fn dense_usable(sigma: &StateMatrix) -> bool {
+    sigma
+        .data
+        .iter()
+        .flatten()
+        .all(|value| within_variance_limit(*value))
+}
+
+/// `m ← m Bᵀ`, a row at a time, with one row of scratch.
+///
+/// The same sums in the same order as [`Matrix::mul_transpose_into`], so the
+/// result is bit-identical to it, without a third matrix to receive them.
+fn mul_transpose_in_place(m: &mut StateMatrix, b: &StateMatrix) {
+    for row in m.data.iter_mut() {
+        let source = *row;
+        for (slot, other) in row.iter_mut().zip(b.data.iter()) {
+            let mut acc = 0.0;
+            for (x, y) in source.iter().zip(other.iter()) {
+                acc += x * y;
+            }
+            *slot = acc;
+        }
+    }
+}
+
+/// `work ← Φ Σ Φᵀ`, with `Φ = I + A dt + ½(A dt)²`, where `work` comes in
+/// holding `A`.
 ///
 /// # Two buffers, and why it is written this way
 ///
@@ -202,8 +269,10 @@ impl Covariance for StateMatrix {
 /// The same arithmetic needs two matrices. `A dt` is scaled in place, its
 /// square goes into the second buffer, `Φ` is assembled over the square,
 /// and the buffer that held `A dt` is free again by the time `Φ Σ` wants
-/// somewhere to go. `Σ` itself is the destination of the second product,
-/// since by then nothing reads it.
+/// somewhere to go. The second product overwrites `Φ Σ` a row at a time. `Σ`
+/// is only read, so the caller still has it if the result is not usable. The
+/// caller owns `work` for the same reason: returning the result by value puts
+/// a third matrix in the caller's frame, which is the one this avoids.
 ///
 /// Every element is computed by the same operations in the same order as
 /// the expression form, so the result is bit-identical, and
@@ -213,9 +282,8 @@ impl Covariance for StateMatrix {
 /// Not inlined, so the two buffers are gone before [`dense_process_noise`]
 /// brings its own.
 #[inline(never)]
-fn dense_transition(sigma: &mut StateMatrix, half: &Symmetry, u: &Input, gravity: Vec3, dt: F) {
+fn dense_transition(sigma: &StateMatrix, work: &mut StateMatrix, dt: F) {
     // A dt.
-    let mut work = state_matrix(half, u, gravity);
     for row in work.data.iter_mut() {
         for value in row.iter_mut() {
             *value *= dt;
@@ -223,15 +291,15 @@ fn dense_transition(sigma: &mut StateMatrix, half: &Symmetry, u: &Input, gravity
     }
     // (A dt)², then Φ over it: (I + A dt) + ½(A dt)², element by element.
     let mut phi = StateMatrix::zeros();
-    work.matmul_into(&work, &mut phi);
+    work.matmul_into(work, &mut phi);
     for i in 0..DIM {
         for j in 0..DIM {
             let unit = if i == j { 1.0 } else { 0.0 };
             phi.data[i][j] = (unit + work.data[i][j]) + phi.data[i][j] * 0.5;
         }
     }
-    phi.matmul_into(sigma, &mut work);
-    work.mul_transpose_into(&phi, sigma);
+    phi.matmul_into(sigma, work);
+    mul_transpose_in_place(work, &phi);
 }
 
 /// `Σ ← Σ + G Q Gᵀ dt`, the process noise mapped into normal coordinates.
@@ -263,13 +331,19 @@ fn dense_process_noise(
     }
 }
 
-/// `Σ ← (I − K C) Σ (I − K C)ᵀ + K R Kᵀ`, in two buffers.
+/// `work ← (I − K C) Σ (I − K C)ᵀ + K R Kᵀ`, in two buffers, leaving `Σ` alone.
 ///
 /// Bit-identical to the expression it replaces, for the reason given on
 /// [`dense_transition`], and not inlined for the same one: the buffers
 /// here are gone before [`dense_transport`] asks for its own.
 #[inline(never)]
-fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>, noise: &Mat3) {
+fn dense_joseph(
+    sigma: &StateMatrix,
+    work: &mut StateMatrix,
+    c: &OutputMatrix,
+    gain: &Matrix<DIM, 3>,
+    noise: &Mat3,
+) {
     let mut ikc = StateMatrix::zeros();
     gain.matmul_into(c, &mut ikc);
     for (i, row) in ikc.data.iter_mut().enumerate() {
@@ -278,9 +352,8 @@ fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>
             *x = unit - *x;
         }
     }
-    let mut work = StateMatrix::zeros();
-    ikc.matmul_into(sigma, &mut work);
-    work.mul_transpose_into(&ikc, sigma);
+    ikc.matmul_into(sigma, work);
+    mul_transpose_in_place(work, &ikc);
 
     // + K R Kᵀ. K R is 21 × 3, and the outer product goes straight in.
     let gain_noise = gain.matmul(noise);
@@ -290,12 +363,12 @@ fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>
             for k in 0..3 {
                 acc += gain_noise.data[i][k] * gain.data[j][k];
             }
-            sigma.data[i][j] += acc;
+            work.data[i][j] += acc;
         }
     }
 }
 
-/// Transport the covariance through the reset.
+/// `work ←` the covariance carried through the reset, leaving `Σ` alone.
 ///
 /// The Joseph form leaves `Σ` describing `ε` about `Δ`; the reset moves
 /// that origin to zero and the coordinates move with it.
@@ -305,7 +378,7 @@ fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>
 /// Omitting it cost about 14 % of NEES, concentrated in the rotational
 /// states — see `drifters nees` and docs/eqf.md.
 #[inline(never)]
-fn dense_transport(sigma: &mut StateMatrix, step: Algebra) {
+fn dense_transport(sigma: &StateMatrix, work: &mut StateMatrix, step: Algebra) {
     let mut reset = step.ad();
     for (i, row) in reset.data.iter_mut().enumerate() {
         for (j, x) in row.iter_mut().enumerate() {
@@ -313,9 +386,8 @@ fn dense_transport(sigma: &mut StateMatrix, step: Algebra) {
             *x = unit + *x * 0.5;
         }
     }
-    let mut work = StateMatrix::zeros();
-    reset.matmul_into(sigma, &mut work);
-    work.mul_transpose_into(&reset, sigma);
+    reset.matmul_into(sigma, work);
+    mul_transpose_in_place(work, &reset);
 }
 
 // --- the factored form ------------------------------------------------------
@@ -468,12 +540,21 @@ impl<S: FactorScalar> Ud<S> {
         p
     }
 
-    /// Mark the factors as no longer a covariance, so that
-    /// [`Covariance::all_finite`] says so and the engine reports a
-    /// divergence. What a Gram–Schmidt pass that meets a non-positive pivot
-    /// leaves behind, rather than a half-orthogonalised `U` that looks fine.
-    fn poison(&mut self) {
-        self.diagonal = [S::narrow(F::NAN); DIM];
+    /// `Σᵢᵢ = Σₖ Uᵢₖ² Dₖ` over `k ≥ i`, in `f64`.
+    fn variance(&self, i: usize) -> F {
+        (i..DIM)
+            .zip(self.diagonal.iter().skip(i))
+            .fold(0.0, |acc, (k, d)| {
+                let u = self.element(i, k);
+                acc + u * u * d.widen()
+            })
+    }
+
+    /// Finite factors, non-negative `D`, and every variance within
+    /// [`MAX_VARIANCE`]. Finite factors alone can still multiply out to an
+    /// infinite covariance, so this is what a result has to pass to be kept.
+    fn is_usable(&self) -> bool {
+        self.all_finite() && (0..DIM).all(|i| self.variance(i) <= MAX_VARIANCE)
     }
 
     /// Bierman's update for one scalar row of unit noise variance — the rows
@@ -523,12 +604,15 @@ impl<S: FactorScalar> Ud<S> {
     /// Modified weighted Gram–Schmidt over the rows of `w`, from the bottom
     /// up: each row's weighted norm becomes a diagonal entry of the result and
     /// its projections the column of `U` above it. Thornton's algorithm, as
-    /// the ESKF's `Ud::orthogonalise` has it.
+    /// the ESKF's `Ud::orthogonalise` has it, and all or nothing as that is: a
+    /// row is dead once pivoted on, so it holds its own results until every
+    /// pivot has succeeded and the whole result is known to fit.
     fn orthogonalise<const W: usize>(&mut self, w: &mut [[S; W]; DIM], weight: &[S; W]) -> bool {
         let mut pivot = [S::ZERO; W];
         let mut weighted = [S::ZERO; W];
-        for i in (0..DIM).rev() {
-            pivot.copy_from_slice(&w[i]);
+        let mut rest: &mut [[S; W]] = w.as_mut_slice();
+        while let Some((row, above)) = core::mem::take(&mut rest).split_last_mut() {
+            pivot.copy_from_slice(row);
             for ((x, p), q) in weighted.iter_mut().zip(pivot.iter()).zip(weight.iter()) {
                 *x = *q * *p;
             }
@@ -536,16 +620,29 @@ impl<S: FactorScalar> Ud<S> {
             if !sigma.finite() || sigma <= S::ZERO {
                 return false;
             }
-            self.diagonal[i] = sigma;
+            if let Some(slot) = row.get_mut(above.len()) {
+                *slot = sigma;
+            }
             let inverse = S::ONE / sigma;
-            for (j, row) in w.iter_mut().enumerate().take(i) {
-                let u = lane_dot(row, &weighted) * inverse;
-                if let Some(slot) = self.column_mut(i).get_mut(j) {
-                    *slot = u;
-                }
-                for (a, b) in row.iter_mut().zip(pivot.iter()) {
+            for (other, slot) in above.iter_mut().zip(row.iter_mut()) {
+                let u = lane_dot(other, &weighted) * inverse;
+                *slot = u;
+                for (a, b) in other.iter_mut().zip(pivot.iter()) {
                     *a -= u * *b;
                 }
+            }
+            rest = above;
+        }
+
+        if !orthogonalised_fits(w) {
+            return false;
+        }
+        for (i, row) in w.iter().enumerate() {
+            if let Some(d) = row.get(i) {
+                self.diagonal[i] = *d;
+            }
+            for (slot, u) in self.column_mut(i).iter_mut().zip(row.iter()) {
+                *slot = *u;
             }
         }
         true
@@ -564,6 +661,24 @@ impl<S: FactorScalar> Ud<S> {
             *slot = acc;
         }
     }
+}
+
+/// Whether the factors [`Ud::orthogonalise`] left in `w` are within
+/// [`MAX_VARIANCE`]. Every `D` there is positive, so a `U` that is not finite
+/// makes its sum fail the same comparison.
+fn orthogonalised_fits<S: FactorScalar, const W: usize>(w: &[[S; W]; DIM]) -> bool {
+    let limit = S::narrow(MAX_VARIANCE);
+    (0..DIM).all(|i| {
+        let mut variance = S::ZERO;
+        for (k, row) in w.iter().enumerate().skip(i) {
+            let (Some(u), Some(d)) = (row.get(i), row.get(k)) else {
+                return false;
+            };
+            let u = if k == i { S::ONE } else { *u };
+            variance += u * u * *d;
+        }
+        variance <= limit
+    })
 }
 
 /// Dot product in [`LANES`] independent partial sums, so the additions are
@@ -672,7 +787,7 @@ impl<S: FactorScalar> Covariance for Ud<S> {
                 }
             }
         }
-        Some(ud)
+        ud.is_usable().then_some(ud)
     }
 
     fn with_dense<R>(&self, f: impl FnOnce(&StateMatrix) -> R) -> R {
@@ -697,9 +812,8 @@ impl<S: FactorScalar> Covariance for Ud<S> {
         {
             *slot = S::narrow(density * dt);
         }
-        if !self.orthogonalise(&mut w, &weight) {
-            self.poison();
-        }
+        // A refusal leaves the factors as they were, which is the contract.
+        let _ = self.orthogonalise(&mut w, &weight);
     }
 
     fn project(&self, c: &OutputMatrix) -> Mat3 {
@@ -770,6 +884,9 @@ impl<S: FactorScalar> Covariance for Ud<S> {
                 *dj += kj * residual;
             }
         }
+        if !delta.iter().all(|d| d.is_finite()) || !next.is_usable() {
+            return None;
+        }
         *self = next;
         Some(delta)
     }
@@ -788,12 +905,13 @@ impl<S: FactorScalar> Covariance for Ud<S> {
         }
         let mut weight = [S::ZERO; TRANSPORT_WIDTH];
         weight[..DIM].copy_from_slice(&self.diagonal);
-        if !self.orthogonalise(&mut w, &weight) {
-            self.poison();
-        }
+        let _ = self.orthogonalise(&mut w, &weight);
     }
 
     fn inflate(&mut self, factor: F) {
+        if !(0..DIM).all(|i| self.variance(i) * factor <= MAX_VARIANCE) {
+            return;
+        }
         let factor = S::narrow(factor);
         for d in self.diagonal.iter_mut() {
             *d *= factor;
@@ -1021,5 +1139,78 @@ mod tests {
         let mut factored = Ud::<f64>::from_dense(&p).unwrap();
         factored.inflate(4.0);
         assert!(relative(&(p * 4.0), &factored.to_dense()) < 1e-13);
+    }
+
+    /// Every operation that cannot produce a usable covariance leaves it as it
+    /// was, in whichever form it is held.
+    fn refuses_what_it_cannot_keep<C>()
+    where
+        C: Covariance + Copy + PartialEq + core::fmt::Debug,
+    {
+        let estimate = state();
+        let x = Symmetry::from_state(&estimate);
+        let input = Input::new(Vec3::new(0.1, -0.05, 0.2), Vec3::new(0.3, 0.1, -9.7));
+        let q = ProcessNoise {
+            gyro: Vec3::splat(1e35),
+            ..noise()
+        };
+        let mut sigma = C::from_dense(&covariance(31)).unwrap();
+        let before = sigma;
+
+        sigma.propagate(&Propagation {
+            midpoint: &x,
+            observer: &x,
+            estimate: &estimate,
+            input: &input,
+            gravity: GRAVITY,
+            dt: 0.01,
+            noise: &q,
+        });
+        assert_eq!(sigma, before, "propagate");
+
+        sigma.transport(Algebra::from_array(&[1e200; DIM]));
+        assert_eq!(sigma, before, "transport");
+
+        let transported = transported_position(&x);
+        let measured = transported + Vec3::new(0.4, -0.3, 0.2);
+        let c = position_output_matrix(measured, transported);
+        let y = Vector::<3>::from(Vec3::new(F::NAN, 0.0, 0.0));
+        assert!(sigma.fuse(&c, &y, &Mat3::identity()).is_none());
+        assert_eq!(sigma, before, "fuse");
+    }
+
+    #[test]
+    fn what_cannot_be_kept_is_refused_in_every_form() {
+        refuses_what_it_cannot_keep::<StateMatrix>();
+        refuses_what_it_cannot_keep::<Ud<f64>>();
+        refuses_what_it_cannot_keep::<Ud<f32>>();
+    }
+
+    fn inflation_stops_at_the_variance_limit<C>()
+    where
+        C: Covariance + Copy + PartialEq + core::fmt::Debug,
+    {
+        let p = StateMatrix::identity() * (0.1 * MAX_VARIANCE);
+        let mut sigma = C::from_dense(&p).unwrap();
+        let before = sigma;
+        sigma.inflate(100.0);
+        assert_eq!(sigma, before, "past the limit, nothing moves");
+        sigma.inflate(2.0);
+        assert_ne!(sigma, before, "within it, inflation applies");
+        assert!(sigma.all_finite());
+    }
+
+    #[test]
+    fn inflation_stops_at_the_variance_limit_in_every_form() {
+        inflation_stops_at_the_variance_limit::<StateMatrix>();
+        inflation_stops_at_the_variance_limit::<Ud<f64>>();
+        inflation_stops_at_the_variance_limit::<Ud<f32>>();
+    }
+
+    #[test]
+    fn factors_past_the_variance_limit_are_refused() {
+        let past = StateMatrix::identity() * (2.0 * MAX_VARIANCE);
+        assert!(Ud::<f64>::from_dense(&past).is_none());
+        assert!(Ud::<f32>::from_dense(&past).is_none());
     }
 }

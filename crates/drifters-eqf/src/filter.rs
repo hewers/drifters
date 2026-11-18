@@ -135,9 +135,28 @@ pub enum Verdict {
     /// Failed its gate and was discarded, leaving the filter untouched.
     /// Carries the NIS that failed.
     Rejected(F),
-    /// The innovation covariance was not positive definite. Nothing was
-    /// applied.
+    /// The innovation covariance was not positive definite, or the statistic
+    /// or the correction was not usable. The estimate was not moved.
     Singular,
+}
+
+/// The largest the observer's velocity, position, bias and lever-arm parts may
+/// become, in their own units.
+///
+/// Reporting multiplies `Σ` by these on both sides, and a filter this far from
+/// anything physical has nothing to gain from getting further.
+const MAX_OBSERVER: F = 1e15;
+
+/// Whether `x` can be kept as the observer state.
+fn observer_usable(x: &Symmetry) -> bool {
+    let bounded = |v: Vec3| v.norm_squared() <= MAX_OBSERVER * MAX_OBSERVER;
+    x.c.rotation.is_finite()
+        && bounded(x.c.velocity)
+        && bounded(x.c.position)
+        && bounded(x.gamma.omega)
+        && bounded(x.gamma.nu)
+        && bounded(x.delta)
+        && x.e.is_finite()
 }
 
 /// The equivariant filter.
@@ -229,27 +248,39 @@ impl<C: Covariance> EqFilter<C> {
     /// direction time is being traversed, so `Q` enters with `|dt|`. Adding it
     /// with a signed `dt` would *subtract* covariance and produce a filter that
     /// grows more confident the further it runs.
-    pub fn propagate(&mut self, u: &Input, dt: F, q: &ProcessNoise) {
+    ///
+    /// # Returns
+    ///
+    /// `false`, with nothing changed, when the input carries the observer
+    /// somewhere it cannot be kept. A covariance that cannot
+    /// take the step stays as it was and the step still counts, as it does in
+    /// the ESKF.
+    pub fn propagate(&mut self, u: &Input, dt: F, q: &ProcessNoise) -> bool {
         let estimate = self.nav_state();
 
         // X̂ ← X̂ exp(dt Λ̂): right translation, per the module docs.
         let start = lift(&estimate, u, self.gravity);
         let half = self.x.compose(&Symmetry::exp(start.scaled(0.5 * dt)));
         let midpoint = lift(&act_state(&half, &State::default()), u, self.gravity);
-        self.x = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
+        let next = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
+        if !observer_usable(&half) || !observer_usable(&next) {
+            return false;
+        }
 
         // The transition matrix is centred for the same reason, and the
         // midpoint observer state has already been computed. Process noise
         // enters with |dt|, not dt: see the note on negative dt above.
         self.sigma.propagate(&Propagation {
             midpoint: &half,
-            observer: &self.x,
+            observer: &next,
             estimate: &estimate,
             input: u,
             gravity: self.gravity,
             dt,
             noise: q,
         });
+        self.x = next;
+        true
     }
 
     /// Fuse a GNSS antenna position `ᴳπ`.
@@ -327,7 +358,11 @@ impl<C: Covariance> EqFilter<C> {
             return Verdict::Singular;
         };
         let nis = dot(&y, &raw.solve(&y));
-        if gate.is_some_and(|threshold| nis > threshold) {
+        if !nis.is_finite() {
+            return Verdict::Singular;
+        }
+        // A threshold that is not a number passes nothing.
+        if gate.is_some_and(|threshold| nis > threshold || threshold.is_nan()) {
             return Verdict::Rejected(nis);
         }
 
@@ -340,7 +375,11 @@ impl<C: Covariance> EqFilter<C> {
         };
         // Left multiplication: see the module docs.
         let step = Algebra::from_array(&correction);
-        self.x = Symmetry::exp(step).compose(&self.x);
+        let next = Symmetry::exp(step).compose(&self.x);
+        if !observer_usable(&next) {
+            return Verdict::Singular;
+        }
+        self.x = next;
         self.sigma.transport(step);
         Verdict::Applied(nis)
     }
@@ -1157,5 +1196,58 @@ mod tests {
         let actual = crate::group::output_direction(&t.state, north);
         let gap = (predicted - actual).norm();
         assert!(gap < 0.02, "magnetometer direction error {gap:.4}");
+    }
+
+    fn resting_filter() -> EqFilter {
+        EqFilter::new(&State::default(), initial_covariance(), GRAVITY)
+    }
+
+    fn resting_noise() -> ProcessNoise {
+        ProcessNoise::from_imu_noise(&drifters_core::types::ImuNoise::default())
+    }
+
+    #[test]
+    fn an_input_the_observer_cannot_hold_changes_nothing() {
+        let mut f = resting_filter();
+        let (x, sigma) = (f.x, f.sigma);
+        let input = Input::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 1e300));
+        assert!(!f.propagate(&input, 0.01, &resting_noise()));
+        assert_eq!(f.x, x);
+        assert_eq!(f.sigma, sigma);
+    }
+
+    #[test]
+    fn a_gate_that_is_not_a_number_passes_nothing() {
+        let mut f = resting_filter();
+        let (x, sigma) = (f.x, f.sigma);
+        let verdict = f.update_gated(
+            &OutputMatrix::zeros(),
+            Vec3::new(0.1, 0.0, 0.0),
+            &Mat3::identity(),
+            Some(F::NAN),
+        );
+        assert!(matches!(verdict, Verdict::Rejected(_)), "{verdict:?}");
+        assert_eq!(f.x, x);
+        assert_eq!(f.sigma, sigma);
+    }
+
+    #[test]
+    fn an_innovation_too_large_to_score_changes_nothing() {
+        // Without GCU the check on the statistic is all that stops this. With
+        // it, the noise inflated by an infinite statistic would fail anyway.
+        for alpha in [None, Some(0.0)] {
+            let mut f = resting_filter();
+            f.alpha = alpha;
+            let (x, sigma) = (f.x, f.sigma);
+            let verdict = f.update_gated(
+                &OutputMatrix::zeros(),
+                Vec3::new(1e200, 0.0, 0.0),
+                &Mat3::identity(),
+                None,
+            );
+            assert_eq!(verdict, Verdict::Singular, "alpha {alpha:?}");
+            assert_eq!(f.x, x);
+            assert_eq!(f.sigma, sigma);
+        }
     }
 }

@@ -86,7 +86,7 @@ use drifters_core::frames::Lla;
 use drifters_core::math::Vec3;
 use drifters_core::rewind::{FixOutcome, Record, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{GnssFix, ImuSample, NavState};
+use drifters_core::types::{usable_sigma, GnssFix, ImuSample, NavState};
 use drifters_core::F;
 
 use crate::config::{ConfigError, EqfOptions};
@@ -115,8 +115,34 @@ pub enum Aid {
     },
 }
 
+impl Aid {
+    /// True when the engine can use these arguments at all: both vectors have
+    /// a direction, and the sigma is [usable](usable_sigma).
+    ///
+    /// A vector whose squared norm overflows has no direction here either,
+    /// because normalising it through that norm would give zero.
+    pub fn is_valid(&self) -> bool {
+        let has_direction = |v: Vec3| {
+            let squared = v.norm_squared();
+            squared > 0.0 && squared.is_finite()
+        };
+        match *self {
+            Aid::Magnetometer {
+                measured,
+                reference,
+                sigma,
+            } => has_direction(measured) && has_direction(reference) && usable_sigma(sigma),
+        }
+    }
+}
+
 impl<C: Covariance> Rewindable for EqfEngine<C> {
     type Aid = Aid;
+
+    #[inline]
+    fn aid_is_valid(aid: &Aid) -> bool {
+        aid.is_valid()
+    }
 
     fn apply_aid(&mut self, aid: &Aid) -> Result<bool, FilterError> {
         match *aid {
@@ -744,5 +770,28 @@ mod tests {
         assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_232);
         assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_080);
         assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_832);
+    }
+
+    #[test]
+    fn an_invalid_aid_is_refused_and_never_recorded() {
+        let mut e = EqfRewindEngine::<40, 32>::new(options()).unwrap();
+        e.add_imu(sample(0)).unwrap();
+        e.add_imu(sample(1)).unwrap();
+        let (recorded, state) = (e.history().len(), e.nav_state());
+
+        let invalid = Aid::Magnetometer {
+            measured: Vec3::ZERO,
+            reference: field(),
+            sigma: 0.1,
+        };
+        assert!(!invalid.is_valid());
+        assert_eq!(e.aid(invalid), Ok(false));
+        assert_eq!(e.apply_magnetometer(field(), field(), F::NAN), Ok(false));
+        assert_eq!(e.history().len(), recorded, "a replay must not meet it");
+        assert_eq!(e.dropped_event_count(), 0);
+        assert_eq!(e.nav_state(), state);
+
+        assert!(e.apply_magnetometer(field(), field(), 0.1).is_ok());
+        assert_eq!(e.history().len(), recorded + 1);
     }
 }
