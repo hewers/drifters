@@ -162,6 +162,7 @@ fn main() -> ! {
 
         let _ = engine.add_imu(sample);
         let _ = engine.apply_zupt(Vec3::splat(0.02));
+        let _ = engine.apply_zero_rate(Vec3::splat(0.01));
         let _ = engine.apply_height(20.0, 0.5);
         let _ = engine.apply_nonholonomic((0.1, 0.1), 0.5);
         let _ = engine.apply_wheel_speed(0.0, 0.1);
@@ -192,6 +193,7 @@ fn main() -> ! {
 
         let _ = rewind.add_imu(sample);
         let _ = rewind.apply_zupt(Vec3::splat(0.02));
+        let _ = rewind.apply_zero_rate(Vec3::splat(0.01));
         let _ = rewind.apply_nonholonomic((0.1, 0.1), 0.5);
         let _ = rewind.apply_wheel_speed(0.0, 0.1);
         let _ = rewind.apply_height(20.0, 0.5);

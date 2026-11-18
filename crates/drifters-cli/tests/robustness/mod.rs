@@ -166,6 +166,9 @@ pub enum Op {
     Zupt {
         sigma: Vec3,
     },
+    ZeroRate {
+        sigma: Vec3,
+    },
     Nonholonomic {
         sigma: (F, F),
         min_speed: F,
@@ -242,8 +245,11 @@ fn decode_op(r: &mut Reader<'_>) -> Option<Op> {
             },
             velocity_std: r.vec3(0.3, 0.29)?,
         },
-        185..=199 => Op::Zupt {
+        185..=192 => Op::Zupt {
             sigma: r.vec3(0.05, 0.049)?,
+        },
+        193..=199 => Op::ZeroRate {
+            sigma: r.vec3(0.01, 0.0099)?,
         },
         200..=209 => Op::Nonholonomic {
             sigma: (r.float(0.1, 0.09)?, r.float(0.1, 0.09)?),
@@ -473,6 +479,7 @@ pub trait Subject {
 #[derive(Clone, Debug)]
 pub enum Aiding {
     Zupt(Vec3),
+    ZeroRate(Vec3),
     Nonholonomic((F, F), F),
     WheelSpeed(F, F),
     Height(F, F),
@@ -485,6 +492,7 @@ pub enum Aiding {
 fn eskf_aid(engine: &mut GinsEngine, op: &Aiding) -> Option<Result<bool, FilterError>> {
     Some(match op {
         Aiding::Zupt(sigma) => engine.apply_zupt(*sigma),
+        Aiding::ZeroRate(sigma) => engine.apply_zero_rate(*sigma),
         Aiding::Nonholonomic(sigma, min_speed) => engine.apply_nonholonomic(*sigma, *min_speed),
         Aiding::WheelSpeed(speed, sigma) => engine.apply_wheel_speed(*speed, *sigma),
         Aiding::Height(height, sigma) => engine.apply_height(*height, *sigma),
@@ -560,6 +568,7 @@ impl Subject for RewindEngine<SAMPLES, EVENTS> {
     fn aid(&mut self, op: &Aiding) -> Option<Result<bool, FilterError>> {
         let aid = match op {
             Aiding::Zupt(sigma) => EskfAid::Zupt { sigma: *sigma },
+            Aiding::ZeroRate(sigma) => EskfAid::ZeroRate { sigma: *sigma },
             Aiding::Nonholonomic(sigma, min_speed) => EskfAid::Nonholonomic {
                 sigma: *sigma,
                 min_speed: *min_speed,
@@ -783,7 +792,7 @@ fn fix_is_invalid(fix: &GnssFix) -> bool {
 /// True when the aiding call has nothing a filter could use.
 fn aid_is_invalid(aid: &Aiding) -> bool {
     match aid {
-        Aiding::Zupt(sigma) => !usable_sigmas(*sigma),
+        Aiding::Zupt(sigma) | Aiding::ZeroRate(sigma) => !usable_sigmas(*sigma),
         Aiding::Nonholonomic(sigma, min_speed) => {
             !(usable_sigma(sigma.0) && usable_sigma(sigma.1) && min_speed.is_finite())
         }
@@ -948,6 +957,7 @@ pub fn drive<S: Subject>(subject: &mut S, script: &[Op]) {
             aiding => {
                 let aid = match aiding {
                     Op::Zupt { sigma } => Aiding::Zupt(*sigma),
+                    Op::ZeroRate { sigma } => Aiding::ZeroRate(*sigma),
                     Op::Nonholonomic { sigma, min_speed } => {
                         Aiding::Nonholonomic(*sigma, *min_speed)
                     }

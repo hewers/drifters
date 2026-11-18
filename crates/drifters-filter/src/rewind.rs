@@ -95,13 +95,13 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 304 | **21 504** |
-//! | `f32-covariance` | 2 384 | 18 744 |
-//! | `reduced-state` | 2 368 | 18 696 |
-//! | both | 1 888 | 17 256 |
-//! | `smoothing` | 21 552 | 76 248 |
+//! | default | 3 328 | **21 576** |
+//! | `f32-covariance` | 2 408 | 18 816 |
+//! | `reduced-state` | 2 392 | 18 768 |
+//! | both | 1 912 | 17 328 |
+//! | `smoothing` | 21 576 | 76 320 |
 //!
-//! The default row is 3 × 3 304 for the engines, 120 × 64 for the samples,
+//! The default row is 3 × 3 328 for the engines, 120 × 64 for the samples,
 //! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!
@@ -112,8 +112,8 @@
 //!
 //! # What is recorded, and what is not
 //!
-//! The six aiding calls this type mirrors — ZUPT, non-holonomic, wheel speed,
-//! height, heading and magnetometer — as an [`Aid`] each, and every GNSS fix queued through
+//! The seven aiding calls this type mirrors — ZUPT, zero rate, non-holonomic,
+//! wheel speed, height, heading and magnetometer — as an [`Aid`] each, and every GNSS fix queued through
 //! it. [`GinsEngine::apply_pseudoranges`] and [`GinsEngine::apply`] are not
 //! mirrored. Their inputs are a slice and a generic measurement, neither of
 //! which fits a fixed-size record, and a call that reached the inner engine
@@ -157,6 +157,12 @@ pub enum Aid {
     /// [`GinsEngine::apply_zupt`].
     Zupt {
         /// Per-axis confidence in the vehicle being still, m/s.
+        sigma: Vec3,
+    },
+    /// [`GinsEngine::apply_zero_rate`]. The rate is not recorded: a replay
+    /// reaches this after pushing the same sample again.
+    ZeroRate {
+        /// Per-axis rate noise, rad/s.
         sigma: Vec3,
     },
     /// [`GinsEngine::apply_nonholonomic`].
@@ -207,7 +213,7 @@ impl Aid {
     /// measurement once it is applied.
     pub fn is_valid(&self) -> bool {
         match *self {
-            Aid::Zupt { sigma } => usable_sigmas(sigma),
+            Aid::Zupt { sigma } | Aid::ZeroRate { sigma } => usable_sigmas(sigma),
             Aid::Nonholonomic { sigma, min_speed } => {
                 usable_sigma(sigma.0) && usable_sigma(sigma.1) && min_speed.is_finite()
             }
@@ -234,6 +240,7 @@ impl Rewindable for GinsEngine {
     fn apply_aid(&mut self, aid: &Aid) -> Result<bool, FilterError> {
         match *aid {
             Aid::Zupt { sigma } => self.apply_zupt(sigma),
+            Aid::ZeroRate { sigma } => self.apply_zero_rate(sigma),
             Aid::Nonholonomic { sigma, min_speed } => self.apply_nonholonomic(sigma, min_speed),
             Aid::WheelSpeed { speed, sigma } => self.apply_wheel_speed(speed, sigma),
             Aid::Height { height, sigma } => self.apply_height(height, sigma),
@@ -432,6 +439,11 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
         self.aid(Aid::Zupt { sigma })
     }
 
+    /// See [`GinsEngine::apply_zero_rate`].
+    pub fn apply_zero_rate(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
+        self.aid(Aid::ZeroRate { sigma })
+    }
+
     /// See [`GinsEngine::apply_nonholonomic`].
     pub fn apply_nonholonomic(&mut self, sigma: (F, F), min_speed: F) -> Result<bool, FilterError> {
         self.aid(Aid::Nonholonomic { sigma, min_speed })
@@ -564,12 +576,16 @@ mod tests {
         if i % 37 == 29 {
             e.wheel_speed(0.0, 0.1);
         }
+        if i % 41 == 19 {
+            e.zero_rate(Vec3::splat(0.1));
+        }
     }
 
     /// The mirrored aids, so one scenario drives both an engine and a
     /// rewind engine.
     trait Aided {
         fn zupt(&mut self, sigma: Vec3);
+        fn zero_rate(&mut self, sigma: Vec3);
         fn height(&mut self, height: F, sigma: F);
         fn heading(&mut self, heading: F, sigma: F);
         fn magnetometer(&mut self, measured: Vec3, reference: Vec3, sigma: F);
@@ -580,6 +596,9 @@ mod tests {
     impl Aided for GinsEngine {
         fn zupt(&mut self, sigma: Vec3) {
             self.apply_zupt(sigma).unwrap();
+        }
+        fn zero_rate(&mut self, sigma: Vec3) {
+            self.apply_zero_rate(sigma).unwrap();
         }
         fn height(&mut self, height: F, sigma: F) {
             self.apply_height(height, sigma).unwrap();
@@ -601,6 +620,9 @@ mod tests {
     impl<const S: usize, const E: usize> Aided for RewindEngine<S, E> {
         fn zupt(&mut self, sigma: Vec3) {
             self.apply_zupt(sigma).unwrap();
+        }
+        fn zero_rate(&mut self, sigma: Vec3) {
+            self.apply_zero_rate(sigma).unwrap();
         }
         fn height(&mut self, height: F, sigma: F) {
             self.apply_height(height, sigma).unwrap();
@@ -997,7 +1019,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_504);
+            assert_eq!(size_of::<Representative>(), 21_576);
         }
     }
 

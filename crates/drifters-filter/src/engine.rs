@@ -41,6 +41,12 @@ pub struct GinsEngine {
     state: NavState,
     previous_pva: Pva,
     previous_imu: ImuSample,
+    /// The latest valid sample's angular increment, as the sensor gave it.
+    ///
+    /// `previous_imu` was compensated with the bias estimate of the moment it
+    /// arrived. [`GinsEngine::apply_zero_rate`] needs it compensated with the
+    /// estimate of the moment it runs.
+    raw_dtheta: Vec3,
     pending_gnss: Option<GnssFix>,
     initialised: bool,
     /// Gate rejections since each [`Kind`]'s last acceptance.
@@ -109,6 +115,7 @@ impl GinsEngine {
             state,
             previous_pva: options.initial_state,
             previous_imu: ImuSample::default(),
+            raw_dtheta: Vec3::ZERO,
             pending_gnss: None,
             initialised: false,
             consecutive_rejections: [0; Kind::COUNT],
@@ -253,6 +260,7 @@ impl GinsEngine {
             // it and keep the previous sample as the coning/sculling partner.
             return Ok(());
         }
+        self.raw_dtheta = raw.dtheta;
 
         // The first sample only establishes the interval's left edge.
         if !self.initialised {
@@ -527,7 +535,10 @@ impl GinsEngine {
                 self.consecutive_rejections = [0; Kind::COUNT];
             }
             self.feedback()?;
-        } else {
+        } else if !(self.options.count_rejections_per_kind && kind == Kind::ZeroRate) {
+            // A refused zero-rate update may only mean the vehicle was not
+            // still. Counted alone it would inflate the covariance while the
+            // other aids are being accepted.
             let count = &mut self.consecutive_rejections[kind as usize];
             *count = count.saturating_add(1);
             let limit = self.options.max_consecutive_rejections;
@@ -647,6 +658,38 @@ impl GinsEngine {
             m = m.holding(crate::eskf::HeldStates::ATTITUDE);
         }
         self.apply_as(&m, Kind::ZeroVelocity)
+    }
+
+    /// Apply a zero-angular-rate update, from the latest IMU sample.
+    ///
+    /// See [`measurement::zero_angular_rate`]; the caller decides *when* the
+    /// vehicle is still. The sample is compensated here with the current
+    /// estimates, so a zero-velocity update applied to the same sample first
+    /// does not leave this innovation carrying a correction already made.
+    ///
+    /// Under [`GinsOptions::count_rejections_per_kind`] a rejection here is not
+    /// counted: on the comma2k19 holdout, counting it takes the heading RMS
+    /// through a 10 s outage from 0.82° to 1.68°.
+    ///
+    /// `sigma` is the one-sigma rate noise per axis, rad/s. Returns `Ok(false)`
+    /// and does nothing before the first sample, or when `sigma` is
+    /// [unusable](Aid::is_valid).
+    pub fn apply_zero_rate(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
+        if !self.initialised || !(Aid::ZeroRate { sigma }).is_valid() {
+            return Ok(false);
+        }
+        let raw = ImuSample {
+            dtheta: self.raw_dtheta,
+            ..self.previous_imu
+        };
+        let rate = self.state.imu_error.compensate(&raw).gyro();
+        let m = measurement::zero_angular_rate(
+            &self.state.pva,
+            rate,
+            self.state.imu_error.gyro_scale,
+            sigma,
+        );
+        self.apply_as(&m, Kind::ZeroRate)
     }
 
     /// Apply non-holonomic constraints at the current state.
@@ -2071,6 +2114,36 @@ mod tests {
         assert_eq!(e.inflation_count(), 0);
     }
 
+    /// An engine told it is still by a gyro reading a radian per second.
+    fn spinning_engine(options: GinsOptions) -> GinsEngine {
+        let mut e = GinsEngine::new(options).unwrap();
+        let spinning = still(0.01, 0.01, &Attitude::default(), Vec3::splat(1.0));
+        e.add_imu(spinning).unwrap();
+        e
+    }
+
+    #[test]
+    fn counted_per_kind_a_refused_zero_rate_never_inflates() {
+        let mut e = spinning_engine(counting_per_kind());
+        for _ in 0..30 {
+            assert!(!e.apply_zero_rate(Vec3::splat(1.0e-4)).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections_of(Kind::ZeroRate), 0);
+        assert_eq!(e.inflation_count(), 0);
+    }
+
+    #[test]
+    fn by_default_a_refused_zero_rate_counts_like_any_other_aid() {
+        let mut e = spinning_engine(options());
+        for _ in 0..9 {
+            assert!(!e.apply_zero_rate(Vec3::splat(1.0e-4)).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections_of(Kind::ZeroRate), 9);
+        assert_eq!(e.inflation_count(), 0);
+        assert!(!e.apply_zero_rate(Vec3::splat(1.0e-4)).unwrap());
+        assert_eq!(e.inflation_count(), 1);
+    }
+
     #[test]
     fn inflating_restarts_the_count_of_every_kind() {
         // The inflation changes what every kind would see, so a run in progress
@@ -2099,6 +2172,192 @@ mod tests {
         assert!(e.apply_height(25.0, 0.5).unwrap());
         assert_eq!(e.consecutive_rejections_of(Kind::Height), 0);
         assert_eq!(e.consecutive_rejections_of(Kind::Heading), 1);
+    }
+
+    /// What a gyro and accelerometer read at rest at `truth`, with `gyro_bias`.
+    fn still(t: F, dt: F, truth: &Attitude, gyro_bias: Vec3) -> ImuSample {
+        let p = origin();
+        let g = Wgs84::gravity_n(p.lat, p.height);
+        let w_ie = Wgs84::omega_ie_n(p.lat);
+        ImuSample {
+            time: GpsTime::from_tow(t),
+            dt,
+            dtheta: (truth.quat.rotate_inverse(w_ie) + gyro_bias) * dt,
+            dvel: truth.quat.rotate_inverse(-g) * dt,
+        }
+    }
+
+    #[test]
+    fn the_zero_rate_jacobian_matches_the_error_state_convention() {
+        // The innovation of an estimate that is wrong by `δx` must be `H·δx`
+        // to first order, with `δx` from `error_between`: the definition of
+        // the convention rather than a restatement of it. Each block is
+        // checked on its own, so a sign flip in one cannot hide behind
+        // another.
+        let truth_attitude = Attitude::from_euler(0.02, -0.03, 1.2);
+        let truth = NavState {
+            time: GpsTime::from_tow(100.0),
+            pva: Pva {
+                position: origin(),
+                velocity: Ned::ZERO,
+                attitude: truth_attitude,
+            },
+            imu_error: drifters_core::types::ImuError {
+                gyro_bias: Vec3::new(2.0e-4, -1.0e-4, 3.0e-4),
+                ..Default::default()
+            },
+        };
+        let raw = still(100.0, 0.01, &truth_attitude, truth.imu_error.gyro_bias);
+        let check = |truth: &NavState, raw: &ImuSample, estimate: NavState, what: &str| {
+            let rate = estimate.imu_error.compensate(raw).gyro();
+            let m = measurement::zero_angular_rate(
+                &estimate.pva,
+                rate,
+                estimate.imu_error.gyro_scale,
+                Vec3::splat(1.0e-3),
+            );
+            let predicted = m.jacobian.matmul(&error_between(truth, &estimate));
+            for i in 0..3 {
+                let (got, want) = (m.innovation[(i, 0)], predicted[(i, 0)]);
+                assert!(
+                    (got - want).abs() < 0.02 * want.abs() + 1.0e-10,
+                    "{what}, axis {i}: innovation {got:e} against H·δx {want:e}"
+                );
+            }
+        };
+        let mut biased = truth;
+        biased.imu_error.gyro_bias += Vec3::new(-1.5e-4, 2.5e-4, -2.0e-4);
+        check(&truth, &raw, biased, "gyro bias");
+        // Five milliradians: earth rate times that is ~4e-7 rad/s, and the
+        // second-order remainder a hundred times smaller.
+        let mut tilted = truth;
+        tilted.pva.attitude = Attitude::from_euler(0.025, -0.035, 1.195);
+        check(&truth, &raw, tilted, "attitude");
+        // Still, a scale error shows only through the earth's rate.
+        #[cfg(not(feature = "reduced-state"))]
+        {
+            let mut scaled = truth;
+            scaled.imu_error.gyro_scale += Vec3::new(2.0e-3, -3.0e-3, 2.5e-3);
+            check(&truth, &raw, scaled, "gyro scale");
+        }
+        // A scale estimate far from zero, so that the bias block's 1/(1 + ŝ)
+        // is visible: the true gyro has that scale, and the bias is wrong.
+        let mut truth_scaled = truth;
+        truth_scaled.imu_error.gyro_scale = Vec3::splat(0.5);
+        let unscaled = still(100.0, 0.01, &truth_attitude, Vec3::ZERO);
+        let raw_scaled = ImuSample {
+            dtheta: unscaled.dtheta * 1.5 + truth.imu_error.gyro_bias * 0.01,
+            ..unscaled
+        };
+        let mut biased = truth_scaled;
+        biased.imu_error.gyro_bias += Vec3::new(-1.5e-4, 2.5e-4, -2.0e-4);
+        check(
+            &truth_scaled,
+            &raw_scaled,
+            biased,
+            "bias under a large scale",
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_update_finds_a_gyro_bias_and_keeps_the_heading() {
+        // A yaw-rate bias of 0.11°/s, as on comma2k19's phone-class gyro.
+        // Stationary, nothing else observes heading, and a ZUPT holds attitude
+        // by design, so without this the heading walks bias times time.
+        let bias = Vec3::new(0.0, 0.0, 2.0e-3);
+        let truth = Attitude::default();
+        let mut o = options();
+        o.initial_gyro_bias_std = Vec3::splat(5.0e-3);
+        let run = |zaru: bool| -> (F, F) {
+            let mut e = GinsEngine::new(o).unwrap();
+            for i in 1..=6_000 {
+                e.add_imu(still(i as F * 0.01, 0.01, &truth, bias)).unwrap();
+                if i % 10 == 0 {
+                    e.apply_zupt(Vec3::splat(0.02)).unwrap();
+                    if zaru {
+                        e.apply_zero_rate(Vec3::splat(5.0e-3)).unwrap();
+                    }
+                }
+            }
+            (
+                e.nav_state().imu_error.gyro_bias.z,
+                e.nav_state().euler().yaw.abs(),
+            )
+        };
+        let (_, drifted) = run(false);
+        assert!(drifted > 0.1, "should walk ~0.12 rad, got {drifted}");
+        let (estimate, heading) = run(true);
+        assert!(
+            (estimate - bias.z).abs() < 0.05 * bias.z,
+            "bias estimate {estimate:e} against {:e}",
+            bias.z
+        );
+        assert!(
+            heading < 0.05 * drifted,
+            "heading error {heading} with the update against {drifted} without"
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_update_expects_the_earth_to_turn() {
+        // No bias at all. A still gyro reads the earth's rotation, 15°/h, and
+        // an update expecting zero would estimate that as a bias. The
+        // tolerance is a twentieth of earth rate.
+        let truth = Attitude::default();
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=3_000 {
+            e.add_imu(still(i as F * 0.01, 0.01, &truth, Vec3::ZERO))
+                .unwrap();
+            if i % 10 == 0 {
+                e.apply_zupt(Vec3::splat(0.02)).unwrap();
+                e.apply_zero_rate(Vec3::splat(1.0e-5)).unwrap();
+            }
+        }
+        let b = e.nav_state().imu_error.gyro_bias;
+        assert!(
+            b.norm() < 0.05 * Wgs84::OMEGA,
+            "bias estimate {b:?} on a bias-free gyro"
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_update_compensates_with_the_current_estimate() {
+        // The first update takes up the bias, and leaves the covariance tight.
+        // The second, on the same sample, must then see almost nothing:
+        // compensated with the bias of the moment the sample arrived, it would
+        // see the whole error again, at some hundreds of NIS.
+        let bias = Vec3::new(0.0, 0.0, 2.0e-3);
+        let truth = Attitude::default();
+        let mut o = options();
+        o.initial_gyro_bias_std = Vec3::splat(5.0e-3);
+        let mut e = GinsEngine::new(o).unwrap();
+        for i in 1..=2 {
+            e.add_imu(still(i as F * 0.01, 0.01, &truth, bias)).unwrap();
+        }
+        let sigma = Vec3::splat(1.0e-4);
+        assert!(e.apply_zero_rate(sigma).unwrap());
+        assert!(e.apply_zero_rate(sigma).unwrap());
+        let second = e.last_nis().unwrap();
+        assert!(second < 1.0, "NIS {second} after the bias was taken up");
+        let found = e.nav_state().imu_error.gyro_bias.z;
+        assert!((found - bias.z).abs() < 0.05 * bias.z, "bias {found:e}");
+    }
+
+    #[test]
+    fn a_zero_rate_update_needs_a_sample_and_a_usable_sigma() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_zero_rate(Vec3::splat(1.0e-3)).unwrap());
+        assert_eq!(e.last_nis(), None, "nothing was applied");
+        assert_eq!(e.consecutive_rejections(), 0, "and nothing was refused");
+
+        e.add_imu(still(0.01, 0.01, &Attitude::default(), Vec3::ZERO))
+            .unwrap();
+        for bad in [0.0, -1.0, F::NAN, F::INFINITY] {
+            assert!(!e.apply_zero_rate(Vec3::splat(bad)).unwrap(), "{bad}");
+        }
+        assert_eq!(e.last_nis(), None);
+        assert_eq!(e.consecutive_rejections(), 0);
+        assert!(e.apply_zero_rate(Vec3::splat(1.0e-3)).unwrap());
     }
 
     /// The one kind holding a count, and that the count is one.
@@ -2134,6 +2393,13 @@ mod tests {
         let mut e = GinsEngine::new(options()).unwrap();
         assert!(!e.apply_heading(3.0, 0.001).unwrap());
         assert_counted_only_as(&e, Kind::Heading);
+
+        // A gyro reading a full radian per second, claimed to be still.
+        let mut e = GinsEngine::new(options()).unwrap();
+        let spinning = still(0.01, 0.01, &Attitude::default(), Vec3::splat(1.0));
+        e.add_imu(spinning).unwrap();
+        assert!(!e.apply_zero_rate(Vec3::splat(1.0e-4)).unwrap());
+        assert_counted_only_as(&e, Kind::ZeroRate);
     }
 
     #[test]

@@ -422,6 +422,11 @@ pub struct ReplayOptions {
     /// Count gate rejections separately for each kind of measurement. See
     /// [`GinsOptions::count_rejections_per_kind`].
     pub per_kind_rejections: bool,
+    /// Apply a zero-angular-rate update, with this one-sigma in rad/s,
+    /// whenever CAN speed reads below 0.05 m/s. A stop is when a residual yaw
+    /// bias walks the heading and nothing else observes it; see
+    /// [`drifters_filter::measurement::zero_angular_rate`].
+    pub zaru_sigma: Option<F>,
     /// Withhold fixes for `(start, length)` seconds after the filter starts.
     pub outage: Option<(F, F)>,
     /// Seconds after the filter starts that are not scored.
@@ -435,6 +440,7 @@ impl Default for ReplayOptions {
             wheel_sigma: None,
             nhc_sigma: None,
             per_kind_rejections: false,
+            zaru_sigma: None,
             outage: None,
             settle: 10.0,
         }
@@ -591,6 +597,10 @@ pub fn replay(
             }
             if let Some(sigma) = options.nhc_sigma {
                 engine.apply_nonholonomic(sigma, 3.0)?;
+            }
+            let still = interpolate(&segment.speed, t).is_some_and(|v| v.abs() < 0.05);
+            if let (Some(sigma), true) = (options.zaru_sigma, still) {
+                engine.apply_zero_rate(Vec3::splat(sigma))?;
             }
         }
 

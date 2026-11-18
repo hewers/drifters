@@ -93,7 +93,9 @@ pub struct GinsOptions {
     /// wheel speed the gate accepts hides a non-holonomic constraint it refuses
     /// every time, and a filter whose heading has drifted can stay locked out of
     /// the measurement that would correct it. With this set, each kind has its
-    /// own count and the constraint reaches the limit.
+    /// own count and the constraint reaches the limit. Zero-rate updates are the
+    /// exception, and are not counted at all: see
+    /// [`GinsEngine::apply_zero_rate`](crate::GinsEngine::apply_zero_rate).
     ///
     /// It is off because the recovery assumes the refused measurement is right.
     /// If it is wrong, inflating the covariance lets it in. A non-holonomic

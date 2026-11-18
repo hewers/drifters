@@ -812,8 +812,8 @@ one links them all.
 ### Scope
 
 This covers the steady-state data path of both estimators. For the ESKF:
-`add_imu`; the six aiding calls, ZUPT, non-holonomic, wheel speed, height,
-heading and magnetometer; both magnetometer calibration fits; and a late fix
+`add_imu`; the seven aiding calls, ZUPT, zero rate, non-holonomic, wheel speed,
+height, heading and magnetometer; both magnetometer calibration fits; and a late fix
 through `RewindEngine::add_gnss`, the rewind and the replay included. For the equivariant filter's engine: `add_imu` with a fix
 inside the interval that carries a velocity, so the split, both updates and
 both gates; `apply_magnetometer`; `pva_std`, which maps the covariance into
@@ -1239,7 +1239,7 @@ fuzzer's help:
 | `D` written negated, ESKF and factored EqF | `engine_robustness` |
 | the IMU check, in each engine and in the rewind layer | `engine_robustness` |
 | the GNSS check, in each engine and in the rewind layer | `engine_robustness` |
-| the argument check of each of the six ESKF aids, and of the EqF's magnetometer | `engine_robustness` |
+| the argument check of each of the seven ESKF aids, and of the EqF's magnetometer | `engine_robustness` |
 | the check before a rewind layer records an aid, both layers | `engine_robustness` |
 | refusing a step that left a non-finite state, both engines | `engine_robustness` |
 | `usable_sigma` asking about the sigma and not its square | `engine_robustness` |

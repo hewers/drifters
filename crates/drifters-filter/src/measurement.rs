@@ -45,7 +45,9 @@ use drifters_core::types::{ImuSample, Pva};
 use drifters_core::F;
 
 use crate::eskf::HeldStates;
-use crate::state::{N_STATE, PHI_ID, P_ID, V_ID};
+#[cfg(not(feature = "reduced-state"))]
+use crate::state::SG_ID;
+use crate::state::{BG_ID, N_STATE, PHI_ID, P_ID, V_ID};
 
 /// Which sensor a measurement came from, for counting gate rejections.
 ///
@@ -61,6 +63,8 @@ pub enum Kind {
     Pseudoranges,
     /// [`zero_velocity`].
     ZeroVelocity,
+    /// [`zero_angular_rate`].
+    ZeroRate,
     /// [`nonholonomic`].
     Nonholonomic,
     /// [`wheel_speed`].
@@ -159,7 +163,9 @@ fn vehicle_velocity(pva: &Pva, mounting: &VehicleMounting) -> (Vec3, Mat3, Mat3)
 /// a stop it observes velocity directly, and because a gyro bias integrates
 /// into a growing tilt which integrates into a growing velocity, holding
 /// velocity at zero for a few seconds observes **gyro bias** far better than
-/// anything else available without motion.
+/// anything else available without motion. Not the yaw-rate bias of a level
+/// vehicle, which tilts nothing: pair it with [`zero_angular_rate`], which
+/// reads every axis of the bias directly.
 ///
 /// The constraint is on the navigation-frame velocity, so attitude does not
 /// enter the Jacobian.
@@ -186,6 +192,63 @@ pub fn zero_velocity(pva: &Pva, sigma: Vec3) -> Measurement<3> {
     jacobian.set_block(0, V_ID, &Mat3::identity());
     Measurement {
         innovation: Matrix::<3, 1>::from_column([v.x, v.y, v.z]),
+        jacobian,
+        noise: sigma.squared().to_diag(),
+        gate: Some(crate::eskf::chi_squared::P999[3]),
+        held: HeldStates::NONE,
+    }
+}
+
+/// Zero-angular-rate update (ZARU): assert the vehicle is not rotating.
+///
+/// Still, the gyro reads its own bias plus the earth's rotation, so this
+/// observes the gyro bias directly. A zero-velocity update reaches it only
+/// slowly, through the tilt the bias builds up, and not at all about the
+/// vertical, where a yaw-rate bias tilts nothing. A stop is exactly when a
+/// residual yaw bias walks the heading, and the engine's zero-velocity update
+/// holds attitude by default, so it cannot correct that either. This can,
+/// through the bias and its correlation with the attitude it has already
+/// turned.
+///
+/// `rate` is the compensated angular rate, rad/s, in the body frame, and
+/// `gyro_scale` the scale-factor estimate it was compensated with.
+/// [`GinsEngine::apply_zero_rate`](crate::GinsEngine::apply_zero_rate) forms
+/// both from the latest sample and the current estimates.
+///
+/// The expected rate is the earth's, `Cᵀ·ω_ie`, not zero. For a tactical gyro
+/// earth rate is hundreds of times the bias, and asserting zero would estimate
+/// the earth as a bias. With `ω = (1 + s)·ω_true + b` compensated as
+/// `(ω − b̂)/(1 + ŝ)`, the innovation `rate − Ĉᵀ·ω_ie` is to first order
+///
+/// ```text
+/// (δb + ω·δs) / (1 + ŝ)  +  Cᵀ·[ω_ie×]·φ
+/// ```
+///
+/// with `δb` and `δs` the corrections feedback adds, and the last term the
+/// nav-fixed-vector Jacobian from the module docs with its sign reversed,
+/// because the earth's rate is the measured side here.
+///
+/// `sigma` is the one-sigma rate noise per axis, rad/s, for one sample. It has
+/// to cover the gyro's white noise at the sample rate, and how still the
+/// vehicle really is.
+pub fn zero_angular_rate(pva: &Pva, rate: Vec3, gyro_scale: Vec3, sigma: Vec3) -> Measurement<3> {
+    let earth = drifters_core::earth::Wgs84::omega_ie_n(pva.position.lat);
+    let ct = pva.attitude.dcm.transpose();
+    let innovation = rate - ct * earth;
+
+    let mut jacobian = Matrix::<3, N_STATE>::zeros();
+    jacobian.set_block(0, PHI_ID, &ct.matmul(&earth.skew()));
+    for c in 0..3 {
+        let gain = 1.0 / (1.0 + gyro_scale[c]);
+        jacobian[(c, BG_ID + c)] = gain;
+        #[cfg(not(feature = "reduced-state"))]
+        {
+            jacobian[(c, SG_ID + c)] = rate[c] * gain;
+        }
+    }
+
+    Measurement {
+        innovation: Matrix::<3, 1>::from_column([innovation.x, innovation.y, innovation.z]),
         jacobian,
         noise: sigma.squared().to_diag(),
         gate: Some(crate::eskf::chi_squared::P999[3]),

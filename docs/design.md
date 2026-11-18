@@ -284,11 +284,11 @@ Three things are deliberately not in it.
   separate, strongly anti-correlated terms, so its position block is not a
   position uncertainty. `Estimator::pva_std` is the question both can answer
   in one unit; `drifters_eqf::physical` is the map that lets the EqF answer.
-- **Aiding.** ZUPT, non-holonomic, wheel speed, height and heading are the
-  ESKF's alone. Both take a magnetometer, through a method of the same name and
-  arguments, but not the same measurement: the ESKF reads the field in the body
-  frame, so its sensor must already be aligned, and the EqF estimates the
-  sensor's rotation as a state of its own.
+- **Aiding.** ZUPT, zero rate, non-holonomic, wheel speed, height and heading
+  are the ESKF's alone. Both take a magnetometer, through a method of the same
+  name and arguments, but not the same measurement: the ESKF reads the field in
+  the body frame, so its sensor must already be aligned, and the EqF estimates
+  the sensor's rotation as a state of its own.
 
 What a trait cannot say is that two implementations *behave* alike, so
 `crates/drifters-cli/tests/estimator_contract.rs` is one set of tests, generic
@@ -314,7 +314,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 304 | **2 384** |
+| `GinsEngine` total | 3 328 | **2 408** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -331,10 +331,10 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 304 | **21 504** |
-| `f32-covariance` | 2 384 | 18 744 |
-| `reduced-state` | 2 368 | 18 696 |
-| both | 1 888 | 17 256 |
+| default | 3 328 | **21 576** |
+| `f32-covariance` | 2 408 | 18 816 |
+| `reduced-state` | 2 392 | 18 768 |
+| both | 1 912 | 17 328 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
@@ -434,10 +434,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 304 B | 2 368 B |
+| `GinsEngine` | 3 328 B | 2 392 B |
 | peak stack | 17 088 B | **10 360 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 888 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 912 bytes.
 
 Peak stack by operation, in bytes:
 
@@ -501,6 +501,7 @@ implemented, in `drifters-filter::measurement`:
 | GNSS position | 3 | δr, φ (via lever arm) | the primary aid |
 | GNSS velocity | 3 | δv, φ (via lever arm) | applied when the fix carries it |
 | Zero-velocity (ZUPT) | 3 | δv | detected during stops; strongly observes gyro bias |
+| Zero-angular-rate (ZARU) | 3 | δb_g, δs_g, φ | during stops; the expected rate is the earth's; reads the yaw-rate bias ZUPT cannot |
 | Non-holonomic (NHC) | 2 | δv, φ | wheeled vehicles: no sideways or vertical motion, in the vehicle frame |
 | Odometer / wheel speed | 1 | δv, φ | along the vehicle's forward axis; bounds drift through GNSS outages |
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
