@@ -113,7 +113,8 @@ mkdir -p datasets/comma2k19-demo && for i in 0 1 2; do curl -fL -o datasets/comm
 pip install pyarrow numpy && python3 prototypes/comma2k19_demo.py datasets/comma2k19-demo datasets/comma2k19
 ```
 
-The results are fitted on the July drives and reported on the August ones.
+[comma2k19.md](comma2k19.md) has the results, fitted on the July drives and
+reported on the August ones.
 Links make the split without copying anything:
 
 ```bash

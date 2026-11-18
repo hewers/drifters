@@ -1249,7 +1249,7 @@ fuzzer's help:
 | a NaN gate passing nothing, EqF | a unit test only: its gates come from the options, which scripts do not vary |
 | `MAX_VARIANCE` on the time update and on a new covariance, ESKF | unit tests only: scripts start from the default options and never drive a variance that far |
 
-Twenty of the twenty-five are caught here. The other five guard things a script
+Twenty-one of the twenty-six are caught here. The other five guard things a script
 cannot reach, and each has a unit test that fails without it.
 
 The seeded scripts alone do not notice the magnetometer check being gone. The sweep

@@ -107,6 +107,93 @@ conversions and the re-anchoring transform, tested and unused. What remains is t
 state representation, the position rows of the transition matrix, every position
 measurement Jacobian and the protobuf schema.
 
+### From the literature survey
+
+Optional, in rough order of expected value. Each was read against this library and
+its datasets, and none is started.
+
+- **Model the GNSS error as time-correlated.** comma2k19's u-blox error is
+  mostly a slowly varying offset. Bryson and Henrikson's measurement
+  differencing (1968) handles that with no new states, which suits a fixed-size
+  filter; Petovello et al. (2009) and Wang, Li and Rizos (2012) give practical
+  variants. Lands in the GNSS update. Expect honest covariances and a more
+  useful smoother rather than better accuracy, since the offset itself is
+  unobservable.
+- **Invariant error definitions in the ESKF** (Barrau and Bonnabel, 2017, 2018;
+  Scherzinger and Reid, 1994; Sun, Chen and Cui, 2024). Better convergence from
+  large heading errors, at the cost of touching `F`, `G`, every Jacobian, the
+  feedback, `error_between` and the smoother. The most expensive item here.
+- **Attitude covariance reset after large corrections** (NASA/TP-2018-219822
+  §9.9.2; Reynolds, 2008; Mueller, Hehn and D'Andrea, 2017). Only above some
+  `|δθ|`, which keeps it off the per-sample path.
+- **Underweight measurements while the state is uncertain** (Zanetti, DeMars and
+  Bishop, 2010). At 28 m/s a 10° heading error puts 0.43 m/s of second-order error
+  into the non-holonomic constraint's lateral row. One `Ud::quadratic` per row.
+- **Non-holonomic lever arm** (Chae et al., 2022). The constraint holds at the
+  rear axle, not at the IMU, which matters in turns and little on a highway.
+- **A better stationarity detector** (Skog et al., 2010; Ramanandan, Chen and
+  Farrell, 2012; Wahlström and Skog, 2021), paired with the zero-rate update.
+- **A 22nd state for the wheel-speed scale**, if the side estimator proves too
+  coarse, with the protobuf schema grown to carry it.
+- **Adaptive noise and robust weighting**, with care (Mohamed and Schwarz, 1999;
+  Huang et al., 2018; Duran-Martin et al., 2024). These adapt to the innovations,
+  which is a risk wherever a large innovation means drift rather than a bad
+  measurement.
+- **Tuning tools** for `drifters tune` (Chen, Heckman, Julier and Ahmed, 2018;
+  Guerrier et al., 2013), given that
+  [the fitted tuning did not transfer on GSDC](gsdc.md#held-out-the-fitted-tuning-does-not-transfer).
+- **The equivariant filter's tangent-group symmetry** (Fornasier et al.,
+  arXiv:2309.03765).
+
+Sources:
+
+- J. R. Carpenter and C. N. D'Souza (eds.), *Navigation Filter Best Practices*,
+  NASA/TP-2018-219822, 2nd ed. (2025) — <https://ntrs.nasa.gov/citations/20250002787>
+- X. Niu, S. Nassar and N. El-Sheimy, "An Accurate Land-Vehicle MEMS IMU/GPS
+  Navigation System Using 3D Auxiliary Velocity Updates", *NAVIGATION* 54(3), 2007
+- P. Chauchat, S. Bonnabel and A. Barrau, "Invariant filtering for wheeled vehicle
+  localization with unknown wheel radius and unknown GNSS lever arm", CDC 2024 —
+  <https://arxiv.org/abs/2409.07050>
+- A. E. Bryson and L. J. Henrikson, "Estimation using sampled data containing
+  sequentially correlated noise", *J. Spacecraft and Rockets* 5(6), 1968
+- M. G. Petovello, K. O'Keefe, G. Lachapelle and M. E. Cannon, "Consideration of
+  time-correlated errors in a Kalman filter applicable to GNSS", *J. Geodesy* 83(1),
+  2009 — <https://doi.org/10.1007/s00190-008-0231-z>
+- K. Wang, Y. Li and C. Rizos, "Practical approaches to Kalman filtering with
+  time-correlated measurement errors", *IEEE TAES* 48(2), 2012
+- A. Barrau and S. Bonnabel, "The Invariant Extended Kalman Filter as a Stable
+  Observer", *IEEE TAC* 62(4), 2017 — <https://arxiv.org/abs/1410.1465>; and "Invariant
+  Kalman Filtering", *Annu. Rev. Control Robot. Auton. Syst.* 1, 2018
+- B. M. Scherzinger and D. B. Reid, "Modified strapdown inertial navigator error
+  models", PLANS 1994 — <https://doi.org/10.1109/PLANS.1994.303345>
+- J. Sun, Y. Chen and B. Cui, "An Improved Initial Alignment Method Based on
+  SE2(3)/EKF for SINS/GNSS Integrated Navigation System with Large Misalignment
+  Angles", *Sensors* 24(9), 2024 — <https://doi.org/10.3390/s24092945>
+- R. G. Reynolds, "Asymptotically optimal attitude filtering with guaranteed
+  convergence", *JGCD* 31(1), 2008; M. W. Mueller, M. Hehn and R. D'Andrea, "Covariance
+  Correction Step for Kalman Filtering with an Attitude", *JGCD*, 2017
+- R. Zanetti, K. J. DeMars and R. H. Bishop, "Underweighting Nonlinear Measurements",
+  *JGCD* 33(5), 2010 — <https://doi.org/10.2514/1.50596>
+- M. S. Chae, J. U. Kwon, E. Y. Cho and S. Y. Cho, "INS/GNSS/NHC Integrated Navigation
+  System Compensating for Lever Arm Effect between NHC Effective Point and IMU Mounting
+  Location", *JPNT* 11(3), 2022 — <https://doi.org/10.11003/JPNT.2022.11.3.199>
+- I. Skog, P. Händel, J.-O. Nilsson and J. Rantakokko, "Zero-Velocity Detection—An
+  Algorithm Evaluation", *IEEE TBME* 57(11), 2010; A. Ramanandan, A. Chen and J. A.
+  Farrell, "Inertial Navigation Aiding by Stationary Updates", *IEEE TITS* 13(1), 2012;
+  J. Wahlström and I. Skog, "Fifteen Years of Progress at Zero Velocity: A Review",
+  *IEEE Sensors J.* 21(2), 2021
+- A. H. Mohamed and K. P. Schwarz, "Adaptive Kalman filtering for INS/GPS", *J. Geodesy*
+  73, 1999; Y. Huang, Y. Zhang, Z. Wu, N. Li and J. Chambers, "A Novel Adaptive Kalman
+  Filter With Inaccurate Process and Measurement Noise Covariance Matrices", *IEEE TAC*
+  63(2), 2018; G. Duran-Martin et al., "Outlier-robust Kalman Filtering through
+  Generalised Bayes", ICML 2024 — <https://arxiv.org/abs/2405.05646>
+- Z. Chen, C. Heckman, S. Julier and N. Ahmed, "Weak in the NEES?: Auto-tuning Kalman
+  Filters with Bayesian Optimization", FUSION 2018 — <https://arxiv.org/abs/1807.08855>;
+  S. Guerrier, J. Skaloud, Y. Stebler and M.-P. Victoria-Feser, "Wavelet-Variance-Based
+  Estimation for Composite Stochastic Processes", *JASA* 108(503), 2013
+- A. Fornasier, Y. Ge, P. van Goor, R. Mahony and S. Weiss, "Equivariant Symmetries for
+  Inertial Navigation Systems" — <https://arxiv.org/abs/2309.03765>
+
 ### Release
 
 Nothing is published. The order and procedure are in [releasing.md](releasing.md).
