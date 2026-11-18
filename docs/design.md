@@ -314,7 +314,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 272 | **2 352** |
+| `GinsEngine` total | 3 304 | **2 384** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -331,10 +331,10 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 272 | **21 408** |
-| `f32-covariance` | 2 352 | 18 648 |
-| `reduced-state` | 2 336 | 18 600 |
-| both | 1 856 | 17 160 |
+| default | 3 304 | **21 504** |
+| `f32-covariance` | 2 384 | 18 744 |
+| `reduced-state` | 2 368 | 18 696 |
+| both | 1 888 | 17 256 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
@@ -434,10 +434,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 272 B | 2 336 B |
+| `GinsEngine` | 3 304 B | 2 368 B |
 | peak stack | 17 088 B | **10 360 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 856 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 888 bytes.
 
 Peak stack by operation, in bytes:
 
@@ -539,9 +539,15 @@ fooled.
 Gating alone has a failure mode of its own: a filter whose covariance has become
 confident and wrong rejects the very measurements that would correct it, and
 freezes there. `max_consecutive_rejections` bounds how long that can persist,
-inflating the covariance to re-admit measurements. Scaling preserves symmetry,
-positive definiteness and every correlation — the conservative choice when the
-*direction* of the error is exactly what is unknown.
+inflating the covariance to re-admit measurements. Any accepted measurement
+restarts the count. `count_rejections_per_kind` gives each kind of measurement its
+own, so that an accepted wheel speed cannot hide a non-holonomic constraint that is
+locked out. It is off by default, because the recovery lets in whatever is being
+refused: in simulation, with the mounting left aligned on a sensor about 4° off,
+the error after a 60 s outage goes from 4.6 m to 100.9 m.
+[comma2k19.md](comma2k19.md) has what it gives when the mounting is right. Scaling
+preserves symmetry, positive definiteness and every correlation — the conservative
+choice when the *direction* of the error is exactly what is unknown.
 
 Read [state-model.md](state-model.md) on accelerometer bias and tilt before
 relying on ZUPT for long stationary periods: they are mutually unobservable, and

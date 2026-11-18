@@ -6484,6 +6484,10 @@ pub mod drifters_ {
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#vehicle_mounting: VehicleMounting,
+            /// Count gate rejections separately for each kind of measurement, so that an
+            /// accepted one does not restart the count of another. Absent means false,
+            /// which is what a configuration written before this field meant.
+            pub r#count_rejections_per_kind: bool,
             /// Tracks presence of optional and message fields
             pub _has: GinsOptions_::_Hazzer,
         }
@@ -6523,6 +6527,9 @@ pub mod drifters_ {
                 ret &= (self.r#rejection_inflation == other.r#rejection_inflation);
                 ret &= (self.r#zupt_holds_attitude() == other.r#zupt_holds_attitude());
                 ret &= (self.r#vehicle_mounting() == other.r#vehicle_mounting());
+                ret
+                    &= (self.r#count_rejections_per_kind
+                        == other.r#count_rejections_per_kind);
                 ret
             }
         }
@@ -7240,6 +7247,28 @@ pub mod drifters_ {
                 self.set_vehicle_mounting(value);
                 self
             }
+            /// Return a reference to `count_rejections_per_kind`
+            #[inline]
+            pub fn r#count_rejections_per_kind(&self) -> &bool {
+                &self.r#count_rejections_per_kind
+            }
+            /// Return a mutable reference to `count_rejections_per_kind`
+            #[inline]
+            pub fn mut_count_rejections_per_kind(&mut self) -> &mut bool {
+                &mut self.r#count_rejections_per_kind
+            }
+            /// Set the value of `count_rejections_per_kind`
+            #[inline]
+            pub fn set_count_rejections_per_kind(&mut self, value: bool) -> &mut Self {
+                self.r#count_rejections_per_kind = value.into();
+                self
+            }
+            /// Builder method that sets the value of `count_rejections_per_kind`. Useful for initializing the message.
+            #[inline]
+            pub fn init_count_rejections_per_kind(mut self, value: bool) -> Self {
+                self.r#count_rejections_per_kind = value.into();
+                self
+            }
         }
         impl ::micropb::MessageDecode for GinsOptions {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
@@ -7378,6 +7407,16 @@ pub mod drifters_ {
                                 mut_ref.decode_len_delimited(decoder)?;
                             };
                             self._has.set_vehicle_mounting();
+                        }
+                        18u32 => {
+                            let mut_ref = &mut self.r#count_rejections_per_kind;
+                            {
+                                let val = decoder.decode_bool()?;
+                                let val_ref = &val;
+                                if *val_ref {
+                                    *mut_ref = val as _;
+                                }
+                            };
                         }
                         _ => {
                             decoder.skip_wire_value(tag.wire_type())?;
@@ -7588,6 +7627,16 @@ pub mod drifters_ {
                         break 'msg (::core::result::Result::<usize, _>::Err(err));
                     }
                 }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(1usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
                 ::core::result::Result::Ok(max_size)
             };
             fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
@@ -7725,6 +7774,13 @@ pub mod drifters_ {
                     {
                         encoder.encode_varint32(138u32)?;
                         val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#count_rejections_per_kind;
+                    if *val_ref {
+                        encoder.encode_varint32(144u32)?;
+                        encoder.encode_bool(*val_ref)?;
                     }
                 }
                 Ok(())
@@ -7901,6 +7957,12 @@ pub mod drifters_ {
                                 + ::micropb::size::sizeof_len_record(
                                     val_ref.compute_size(),
                                 );
+                    }
+                }
+                {
+                    let val_ref = &self.r#count_rejections_per_kind;
+                    if *val_ref {
+                        size += 2usize + 1;
                     }
                 }
                 size

@@ -47,6 +47,41 @@ use drifters_core::F;
 use crate::eskf::HeldStates;
 use crate::state::{N_STATE, PHI_ID, P_ID, V_ID};
 
+/// Which sensor a measurement came from, for counting gate rejections.
+///
+/// See [`GinsEngine::consecutive_rejections_of`](crate::GinsEngine::consecutive_rejections_of)
+/// and [`GinsOptions::count_rejections_per_kind`](crate::GinsOptions::count_rejections_per_kind).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub enum Kind {
+    /// [`gnss_velocity`].
+    GnssVelocity,
+    /// Single-differenced pseudoranges; see [`crate::range`].
+    Pseudoranges,
+    /// [`zero_velocity`].
+    ZeroVelocity,
+    /// [`nonholonomic`].
+    Nonholonomic,
+    /// [`wheel_speed`].
+    WheelSpeed,
+    /// [`height`].
+    Height,
+    /// [`magnetic_heading`].
+    Heading,
+    /// A measurement a caller built and handed to
+    /// [`GinsEngine::apply`](crate::GinsEngine::apply). Keep it last:
+    /// [`Kind::COUNT`] is derived from it.
+    #[default]
+    Other,
+}
+
+impl Kind {
+    /// How many kinds there are. Derived from the last variant, so a kind added
+    /// before it cannot index past the engine's counters.
+    pub const COUNT: usize = Kind::Other as usize + 1;
+}
+
 /// A measurement ready to be applied to the filter.
 ///
 /// `M` is the measurement dimension: 1 for a scalar sensor, 2 for

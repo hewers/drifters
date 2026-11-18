@@ -82,8 +82,27 @@ pub struct GinsOptions {
     /// A filter that rejects every measurement is not being robust, it is
     /// broken: its covariance has become confident and wrong, so it discards
     /// exactly the information that would fix it. This bounds how long that can
-    /// go on. Zero disables the recovery entirely.
+    /// go on. Any accepted measurement restarts the count, unless
+    /// [`count_rejections_per_kind`](Self::count_rejections_per_kind) is set.
+    /// Zero disables the recovery entirely.
     pub max_consecutive_rejections: u32,
+    /// Count rejections separately for each
+    /// [`Kind`](crate::measurement::Kind) of measurement.
+    ///
+    /// By default an accepted measurement of any kind restarts the count, so a
+    /// wheel speed the gate accepts hides a non-holonomic constraint it refuses
+    /// every time, and a filter whose heading has drifted can stay locked out of
+    /// the measurement that would correct it. With this set, each kind has its
+    /// own count and the constraint reaches the limit.
+    ///
+    /// It is off because the recovery assumes the refused measurement is right.
+    /// If it is wrong, inflating the covariance lets it in. A non-holonomic
+    /// constraint under a [`vehicle_mounting`](Self::vehicle_mounting) left
+    /// aligned on a sensor that is not is the case that matters: in simulation,
+    /// with the sensor about 4 degrees off, the error after a 60 s outage goes
+    /// from 4.6 m to 100.9 m. Set it once the mounting is configured or
+    /// estimated.
+    pub count_rejections_per_kind: bool,
     /// Whether a zero-velocity update may correct attitude.
     ///
     /// Stationary, accelerometer bias and tilt produce identical velocity
@@ -127,6 +146,7 @@ impl Default for GinsOptions {
             vehicle_mounting: VehicleMounting::ALIGNED,
             zupt_holds_attitude: true,
             max_consecutive_rejections: 10,
+            count_rejections_per_kind: false,
             rejection_inflation: 4.0,
         }
     }
