@@ -491,7 +491,9 @@ fn eskf_aid(engine: &mut GinsEngine, op: &Aiding) -> Option<Result<bool, FilterE
         Aiding::Heading(heading, sigma) => engine.apply_heading(*heading, *sigma),
         Aiding::Ranges(observations, huber) => engine.apply_pseudoranges::<4>(observations, *huber),
         Aiding::Custom(measurement) => engine.apply(measurement),
-        Aiding::Magnetometer(..) => return None,
+        Aiding::Magnetometer(measured, reference, sigma) => {
+            engine.apply_magnetometer(*measured, *reference, *sigma)
+        }
     })
 }
 
@@ -572,6 +574,11 @@ impl Subject for RewindEngine<SAMPLES, EVENTS> {
             },
             Aiding::Heading(heading, sigma) => EskfAid::Heading {
                 heading: *heading,
+                sigma: *sigma,
+            },
+            Aiding::Magnetometer(measured, reference, sigma) => EskfAid::Magnetometer {
+                measured: *measured,
+                reference: *reference,
                 sigma: *sigma,
             },
             _ => return None,
@@ -784,7 +791,12 @@ fn aid_is_invalid(aid: &Aiding) -> bool {
         | Aiding::Height(value, sigma)
         | Aiding::Heading(value, sigma) => !(value.is_finite() && usable_sigma(*sigma)),
         Aiding::Magnetometer(measured, reference, sigma) => {
-            let usable = |v: &Vec3| finite3(*v) && v.norm_squared() > 0.0;
+            // The squared length has to survive too: a huge vector has no
+            // direction anyone computed.
+            let usable = |v: &Vec3| {
+                let squared = v.norm_squared();
+                finite3(*v) && squared > 0.0 && squared.is_finite()
+            };
             !(usable(measured) && usable(reference) && usable_sigma(*sigma))
         }
         Aiding::Ranges(observations, _) => !observations

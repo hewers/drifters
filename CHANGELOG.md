@@ -14,6 +14,13 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **Magnetometer rejections no longer lead to covariance inflation, in the
+  equivariant filter.** Repeated rejection inflates the covariance on the premise that
+  the measurements are sound and the filter is not. A magnetometer beside something
+  magnetic is the opposite case, and would have had the covariance growing for as
+  long as it stayed there. Rejected readings are not counted, and accepted ones do
+  not clear the count other aids have built up. The ESKF's new update behaves the
+  same way.
 - **Non-holonomic and wheel-speed updates are now about the vehicle.**
   `GinsOptions::vehicle_mounting` holds the rotation from the sensor to the vehicle
   and defaults to aligned, which gives the same numbers as before. `GinsEngine` grows
@@ -23,7 +30,7 @@ breaking wire change becomes `v2` rather than a crate version bump.
   is now Bierman's update plus one rank-one update of the factors per measurement
   row, which gives the same result. On a Cortex-M4 the peak goes from 20 808 bytes
   to 17 088, from 20 824 to 13 124 with `f32-covariance`, and at 15 states from
-  11 536 to 10 360 and from 11 552 to 7 956. `apply_zupt` goes from 20 656 to 7 568.
+  11 536 to 10 360 and from 11 552 to 7 956. `apply_zupt` goes from 20 656 to 7 216.
   The CI ceilings tighten to 18, 14, 11 and 9 KiB to hold the gain.
 - **`add_imu` can now return `FilterError::Diverged`, and invalid input is refused
   rather than absorbed, in both engines.** A finite sample that would overflow the
@@ -176,6 +183,9 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Fixed
 
+- **The equivariant filter took a magnetometer reading exactly opposite the field
+  for a perfect one,** because the sine in its innovation folds at a quarter turn. A
+  reading more than a quarter turn from the prediction is now refused.
 - **`Eskf::update` got a measurement of two or more rows wrong when `dx` was not
   zero.** The correction applied the prior error state through per-row gains that
   do not sum to the joint gain. The engines were not affected, because they feed
@@ -293,6 +303,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **A three-axis magnetometer for the ESKF, with its calibration.**
+  `GinsEngine::apply_magnetometer` and `RewindEngine::apply_magnetometer` take the
+  field in the body frame and a reference in NED, and correct every state correlated
+  with attitude. `drifters_core::magnetometer` finds the hard and soft iron:
+  `EllipsoidFit` from the readings alone, and `AidedMagFit` from a filter's attitude,
+  which also finds how the sensor is turned. Both are allocation-free. In a simulated
+  flight with a wandering consumer gyro, a five-minute GNSS outage ends 0.80° off in
+  heading and 1.2 km off horizontally, against 4.2° and 6.0 km with no magnetometer.
+  `drifters.v1.AuxMeasurement` gains `magnetometer`, field 7. See
+  [Layer 16](docs/testing.md), which also shows what a wrong field costs.
 - **IMU-to-vehicle mounting.** `drifters_core::mounting` adds `VehicleMounting` and
   `MountingEstimator`, which finds the yaw and pitch of the mounting from a
   GNSS-aided drive, allocation-free. In a simulated drive with a MEMS unit it finds

@@ -34,8 +34,10 @@
 //! is the part of the question both can answer in the same units.
 //!
 //! **Aiding.** Zero-velocity, non-holonomic, wheel speed, height and heading
-//! on one side; a magnetometer direction with its own calibration state on the
-//! other. Nothing in the two lists is the same measurement.
+//! are the ESKF's alone. Both take a magnetometer, through a method of the same
+//! name and arguments, but not the same measurement: the ESKF reads the field
+//! in the body frame, so its sensor must already be aligned, and the EqF
+//! estimates the sensor's rotation as a state of its own.
 
 use crate::frames::Lla;
 use crate::math::Vec3;

@@ -86,7 +86,7 @@ use drifters_core::frames::Lla;
 use drifters_core::math::Vec3;
 use drifters_core::rewind::{FixOutcome, Record, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{usable_sigma, GnssFix, ImuSample, NavState};
+use drifters_core::types::{has_direction, usable_sigma, GnssFix, ImuSample, NavState};
 use drifters_core::F;
 
 use crate::config::{ConfigError, EqfOptions};
@@ -122,10 +122,6 @@ impl Aid {
     /// A vector whose squared norm overflows has no direction here either,
     /// because normalising it through that norm would give zero.
     pub fn is_valid(&self) -> bool {
-        let has_direction = |v: Vec3| {
-            let squared = v.norm_squared();
-            squared > 0.0 && squared.is_finite()
-        };
         match *self {
             Aid::Magnetometer {
                 measured,

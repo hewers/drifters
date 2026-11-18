@@ -1060,7 +1060,7 @@ harness code:
 |---|---|---|
 | `EqfEngine` | 4 680 bytes | **2 080 bytes** |
 | `EqfRewindEngine<120, 32>` | 25 632 bytes | 17 832 bytes |
-| peak stack, a late fix through the rewind layer included | 15 448 bytes | **14 064 bytes** |
+| peak stack, a late fix through the rewind layer included | 15 520 bytes | **14 112 bytes** |
 | instructions per `add_imu` | 4.48 million | **0.87 million** |
 | at an instruction per cycle, 168 MHz | 26.7 ms | **5.2 ms** |
 | panic machinery linked | none | none |

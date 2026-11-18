@@ -290,8 +290,11 @@ Three things are deliberately not in it.
   separate, strongly anti-correlated terms, so its position block is not a
   position uncertainty. `Estimator::pva_std` is the question both can answer
   in one unit; `drifters_eqf::physical` is the map that lets the EqF answer.
-- **Aiding.** ZUPT, non-holonomic, wheel speed, height and heading on one
-  side; a magnetometer direction with its own calibration state on the other.
+- **Aiding.** ZUPT, non-holonomic, wheel speed, height and heading are the
+  ESKF's alone. Both take a magnetometer, through a method of the same name and
+  arguments, but not the same measurement: the ESKF reads the field in the body
+  frame, so its sensor must already be aligned, and the EqF estimates the
+  sensor's rotation as a state of its own.
 
 What a trait cannot say is that two implementations *behave* alike, so
 `crates/drifters-cli/tests/estimator_contract.rs` is one set of tests, generic
@@ -362,7 +365,7 @@ late with an aid recorded every third sample. The replay runs nested inside
 no engine-sized temporary, and a frame of its own of **152 bytes**. A late fix
 reaches the depth of the time update it replays and goes no further: 17 088
 bytes, 13 124 with `f32-covariance` and 10 360 at 15 states. The EqF's late fix
-measures 15 448 dense and 14 064 factored, no deeper than its own fix step in
+measures 15 520 dense and 14 112 factored, no deeper than its own fix step in
 either. All are inside their CI ceilings, and all are part of the peak CI
 checks.
 
@@ -390,10 +393,10 @@ ESKF:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 11 280 | 10 460 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 448 | 14 064 |
-| `apply_magnetometer` | 14 456 | 13 072 |
-| **peak** | **15 448** | **14 064** |
+| `add_imu` (propagate) | 14 136 | 10 460 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 520 | 14 112 |
+| `apply_magnetometer` | 14 480 | 13 096 |
+| **peak** | **15 520** | **14 112** |
 
 Under the ESKF's own 17 088, and both under a 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
@@ -474,10 +477,10 @@ the harness:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 17 088 | 7 568 | **17 088** |
-| 21-state, `f32-covariance` | 13 124 | 6 380 | **13 124** |
-| 15-state (`reduced-state`) | 10 360 | 5 272 | **10 360** |
-| 15-state, `f32-covariance` | 7 956 | 4 572 | **7 956** |
+| 21-state, `f64` | 17 088 | 7 216 | **17 088** |
+| 21-state, `f32-covariance` | 13 124 | 6 388 | **13 124** |
+| 15-state (`reduced-state`) | 10 360 | 5 016 | **10 360** |
+| 15-state, `f32-covariance` | 7 956 | 4 580 | **7 956** |
 
 CI measures these on every run, and that is the number to trust over this
 table.
@@ -549,12 +552,22 @@ implemented, in `drifters-filter::measurement`:
 | Non-holonomic (NHC) | 2 | δv, φ | wheeled vehicles: no sideways or vertical motion, in the vehicle frame |
 | Odometer / wheel speed | 1 | δv, φ | along the vehicle's forward axis; bounds drift through GNSS outages |
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
-| Magnetometer heading | 1 | φ_d | coarse yaw when stationary |
+| Magnetometer | 3, two degrees of freedom | φ | calibrated field direction, at any attitude |
+| Heading | 1 | φ_d | from another instrument; assumes small tilt |
 
 ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
 low-cost MEMS system usable through a GNSS outage. Measured on a stationary
 30 s outage with a 0.02 m/s² accelerometer bias, ZUPT holds drift to 0.012 m
 against 9.0 m for dead reckoning.
+
+The magnetometer takes a field with hard and soft iron already removed, by one of
+the two fits in `drifters_core::magnetometer`. Its innovation is the angle between
+the predicted and measured directions, as a tangent vector, so that a large heading
+error under a wide covariance is judged by its size. Its rejections do not count
+towards inflating the covariance: that recovery assumes the measurements are sound
+and the filter is not, and a magnetometer that disagrees is usually the one at
+fault. [Layer 16](testing.md#layer-16--a-distorted-magnetometer-in-flight) measures
+what it gives and where it does harm.
 
 The two vehicle models go through `GinsOptions::vehicle_mounting`, because a
 sensor turned one degree from the vehicle reads 0.35 m/s of side slip at 20 m/s.

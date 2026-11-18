@@ -19,7 +19,8 @@
 use cortex_m_rt::entry;
 use drifters_core::align::{AlignConfig, Aligner};
 use drifters_core::frames::{Lla, Ned};
-use drifters_core::math::{Euler, Vec3};
+use drifters_core::magnetometer::{AidedMagFit, EllipsoidFit};
+use drifters_core::math::{Euler, Quat, Vec3};
 use drifters_core::mounting::{MountingEstimator, VehicleMounting};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
@@ -86,6 +87,9 @@ fn main() -> ! {
     let mut rewind = RewindEngine::<16, 4>::from_engine(engine);
     // Finding the mounting runs beside the filter, on the states it produces.
     let mut mounting = MountingEstimator::default();
+    // So does calibrating a magnetometer, in both of its forms.
+    let mut ellipsoid = EllipsoidFit::default();
+    let mut aided_fit = AidedMagFit::default();
 
     // The initial alignment runs before any of the above has a state to start
     // from, on the same interrupt.
@@ -158,12 +162,32 @@ fn main() -> ! {
             mounting.reset();
         }
 
+        // A reading that goes round, so that both fits have something to solve.
+        let turned = Quat::from_euler(t * 3.0, t * 5.0, t * 7.0);
+        let raw = turned.rotate(Vec3::new(1.0, 0.0, 0.0)) + Vec3::new(0.2, -0.1, 0.3);
+        let reference = Vec3::new(0.48, 0.0, 0.88);
+        let _ = ellipsoid.add(raw);
+        let _ = aided_fit.update(&engine.nav_state(), &engine.pva_std(), raw, reference);
+        for found in [ellipsoid.solve(), aided_fit.solve()].into_iter().flatten() {
+            let field = found.calibration.apply(raw);
+            if found.is_plausible(field, 0.1) {
+                let _ = engine.apply_magnetometer(field, reference, 0.02);
+                let _ = rewind.apply_magnetometer(field, reference, 0.02);
+            }
+        }
+        if ellipsoid.samples() > 2_000 {
+            ellipsoid.reset();
+            aided_fit.reset();
+        }
+        let _ = engine.apply_magnetometer(Vec3::new(0.48, 0.02, 0.88), reference, 0.02);
+
         let _ = rewind.add_imu(sample);
         let _ = rewind.apply_zupt(Vec3::splat(0.02));
         let _ = rewind.apply_nonholonomic((0.1, 0.1), 0.5);
         let _ = rewind.apply_wheel_speed(0.0, 0.1);
         let _ = rewind.apply_height(20.0, 0.5);
         let _ = rewind.apply_heading(0.0, 0.05);
+        let _ = rewind.apply_magnetometer(Vec3::new(0.48, 0.02, 0.88), reference, 0.02);
         // A fix from 22 ms ago: behind the stream, so this is the rewind.
         let late = GnssFix::position_only(
             GpsTime::from_tow(t - 0.022),

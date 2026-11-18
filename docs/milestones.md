@@ -157,7 +157,7 @@ Where a low-cost MEMS system stops being a toy.
 - [x] Non-holonomic constraints (NHC) for wheeled vehicles
 - [x] Odometer / wheel-speed update
 - [x] Barometric height, to bound the unstable vertical channel
-- [x] Magnetometer heading
+- [x] Magnetometer: scalar heading, then the three-axis field with calibration
 - [x] Innovation gating (chi-squared) shared by all measurement types
 - [x] Covariance inflation to recover from persistent gate rejection
 

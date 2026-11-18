@@ -503,14 +503,7 @@ impl GinsEngine {
         if !m.is_finite() {
             return Ok(false);
         }
-        self.note_prior();
-        let accepted = self.filter.update_gated_holding(
-            &m.innovation,
-            &m.jacobian,
-            &m.noise,
-            m.gate,
-            m.held,
-        )?;
+        let accepted = self.update_filter(m)?;
         if accepted {
             self.consecutive_rejections = 0;
             self.feedback()?;
@@ -525,6 +518,13 @@ impl GinsEngine {
             }
         }
         Ok(accepted)
+    }
+
+    /// The filter update itself, with no feedback and no accounting.
+    fn update_filter<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+        self.note_prior();
+        self.filter
+            .update_gated_holding(&m.innovation, &m.jacobian, &m.noise, m.gate, m.held)
     }
 
     /// Normalised innovation squared of the most recent applied measurement.
@@ -684,12 +684,69 @@ impl GinsEngine {
 
     /// Apply a heading update. `heading` is **true** heading in radians,
     /// declination already removed.
+    ///
+    /// For a heading from another instrument. One worked out from a
+    /// magnetometer with this filter's own roll and pitch carries their error,
+    /// which the update cannot know about and feeds back, and at large bank
+    /// angles it can diverge. Give the field to
+    /// [`apply_magnetometer`](Self::apply_magnetometer) instead.
     pub fn apply_heading(&mut self, heading: F, sigma: F) -> Result<bool, FilterError> {
         if !(Aid::Heading { heading, sigma }).is_valid() {
             return Ok(false);
         }
         let m = measurement::magnetic_heading(&self.state.pva, heading, sigma);
         self.apply(&m)
+    }
+
+    /// Apply a three-axis magnetometer reading.
+    ///
+    /// `measured` is the field in the body frame with hard and soft iron
+    /// removed, for which see [`drifters_core::magnetometer`], and `reference`
+    /// is the field here in the NED frame. Only their directions are used.
+    /// `sigma` is the noise of the measured direction, radians, and it has to
+    /// cover what remains of the calibration too. See
+    /// [`measurement::magnetometer`].
+    ///
+    /// The gate sees a sudden disturbance and not a slow one, which the filter
+    /// follows. Check the strength first with
+    /// [`MagFit::is_plausible`](drifters_core::magnetometer::MagFit::is_plausible).
+    ///
+    /// A rejection here is not evidence about the covariance. Every other aid
+    /// is turned away because the filter has become too sure of itself, so
+    /// enough rejections in a row inflate the covariance. A magnetometer is
+    /// usually turned away because it is wrong: a vehicle parked beside a steel
+    /// beam would otherwise have its whole covariance doubled every ten
+    /// readings for as long as it stayed there. So rejections here are not
+    /// counted, and an accepted reading does not clear a count that other aids
+    /// have built up. A filter that really has lost its heading gets the reading
+    /// back as the gyro noise widens its covariance, or from GNSS sooner.
+    ///
+    /// Returns `false` when the reading failed its gate, and when an argument
+    /// is [unusable](Aid::is_valid), in which case nothing happened.
+    pub fn apply_magnetometer(
+        &mut self,
+        measured: Vec3,
+        reference: Vec3,
+        sigma: F,
+    ) -> Result<bool, FilterError> {
+        let aid = Aid::Magnetometer {
+            measured,
+            reference,
+            sigma,
+        };
+        if !aid.is_valid() {
+            return Ok(false);
+        }
+        let m = measurement::magnetometer(&self.state.pva, measured, reference, sigma);
+        if !m.is_finite() {
+            return Ok(false);
+        }
+        let accepted = self.update_filter(&m)?;
+        if accepted {
+            self.feedback()?;
+        }
+        self.seal_checkpoint();
+        Ok(accepted)
     }
 
     /// Apply the estimated error state to the navigation state and reset it.
@@ -1775,6 +1832,80 @@ mod tests {
             .horizontal_norm()
     }
 
+    /// A field with a realistic dip, as a perfect magnetometer sees it from
+    /// `yaw` of heading, level.
+    fn field_seen_from(yaw: F) -> (Vec3, Vec3) {
+        let reference = Vec3::new(0.48, 0.02, 0.88);
+        let q = drifters_core::math::Quat::from_euler(0.0, 0.0, yaw);
+        (q.rotate_inverse(reference), reference)
+    }
+
+    #[test]
+    fn a_magnetometer_reading_turns_the_heading_towards_it() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let (measured, reference) = field_seen_from(0.05);
+        assert!(e.apply_magnetometer(measured, reference, 0.01).unwrap());
+        let yaw = e.nav_state().pva.attitude.euler().yaw;
+        assert!((yaw - 0.05).abs() < 0.01, "yaw {yaw} rad");
+    }
+
+    #[test]
+    fn a_large_heading_error_is_corrected_while_the_filter_admits_to_it() {
+        // Thirty degrees out, known to be unknown. The radial part of a plain
+        // difference of unit vectors would have the gate refuse this.
+        let mut o = options();
+        o.initial_attitude_std.z = 1.0;
+        let mut e = GinsEngine::new(o).unwrap();
+        let (measured, reference) = field_seen_from(30.0_f64.to_radians());
+        for _ in 0..5 {
+            assert!(e.apply_magnetometer(measured, reference, 0.02).unwrap());
+        }
+        let yaw = e.nav_state().pva.attitude.euler().yaw.to_degrees();
+        assert!((yaw - 30.0).abs() < 1.0, "yaw {yaw} degrees");
+    }
+
+    #[test]
+    fn a_magnetometer_reading_corrects_tilt_as_well_as_heading() {
+        // The field says the nose is up. Heading cannot stand in for this,
+        // because turning about the vertical does not move the field along the
+        // body's forward and down axes the way pitching does.
+        let tilted = drifters_core::math::Quat::from_euler(0.0, 0.02, 0.0);
+        let reference = Vec3::new(0.48, 0.02, 0.88);
+        let measured = tilted.rotate_inverse(reference);
+
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(e.apply_magnetometer(measured, reference, 0.01).unwrap());
+        let pitch = e.nav_state().pva.attitude.euler().pitch;
+        assert!(pitch > 0.005, "pitch stayed at {pitch}");
+    }
+
+    #[test]
+    fn a_disturbed_magnetometer_never_inflates_the_covariance() {
+        // A vehicle parked beside something magnetic. It could go on for hours,
+        // and the filter is not what is wrong.
+        let mut e = GinsEngine::new(options()).unwrap();
+        let before = e.covariance();
+        let (_, reference) = field_seen_from(0.0);
+        let measured = Vec3::new(0.0, 1.0, 0.0);
+        for _ in 0..500 {
+            assert!(!e.apply_magnetometer(measured, reference, 0.01).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections(), 0);
+        assert_eq!(e.inflation_count(), 0);
+        assert_eq!(e.covariance(), before);
+    }
+
+    #[test]
+    fn a_good_magnetometer_reading_says_nothing_about_rejected_aids() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        for _ in 0..3 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        }
+        let (measured, reference) = field_seen_from(0.0);
+        assert!(e.apply_magnetometer(measured, reference, 0.05).unwrap());
+        assert_eq!(e.consecutive_rejections(), 3);
+    }
+
     #[test]
     fn a_locked_out_filter_inflates_its_covariance_to_recover() {
         // Persistent rejection means the covariance is wrong, not the
@@ -1938,6 +2069,19 @@ mod tests {
         assert_eq!(e.apply_height(nan, 1.0), Ok(false));
         assert_eq!(e.apply_height(25.0, -1.0), Ok(false));
         assert_eq!(e.apply_heading(F::INFINITY, 0.1), Ok(false));
+        let field = Vec3::new(0.48, 0.0, 0.88);
+        assert_eq!(e.apply_magnetometer(Vec3::ZERO, field, 0.1), Ok(false));
+        assert_eq!(e.apply_magnetometer(field, Vec3::ZERO, 0.1), Ok(false));
+        assert_eq!(
+            e.apply_magnetometer(Vec3::splat(nan), field, 0.1),
+            Ok(false)
+        );
+        assert_eq!(
+            e.apply_magnetometer(Vec3::splat(1e200), field, 0.1),
+            Ok(false)
+        );
+        assert_eq!(e.apply_magnetometer(field, field, 0.0), Ok(false));
+        assert_eq!(e.apply_magnetometer(field, field, nan), Ok(false));
         assert_eq!(e.apply_heading(0.0, nan), Ok(false));
 
         let unusable = measurement::Measurement::<3> {

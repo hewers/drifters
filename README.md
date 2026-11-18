@@ -209,7 +209,8 @@ Full diagnosis in [docs/gsdc.md](docs/gsdc.md) and
 
 **Working and validated:** core math, strapdown mechanization, 21-state ESKF,
 loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
-odometer, barometric height, magnetometer heading), protobuf serialization,
+odometer, barometric height, three-axis magnetometer with hard and soft iron
+calibration), protobuf serialization,
 bare-metal Cortex-M, KF-GINS dataset regression.
 
 **In progress:** the equivariant filter. It runs end to end on both datasets
@@ -452,7 +453,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
 - [frames.md](docs/frames.md) — coordinate frames and conventions
-- [testing.md](docs/testing.md) — fifteen layers, and what each one can prove
+- [testing.md](docs/testing.md) — sixteen layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it

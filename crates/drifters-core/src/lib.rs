@@ -35,6 +35,8 @@
 //!   implements [`Rewindable`].
 //! - [`align`] — initial alignment: the starting state and its sigmas, worked
 //!   out from the IMU and GNSS, for any engine.
+//! - [`magnetometer`] — hard and soft iron calibration of a three-axis
+//!   magnetometer, with or without an attitude to fit against.
 //!
 //! [`Estimator`]: estimator::Estimator
 //! [`Rewindable`]: rewind::Rewindable
@@ -54,6 +56,7 @@ pub mod earth;
 pub mod estimator;
 pub mod frames;
 pub mod local;
+pub mod magnetometer;
 pub mod math;
 pub mod mounting;
 pub mod rewind;

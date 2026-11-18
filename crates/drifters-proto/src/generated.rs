@@ -2485,6 +2485,25 @@ pub mod drifters_ {
                             };
                             mut_ref.decode_len_delimited(decoder)?;
                         }
+                        7u32 => {
+                            let mut_ref = loop {
+                                if let ::core::option::Option::Some(variant) = &mut self
+                                    .r#measurement
+                                {
+                                    if let AuxMeasurement_::Measurement::Magnetometer(
+                                        variant,
+                                    ) = &mut *variant {
+                                        break &mut *variant;
+                                    }
+                                }
+                                self.r#measurement = ::core::option::Option::Some(
+                                    AuxMeasurement_::Measurement::Magnetometer(
+                                        ::core::default::Default::default(),
+                                    ),
+                                );
+                            };
+                            mut_ref.decode_len_delimited(decoder)?;
+                        }
                         _ => {
                             decoder.skip_wire_value(tag.wire_type())?;
                         }
@@ -2580,6 +2599,20 @@ pub mod drifters_ {
                             break 'oneof (::core::result::Result::<usize, _>::Err(err));
                         }
                     }
+                    match ::micropb::const_map!(
+                        ::micropb::const_map!(< Magnetometer as ::micropb::MessageEncode
+                        > ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)),
+                        | size | size + 1usize
+                    ) {
+                        ::core::result::Result::Ok(size) => {
+                            if size > max_size {
+                                max_size = size;
+                            }
+                        }
+                        ::core::result::Result::Err(err) => {
+                            break 'oneof (::core::result::Result::<usize, _>::Err(err));
+                        }
+                    }
                     ::core::result::Result::Ok(max_size)
                 } {
                     ::core::result::Result::Ok(size) => {
@@ -2627,6 +2660,11 @@ pub mod drifters_ {
                         AuxMeasurement_::Measurement::MagneticHeading(val_ref) => {
                             let val_ref = &*val_ref;
                             encoder.encode_varint32(50u32)?;
+                            val_ref.encode_len_delimited(encoder)?;
+                        }
+                        AuxMeasurement_::Measurement::Magnetometer(val_ref) => {
+                            let val_ref = &*val_ref;
+                            encoder.encode_varint32(58u32)?;
                             val_ref.encode_len_delimited(encoder)?;
                         }
                     }
@@ -2687,6 +2725,14 @@ pub mod drifters_ {
                                         val_ref.compute_size(),
                                     );
                         }
+                        AuxMeasurement_::Measurement::Magnetometer(val_ref) => {
+                            let val_ref = &*val_ref;
+                            size
+                                += 1usize
+                                    + ::micropb::size::sizeof_len_record(
+                                        val_ref.compute_size(),
+                                    );
+                        }
                     }
                 }
                 size
@@ -2706,6 +2752,8 @@ pub mod drifters_ {
                 NonHolonomic(super::NonHolonomic),
                 /// Magnetometer heading.
                 MagneticHeading(super::MagneticHeading),
+                /// Three-axis magnetometer.
+                Magnetometer(super::Magnetometer),
             }
             /// Compact bitfield for tracking presence of optional and message fields
             #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -3601,6 +3649,338 @@ pub mod drifters_ {
                     }
                 }
                 size
+            }
+        }
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct Magnetometer {
+            /// The field in the body frame, hard and soft iron already removed. Only its
+            /// direction is used, so any unit will do.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#field: Vec3,
+            /// The field at this place in the local NED frame, declination included.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#reference_ned: Vec3,
+            /// One-sigma noise of the measured direction, radians. It must also cover what
+            /// remains of the calibration, which does not average out.
+            pub r#direction_std_rad: f64,
+            /// Tracks presence of optional and message fields
+            pub _has: Magnetometer_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for Magnetometer {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#field() == other.r#field());
+                ret &= (self.r#reference_ned() == other.r#reference_ned());
+                ret &= (self.r#direction_std_rad == other.r#direction_std_rad);
+                ret
+            }
+        }
+        impl Magnetometer {
+            /// Return a reference to `field` as an `Option`
+            #[inline]
+            pub fn r#field(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#field().then_some(&self.r#field)
+            }
+            /// Set the value and presence of `field`
+            #[inline]
+            pub fn set_field(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_field();
+                self.r#field = value.into();
+                self
+            }
+            /// Return a mutable reference to `field` as an `Option`
+            #[inline]
+            pub fn mut_field(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#field().then_some(&mut self.r#field)
+            }
+            /// Clear the presence of `field`
+            #[inline]
+            pub fn clear_field(&mut self) -> &mut Self {
+                self._has.clear_field();
+                self
+            }
+            /// Take the value of `field` and clear its presence
+            #[inline]
+            pub fn take_field(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#field()
+                    .then(|| ::core::mem::take(&mut self.r#field));
+                self._has.clear_field();
+                val
+            }
+            /// Builder method that sets the value of `field`. Useful for initializing the message.
+            #[inline]
+            pub fn init_field(mut self, value: Vec3) -> Self {
+                self.set_field(value);
+                self
+            }
+            /// Return a reference to `reference_ned` as an `Option`
+            #[inline]
+            pub fn r#reference_ned(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#reference_ned().then_some(&self.r#reference_ned)
+            }
+            /// Set the value and presence of `reference_ned`
+            #[inline]
+            pub fn set_reference_ned(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_reference_ned();
+                self.r#reference_ned = value.into();
+                self
+            }
+            /// Return a mutable reference to `reference_ned` as an `Option`
+            #[inline]
+            pub fn mut_reference_ned(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#reference_ned().then_some(&mut self.r#reference_ned)
+            }
+            /// Clear the presence of `reference_ned`
+            #[inline]
+            pub fn clear_reference_ned(&mut self) -> &mut Self {
+                self._has.clear_reference_ned();
+                self
+            }
+            /// Take the value of `reference_ned` and clear its presence
+            #[inline]
+            pub fn take_reference_ned(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#reference_ned()
+                    .then(|| ::core::mem::take(&mut self.r#reference_ned));
+                self._has.clear_reference_ned();
+                val
+            }
+            /// Builder method that sets the value of `reference_ned`. Useful for initializing the message.
+            #[inline]
+            pub fn init_reference_ned(mut self, value: Vec3) -> Self {
+                self.set_reference_ned(value);
+                self
+            }
+            /// Return a reference to `direction_std_rad`
+            #[inline]
+            pub fn r#direction_std_rad(&self) -> &f64 {
+                &self.r#direction_std_rad
+            }
+            /// Return a mutable reference to `direction_std_rad`
+            #[inline]
+            pub fn mut_direction_std_rad(&mut self) -> &mut f64 {
+                &mut self.r#direction_std_rad
+            }
+            /// Set the value of `direction_std_rad`
+            #[inline]
+            pub fn set_direction_std_rad(&mut self, value: f64) -> &mut Self {
+                self.r#direction_std_rad = value.into();
+                self
+            }
+            /// Builder method that sets the value of `direction_std_rad`. Useful for initializing the message.
+            #[inline]
+            pub fn init_direction_std_rad(mut self, value: f64) -> Self {
+                self.r#direction_std_rad = value.into();
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for Magnetometer {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#field;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_field();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#reference_ned;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_reference_ned();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#direction_std_rad;
+                            {
+                                let val = decoder.decode_double()?;
+                                let val_ref = &val;
+                                if *val_ref != 0.0 {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for Magnetometer {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#field() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#reference_ned()
+                    {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#direction_std_rad;
+                    if *val_ref != 0.0 {
+                        encoder.encode_varint32(25u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#field() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#reference_ned()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    let val_ref = &self.r#direction_std_rad;
+                    if *val_ref != 0.0 {
+                        size += 1usize + 8;
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `Magnetometer`
+        pub mod Magnetometer_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `field`
+                #[inline]
+                pub const fn r#field(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `field`
+                #[inline]
+                pub const fn set_field(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `field`
+                #[inline]
+                pub const fn clear_field(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `field`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_field(mut self) -> Self {
+                    self.set_field();
+                    self
+                }
+                /// Query presence of `reference_ned`
+                #[inline]
+                pub const fn r#reference_ned(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `reference_ned`
+                #[inline]
+                pub const fn set_reference_ned(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `reference_ned`
+                #[inline]
+                pub const fn clear_reference_ned(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `reference_ned`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_reference_ned(mut self) -> Self {
+                    self.set_reference_ned();
+                    self
+                }
             }
         }
         /// Estimated IMU deterministic errors. The mechanization removes these from

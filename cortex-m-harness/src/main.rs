@@ -807,6 +807,15 @@ fn main() -> ! {
     let (_, height) = measure(bottom, || engine.apply_height(21.0, 0.5));
     hprintln!("apply_height (1-dim update)    {}", height);
 
+    let (_, magnetometer) = measure(bottom, || {
+        engine.apply_magnetometer(
+            Vec3::new(0.48, 0.02, 0.88),
+            Vec3::new(0.48, 0.0, 0.88),
+            0.02,
+        )
+    });
+    hprintln!("apply_magnetometer (3-dim)     {}", magnetometer);
+
     // A GNSS fix is the widest path: split interval, 3-dim update, feedback.
     let gnss_step = fix_step(bottom, &mut engine, 0.015, false);
     hprintln!("add_imu with GNSS fix          {}", gnss_step);
@@ -825,6 +834,7 @@ fn main() -> ! {
     let peak = imu_step
         .max(zupt)
         .max(height)
+        .max(magnetometer)
         .max(gnss_step)
         .max(rewind_step);
     hprintln!("");

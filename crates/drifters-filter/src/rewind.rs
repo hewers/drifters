@@ -112,8 +112,8 @@
 //!
 //! # What is recorded, and what is not
 //!
-//! The five aiding calls this type mirrors — ZUPT, non-holonomic, wheel speed,
-//! height and heading — as an [`Aid`] each, and every GNSS fix queued through
+//! The six aiding calls this type mirrors — ZUPT, non-holonomic, wheel speed,
+//! height, heading and magnetometer — as an [`Aid`] each, and every GNSS fix queued through
 //! it. [`GinsEngine::apply_pseudoranges`] and [`GinsEngine::apply`] are not
 //! mirrored. Their inputs are a slice and a generic measurement, neither of
 //! which fits a fixed-size record, and a call that reached the inner engine
@@ -129,7 +129,9 @@ use drifters_core::frames::Lla;
 use drifters_core::math::Vec3;
 use drifters_core::rewind::{Record, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{usable_sigma, usable_sigmas, GnssFix, ImuSample, NavState};
+use drifters_core::types::{
+    has_direction, usable_sigma, usable_sigmas, GnssFix, ImuSample, NavState,
+};
 use drifters_core::F;
 
 use crate::config::{ConfigError, GinsOptions};
@@ -185,6 +187,15 @@ pub enum Aid {
         /// Its one-sigma noise, radians.
         sigma: F,
     },
+    /// [`GinsEngine::apply_magnetometer`].
+    Magnetometer {
+        /// The calibrated field in the body frame.
+        measured: Vec3,
+        /// The field here, in the local NED frame.
+        reference: Vec3,
+        /// One-sigma noise of the measured direction, radians.
+        sigma: F,
+    },
 }
 
 impl Aid {
@@ -203,6 +214,11 @@ impl Aid {
             Aid::WheelSpeed { speed, sigma } => speed.is_finite() && usable_sigma(sigma),
             Aid::Height { height, sigma } => height.is_finite() && usable_sigma(sigma),
             Aid::Heading { heading, sigma } => heading.is_finite() && usable_sigma(sigma),
+            Aid::Magnetometer {
+                measured,
+                reference,
+                sigma,
+            } => has_direction(measured) && has_direction(reference) && usable_sigma(sigma),
         }
     }
 }
@@ -222,6 +238,11 @@ impl Rewindable for GinsEngine {
             Aid::WheelSpeed { speed, sigma } => self.apply_wheel_speed(speed, sigma),
             Aid::Height { height, sigma } => self.apply_height(height, sigma),
             Aid::Heading { heading, sigma } => self.apply_heading(heading, sigma),
+            Aid::Magnetometer {
+                measured,
+                reference,
+                sigma,
+            } => self.apply_magnetometer(measured, reference, sigma),
         }
     }
 
@@ -424,6 +445,20 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     pub fn apply_heading(&mut self, heading: F, sigma: F) -> Result<bool, FilterError> {
         self.aid(Aid::Heading { heading, sigma })
     }
+
+    /// See [`GinsEngine::apply_magnetometer`].
+    pub fn apply_magnetometer(
+        &mut self,
+        measured: Vec3,
+        reference: Vec3,
+        sigma: F,
+    ) -> Result<bool, FilterError> {
+        self.aid(Aid::Magnetometer {
+            measured,
+            reference,
+            sigma,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +547,11 @@ mod tests {
         if i % 23 == 11 {
             e.heading(yaw(i), 0.02);
         }
+        if i % 29 == 13 {
+            let field = Vec3::new(0.48, 0.0, 0.88);
+            let body = Quat::from_euler(0.0, 0.0, yaw(i)).rotate_inverse(field);
+            e.magnetometer(body, field, 0.05);
+        }
         if i % 31 == 17 {
             e.nonholonomic((0.1, 0.1), 0.5);
         }
@@ -520,12 +560,13 @@ mod tests {
         }
     }
 
-    /// The five mirrored aids, so one scenario drives both an engine and a
+    /// The mirrored aids, so one scenario drives both an engine and a
     /// rewind engine.
     trait Aided {
         fn zupt(&mut self, sigma: Vec3);
         fn height(&mut self, height: F, sigma: F);
         fn heading(&mut self, heading: F, sigma: F);
+        fn magnetometer(&mut self, measured: Vec3, reference: Vec3, sigma: F);
         fn nonholonomic(&mut self, sigma: (F, F), min_speed: F);
         fn wheel_speed(&mut self, speed: F, sigma: F);
     }
@@ -539,6 +580,9 @@ mod tests {
         }
         fn heading(&mut self, heading: F, sigma: F) {
             self.apply_heading(heading, sigma).unwrap();
+        }
+        fn magnetometer(&mut self, measured: Vec3, reference: Vec3, sigma: F) {
+            self.apply_magnetometer(measured, reference, sigma).unwrap();
         }
         fn nonholonomic(&mut self, sigma: (F, F), min_speed: F) {
             self.apply_nonholonomic(sigma, min_speed).unwrap();
@@ -557,6 +601,9 @@ mod tests {
         }
         fn heading(&mut self, heading: F, sigma: F) {
             self.apply_heading(heading, sigma).unwrap();
+        }
+        fn magnetometer(&mut self, measured: Vec3, reference: Vec3, sigma: F) {
+            self.apply_magnetometer(measured, reference, sigma).unwrap();
         }
         fn nonholonomic(&mut self, sigma: (F, F), min_speed: F) {
             self.apply_nonholonomic(sigma, min_speed).unwrap();

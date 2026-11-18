@@ -483,11 +483,18 @@ impl<C: Covariance> EqfEngine<C> {
     ///
     /// The magnetometer's rotation relative to the IMU is a state, estimated
     /// from these, so the sensor needs no extrinsic calibration first. Soft
-    /// and hard iron are not modelled; remove them before calling.
+    /// and hard iron are not modelled. Remove them before calling, which
+    /// [`drifters_core::magnetometer`] is for.
     ///
-    /// Returns `false` when the reading failed its gate, or when an argument
-    /// is not usable — a zero or non-finite vector, a non-positive sigma —
-    /// and nothing was applied.
+    /// A rejection here does not count toward inflating the covariance, and an
+    /// accepted reading does not clear the count. Other aids are turned away
+    /// when the filter has become too sure of itself, and a magnetometer is
+    /// usually turned away because something near it has moved the field.
+    ///
+    /// Returns `false` when the reading failed its gate, when it is more than
+    /// a quarter turn from where the field should be, or when an argument is
+    /// not usable — a zero or non-finite vector, a non-positive sigma — and
+    /// nothing was applied.
     pub fn apply_magnetometer(
         &mut self,
         measured: Vec3,
@@ -504,10 +511,16 @@ impl<C: Covariance> EqfEngine<C> {
         }
         let north = reference.normalized();
         let transported = transported_direction(&self.filter.x, measured.normalized());
+        // The chart below is the sine of the angle, which folds over at a
+        // quarter turn: a reading exactly opposite would look like a perfect
+        // one, and be applied as though it were.
+        if north.dot(transported) <= 0.0 {
+            return Ok(false);
+        }
         let c = direction_output_matrix(north, transported);
         let r = Vec3::splat(sigma).squared().to_diag();
         // The innovation is in the chart δ(y) = ᴳm^ y, and δ(ᴳm) = 0.
-        self.apply(
+        self.update(
             &c,
             north.skew() * transported,
             &r,
@@ -525,31 +538,43 @@ impl<C: Covariance> EqfEngine<C> {
         noise: &Mat3,
         gate: Option<F>,
     ) -> Result<bool, FilterError> {
+        let accepted = self.update(c, innovation, noise, gate)?;
+        if accepted {
+            // The counter is about gated measurements. An ungated one being
+            // applied says nothing about whether the gated ones would now pass.
+            if gate.is_some() {
+                self.consecutive_rejections = 0;
+            }
+        } else {
+            self.consecutive_rejections = self.consecutive_rejections.saturating_add(1);
+            let limit = self.options.max_consecutive_rejections;
+            if limit > 0 && self.consecutive_rejections >= limit {
+                // The measurements are not the problem; the covariance is.
+                self.filter.inflate(self.options.rejection_inflation);
+                self.consecutive_rejections = 0;
+                self.inflations = self.inflations.saturating_add(1);
+            }
+        }
+        Ok(accepted)
+    }
+
+    /// One update through the gate, with no accounting.
+    fn update(
+        &mut self,
+        c: &OutputMatrix,
+        innovation: Vec3,
+        noise: &Mat3,
+        gate: Option<F>,
+    ) -> Result<bool, FilterError> {
         if !self.filter.sigma.all_finite() {
             return Err(FilterError::Diverged);
         }
         match self.filter.update_gated(c, innovation, noise, gate) {
             Verdict::Applied(nis) => {
                 self.last_nis = nis;
-                // The counter is about gated measurements. An ungated one
-                // being applied says nothing about whether the gated ones
-                // would now pass.
-                if gate.is_some() {
-                    self.consecutive_rejections = 0;
-                }
                 Ok(true)
             }
-            Verdict::Rejected(_) => {
-                self.consecutive_rejections = self.consecutive_rejections.saturating_add(1);
-                let limit = self.options.max_consecutive_rejections;
-                if limit > 0 && self.consecutive_rejections >= limit {
-                    // The measurements are not the problem; the covariance is.
-                    self.filter.inflate(self.options.rejection_inflation);
-                    self.consecutive_rejections = 0;
-                    self.inflations = self.inflations.saturating_add(1);
-                }
-                Ok(false)
-            }
+            Verdict::Rejected(_) => Ok(false),
             Verdict::Singular => Err(FilterError::SingularInnovation),
         }
     }
@@ -1366,10 +1391,25 @@ mod tests {
         );
     }
 
-    /// A magnetometer reading a quarter turn from where the field is: an
-    /// innovation of order one against a calibration prior of 0.1 rad.
+    /// A magnetometer reading well away from where the field is: an innovation
+    /// of order one against a calibration prior of 0.1 rad.
     fn absurd_reading() -> (Vec3, Vec3) {
-        (Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
+        (Vec3::new(1.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
+    }
+
+    /// An engine moving at 5 m/s, which a fix saying it is still will be
+    /// rejected against.
+    fn moving_engine(o: EqfOptions) -> EqfEngine {
+        EqfEngine::new(o.with_initial_state(origin(), Ned::new(5.0, 0.0, 0.0), Euler::default()))
+            .unwrap()
+    }
+
+    /// `count` velocity fixes the gate turns away.
+    fn rejected_fixes(e: &mut EqfEngine, mut t: F, count: usize) -> F {
+        for _ in 0..count {
+            t = step_with_velocity(e, t, Ned::ZERO, Vec3::splat(0.05));
+        }
+        t
     }
 
     #[test]
@@ -1377,16 +1417,18 @@ mod tests {
         // Persistent rejection means the covariance is wrong, not the
         // measurements. Without recovery the filter would reject every
         // subsequent update forever.
-        let mut e = EqfEngine::new(options()).unwrap();
-        let (measured, reference) = absurd_reading();
-        for _ in 0..9 {
-            assert!(!e.apply_magnetometer(measured, reference, 0.02).unwrap());
-        }
+        let mut e = moving_engine(options());
+        let mut free = moving_engine(EqfOptions {
+            max_consecutive_rejections: 0,
+            ..options()
+        });
+        let t = rejected_fixes(&mut e, 0.0, 9);
+        rejected_fixes(&mut free, 0.0, 9);
         assert_eq!(e.consecutive_rejections(), 9);
         assert_eq!(e.inflation_count(), 0);
 
-        let before = e.std_deviations();
-        assert!(!e.apply_magnetometer(measured, reference, 0.02).unwrap());
+        rejected_fixes(&mut e, t, 1);
+        rejected_fixes(&mut free, t, 1);
         assert_eq!(
             e.inflation_count(),
             1,
@@ -1398,38 +1440,68 @@ mod tests {
             "counter restarts after inflating"
         );
         // A factor of four on the covariance is two on every sigma, physical
-        // ones included: the map between the charts is linear.
+        // ones included: the map between the charts is linear. The comparison
+        // is with a twin that never inflated, and the half-step of propagation
+        // after the fix is why it is not exact.
         let after = e.std_deviations();
+        let twin = free.std_deviations();
         for i in 0..DIM {
-            assert_relative_eq!(after[i], 2.0 * before[i], max_relative = 1e-9);
+            assert_relative_eq!(after[i], 2.0 * twin[i], max_relative = 0.02);
         }
     }
 
     #[test]
     fn inflation_can_be_disabled() {
-        let o = EqfOptions {
+        let mut e = moving_engine(EqfOptions {
             max_consecutive_rejections: 0,
             ..options()
-        };
-        let mut e = EqfEngine::new(o).unwrap();
+        });
+        rejected_fixes(&mut e, 0.0, 30);
+        assert_eq!(e.consecutive_rejections(), 30);
+        assert_eq!(e.inflation_count(), 0);
+    }
+
+    #[test]
+    fn an_accepted_gated_measurement_clears_the_rejection_counter() {
+        let mut e = moving_engine(options());
+        let t = rejected_fixes(&mut e, 0.0, 1);
+        assert_eq!(e.consecutive_rejections(), 1);
+        step_with_velocity(&mut e, t, Ned::new(5.0, 0.0, 0.0), Vec3::splat(0.05));
+        assert_eq!(e.consecutive_rejections(), 0);
+    }
+
+    #[test]
+    fn a_disturbed_magnetometer_never_inflates_the_covariance() {
+        // A vehicle parked beside something magnetic: it could go on for hours.
+        let mut e = EqfEngine::new(options()).unwrap();
         let before = e.covariance();
         let (measured, reference) = absurd_reading();
-        for _ in 0..50 {
+        for _ in 0..500 {
             assert!(!e.apply_magnetometer(measured, reference, 0.02).unwrap());
         }
+        assert_eq!(e.consecutive_rejections(), 0);
         assert_eq!(e.inflation_count(), 0);
         assert_eq!(e.covariance(), before);
     }
 
     #[test]
-    fn an_accepted_gated_measurement_clears_the_rejection_counter() {
+    fn a_good_magnetometer_reading_says_nothing_about_rejected_fixes() {
+        let mut e = moving_engine(options());
+        rejected_fixes(&mut e, 0.0, 3);
+        let field = Vec3::new(0.48, 0.0, 0.88);
+        assert!(e.apply_magnetometer(field, field, 0.02).unwrap());
+        assert_eq!(e.consecutive_rejections(), 3);
+    }
+
+    #[test]
+    fn a_reading_opposite_the_field_is_not_taken_for_a_perfect_one() {
+        // The sine of the angle is zero there, as it is for a perfect reading.
         let mut e = EqfEngine::new(options()).unwrap();
-        let (measured, reference) = absurd_reading();
-        assert!(!e.apply_magnetometer(measured, reference, 0.02).unwrap());
-        assert_eq!(e.consecutive_rejections(), 1);
-        // The field exactly where the filter expects it.
-        assert!(e.apply_magnetometer(reference, reference, 0.02).unwrap());
-        assert_eq!(e.consecutive_rejections(), 0);
+        let before = e.covariance();
+        let field = Vec3::new(0.48, 0.0, 0.88);
+        assert!(!e.apply_magnetometer(-field, field, 0.02).unwrap());
+        assert_eq!(e.covariance(), before);
+        assert!(e.last_nis().is_none());
     }
 
     // --- magnetometer ----------------------------------------------------

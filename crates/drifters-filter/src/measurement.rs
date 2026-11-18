@@ -297,7 +297,8 @@ pub fn height(pva: &Pva, height: F, sigma: F) -> Measurement<1> {
 ///
 /// `heading` is the **true** heading in radians, clockwise from north — the
 /// caller must already have applied magnetic declination and any hard/soft-iron
-/// calibration. Feeding magnetic heading in directly produces a bias equal to
+/// calibration. With the three field components to hand, [`magnetometer`] is
+/// the better measurement. Feeding magnetic heading in directly produces a bias equal to
 /// the local declination, which reaches tens of degrees at high latitudes.
 ///
 /// The innovation is wrapped to `(−π, π]` so that a heading straddling north
@@ -318,6 +319,77 @@ pub fn magnetic_heading(pva: &Pva, heading: F, sigma: F) -> Measurement<1> {
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
         held: HeldStates::NONE,
+    }
+}
+
+/// Three-axis magnetometer update.
+///
+/// `measured` is the field in the **body** frame, with hard and soft iron
+/// already removed (see [`drifters_core::magnetometer`]), and `reference` is the
+/// field here in the NED frame, declination included. Only their directions are
+/// used, so neither needs particular units, and `sigma` is the noise of the
+/// measured direction in radians.
+///
+/// Unlike [`magnetic_heading`] this holds at any attitude: nothing is assumed
+/// about roll and pitch being small, and the reading says which way the vehicle
+/// is turned about every axis but the field itself.
+///
+/// The innovation is the angle from the measured direction to the predicted
+/// one, as a vector in the plane tangent at the prediction. Its length is the
+/// angle itself, so a large heading error under a wide covariance is judged
+/// fairly by the gate. The plain difference of the two unit vectors would have
+/// a radial part growing as `1 − cos θ` that no state can explain, and a filter
+/// that really was 25° out would refuse the reading however unsure it was.
+///
+/// A direction has two degrees of freedom, so the gate is the two-degree one.
+/// `sigma` must also cover what is left of the calibration, which does not
+/// average out the way noise does.
+///
+/// Every state correlated with attitude is corrected, roll and pitch included.
+/// Holding tilt back was tried and flew worse, with and without a disturbance:
+/// the part of the residual tilt would have explained reaches the gyro biases
+/// regardless. `docs/testing.md` has the numbers. What protects the solution
+/// from a wrong field is a calibration that found the sensor's rotation
+/// ([`AidedMagFit`]) and a check of the strength before the reading is offered
+/// ([`MagFit::is_plausible`]).
+///
+/// [`AidedMagFit`]: drifters_core::magnetometer::AidedMagFit
+/// [`MagFit::is_plausible`]: drifters_core::magnetometer::MagFit::is_plausible
+pub fn magnetometer(pva: &Pva, measured: Vec3, reference: Vec3, sigma: F) -> Measurement<3> {
+    let north = reference.normalized();
+    let to_body = pva.attitude.dcm.transpose();
+    let predicted = to_body * north;
+    let mut jacobian = Matrix::<3, N_STATE>::zeros();
+    jacobian.set_block(0, PHI_ID, &to_body.matmul(&north.skew()).scaled(-1.0));
+    Measurement {
+        innovation: direction_residual(predicted, measured.normalized()).into(),
+        jacobian,
+        noise: Vec3::splat(sigma).squared().to_diag(),
+        gate: Some(crate::eskf::chi_squared::P999[2]),
+        held: HeldStates::NONE,
+    }
+}
+
+/// The tangent vector at the unit vector `p` pointing directly away from the
+/// unit vector `m`, as long as the angle between them.
+fn direction_residual(p: Vec3, m: Vec3) -> Vec3 {
+    let cosine = p.dot(m);
+    let tangent = p * cosine - m;
+    let sine = tangent.norm();
+    if sine > 1e-9 {
+        tangent * (sine.atan2(cosine) / sine)
+    } else if cosine > 0.0 {
+        // The ratio of the angle to its sine is one to rounding here.
+        tangent
+    } else {
+        // Exactly opposite: every direction is as far as any other, and the
+        // size is what matters. One of these two axes is not along `p`.
+        let axis = if p.x.abs() < 0.6 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        p.cross(axis).normalized() * core::f64::consts::PI
     }
 }
 
@@ -650,6 +722,76 @@ mod tests {
         // Taken as aligned, the same drive reads as a metre per second of slip.
         let z = nonholonomic(&pva, (0.1, 0.1)).innovation.to_column();
         assert!(z[0].abs() > 0.9, "{}", z[0]);
+    }
+
+    /// A field with a realistic dip, and an attitude with nothing level in it.
+    fn magnetometer_case() -> (Pva, Vec3) {
+        let euler = Euler {
+            roll: 0.5,
+            pitch: -0.3,
+            yaw: 2.0,
+        };
+        (state_with(Ned::ZERO, euler), Vec3::new(21.0, 1.5, 44.0))
+    }
+
+    /// The reading a perfect sensor gives when the attitude is the estimate
+    /// turned by `phi`, using the convention of this module.
+    fn reading_with_error(pva: &Pva, reference: Vec3, phi: Vec3) -> Vec3 {
+        let truth = drifters_core::math::Quat::from_rotation_vector(phi) * pva.attitude.quat;
+        truth.rotate_inverse(reference.normalized())
+    }
+
+    #[test]
+    fn a_perfect_reading_leaves_no_magnetometer_innovation() {
+        let (pva, reference) = magnetometer_case();
+        // In units of its own, and the magnitude must not matter.
+        let measured = pva.attitude.quat.rotate_inverse(reference) * 3.0;
+        let m = magnetometer(&pva, measured, reference, 0.02);
+        assert!(Vec3::from(m.innovation).norm() < 1e-12);
+    }
+
+    #[test]
+    fn the_magnetometer_jacobian_is_the_derivative_of_its_innovation() {
+        let (pva, reference) = magnetometer_case();
+        let m = magnetometer(&pva, Vec3::new(1.0, 0.0, 0.0), reference, 0.02);
+        let step = 1e-6;
+        for axis in 0..3 {
+            let mut phi = Vec3::ZERO;
+            phi[axis] = step;
+            let plus = reading_with_error(&pva, reference, phi);
+            let minus = reading_with_error(&pva, reference, -phi);
+            let high = Vec3::from(magnetometer(&pva, plus, reference, 0.02).innovation);
+            let low = Vec3::from(magnetometer(&pva, minus, reference, 0.02).innovation);
+            let slope = (high - low) * (0.5 / step);
+            for row in 0..3 {
+                assert_relative_eq!(m.jacobian[(row, PHI_ID + axis)], slope[row], epsilon = 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn the_magnetometer_innovation_is_as_long_as_the_angle_at_any_angle() {
+        let (pva, reference) = magnetometer_case();
+        let predicted = pva.attitude.quat.rotate_inverse(reference.normalized());
+        let axis = predicted.cross(Vec3::new(0.0, 1.0, 0.0)).normalized();
+        for degrees in [0.5_f64, 25.0, 60.0, 120.0, 179.0] {
+            let angle = degrees.to_radians();
+            let measured =
+                drifters_core::math::Quat::from_rotation_vector(axis * angle).rotate(predicted);
+            let y = Vec3::from(magnetometer(&pva, measured, reference, 0.02).innovation);
+            assert_relative_eq!(y.norm(), angle, epsilon = 1e-9);
+            // In the plane the attitude can reach, so no part of it is left
+            // for the gate to hold against the state.
+            assert!(y.dot(predicted).abs() < 1e-9, "at {degrees} degrees");
+        }
+    }
+
+    #[test]
+    fn a_reading_opposite_the_prediction_has_the_full_half_turn_of_innovation() {
+        let (pva, reference) = magnetometer_case();
+        let opposite = pva.attitude.quat.rotate_inverse(reference) * -1.0;
+        let y = Vec3::from(magnetometer(&pva, opposite, reference, 0.02).innovation);
+        assert_relative_eq!(y.norm(), core::f64::consts::PI, epsilon = 1e-9);
     }
 
     #[test]

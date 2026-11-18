@@ -59,6 +59,8 @@ message AuxMeasurement {
     NonHolonomic non_holonomic = 5;
     // Magnetometer heading.
     MagneticHeading magnetic_heading = 6;
+    // Three-axis magnetometer.
+    Magnetometer magnetometer = 7;
   }
 }
 
@@ -99,4 +101,15 @@ message MagneticHeading {
   // equal to the local declination, which reaches tens of degrees.
   double heading_rad = 1;
   double heading_std_rad = 2;
+}
+
+message Magnetometer {
+  // The field in the body frame, hard and soft iron already removed. Only its
+  // direction is used, so any unit will do.
+  Vec3 field = 1;
+  // The field at this place in the local NED frame, declination included.
+  Vec3 reference_ned = 2;
+  // One-sigma noise of the measured direction, radians. It must also cover what
+  // remains of the calibration, which does not average out.
+  double direction_std_rad = 3;
 }

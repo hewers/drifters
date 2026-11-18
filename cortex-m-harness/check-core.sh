@@ -54,7 +54,7 @@ rm -f "$reports/$core"-*
 #   `f32-covariance`, measured at 7 956 B: fitting where 21 states do not is the
 #   whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
-#   every configuration. Measured at 15 448 B dense and 14 064 B factored.
+#   every configuration. Measured at 15 520 B dense and 14 112 B factored.
 # - 8 KiB for the initial alignment, which runs before an engine exists and so
 #   is not added to either figure above.
 #

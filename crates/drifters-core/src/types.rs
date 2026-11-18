@@ -118,6 +118,14 @@ pub fn usable_sigmas(sigma: Vec3) -> bool {
     usable_sigma(sigma.x) && usable_sigma(sigma.y) && usable_sigma(sigma.z)
 }
 
+/// True when `v` has a direction: finite, not zero, and with a length that
+/// survives being squared, so that it can be normalised.
+#[inline]
+pub fn has_direction(v: Vec3) -> bool {
+    let squared = v.norm_squared();
+    squared > 0.0 && squared.is_finite()
+}
+
 /// A GNSS position fix, the loosely-coupled measurement.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
