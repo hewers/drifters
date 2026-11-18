@@ -26,13 +26,23 @@
 //! [`crate::range`] share a reference satellite, so theirs is dense. Passing
 //! correlated rows in one at a time gives a wrong answer, quietly.
 //!
+//! # Two time updates
+//!
+//! [`Ud::predict`] is Thornton's time update over the whole state.
+//! [`Ud::predict_partitioned`] is the one the filter runs: it relies on every
+//! state from [`N_NAV`] up being an IMU error that depends only on itself, runs
+//! Gram-Schmidt over the navigation states alone, and adds each IMU error's
+//! noise with a rank-one update. The factors are the same to rounding.
+//!
 //! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 
 use drifters_core::estimator::MAX_VARIANCE;
 use drifters_core::math::{Cholesky, Matrix};
 use drifters_core::F;
 
-use crate::state::{NoiseMatrix, StateMatrix, StateVector, N_NOISE, N_STATE};
+use crate::state::{
+    NavNoiseMatrix, NoiseMatrix, StateMatrix, StateVector, N_NAV, N_NAV_NOISE, N_NOISE, N_STATE,
+};
 
 /// What the covariance factors are stored and computed in.
 ///
@@ -456,6 +466,157 @@ impl Ud {
         }
         self.orthogonalise(&mut w, &weight)
     }
+
+    /// [`Self::predict`] for a transition with the filter's own structure,
+    /// doing Gram-Schmidt over the navigation states only.
+    ///
+    /// Every state from [`N_NAV`] up is a Gauss-Markov IMU error, so
+    /// `Φ = [Φxx Φxp; 0 M]` with `M` diagonal, and the process noise is block
+    /// diagonal. Writing `Φ = Φ₂ Φ₁` with `Φ₁ = [Φxx Φxp; 0 I]` and
+    /// `Φ₂ = diag(I, M)` splits the update in two:
+    ///
+    /// 1. `Φ₁ P Φ₁ᵀ + Q_x`. The parameter factors pass through untouched, the
+    ///    parameter columns of `U` above them become `Φxx Uxp + Φxp Upp`, and
+    ///    the navigation block is Gram-Schmidt over `[Φxx Uxx, Gxx]`: nine rows
+    ///    and fifteen columns, against twenty-one and thirty-nine.
+    /// 2. `Φ₂ (·) Φ₂ᵀ + Q_p`. Scaling a parameter's row by its `m` is a
+    ///    rescaling of its column and its `D`, and its noise is `q eₖ eₖᵀ`, one
+    ///    [`Self::add_rank_one`].
+    ///
+    /// This is the partitioned UDU time update in Bierman's *Factorization
+    /// Methods for Discrete Sequential Estimation* and in NASA's *Navigation
+    /// Filter Best Practices* (NASA/TP-2018-219822, §8.3.2).
+    /// `a_partitioned_time_update_matches_the_full_one` pins it to
+    /// [`Self::predict`].
+    ///
+    /// `mapping` is only the navigation block of `G`, the 9×6 that
+    /// [`crate::eskf::nav_noise_mapping`] builds. Parameter `k` is taken to be
+    /// driven by channel `N_NAV_NOISE + k` with unit gain, as
+    /// [`crate::eskf::noise_mapping`] has it. `density` covers every channel.
+    ///
+    /// The structure is assumed, not checked, and anything in `transition`
+    /// outside it is ignored: every entry below the navigation rows other than
+    /// the diagonal. `the_parameter_states_are_self_contained` checks that the
+    /// filter's model has this shape, so a state coupled to the others fails a
+    /// test before its coupling can be dropped here.
+    ///
+    /// `None` if a pivot goes non-positive, a parameter's `m` is zero or not
+    /// finite, a parameter's density is negative or not finite, or the result
+    /// is not [usable](Self::is_usable). `m = 0` is refused where
+    /// [`Self::predict`] would succeed, because a column cannot be rescaled by
+    /// it: it needs a correlation time exactly equal to the interval. The
+    /// factors are then exactly what they were.
+    pub fn predict_partitioned(
+        &mut self,
+        transition: &StateMatrix,
+        mapping: &NavNoiseMatrix,
+        density: &[F; N_NOISE],
+    ) -> Option<()> {
+        // The steps below write as they go, which is what keeps their working
+        // storage small, so all-or-nothing comes from this one copy.
+        let before = *self;
+        if self
+            .partitioned_steps(transition, mapping, density)
+            .is_none()
+            || !self.is_usable()
+        {
+            *self = before;
+            return None;
+        }
+        Some(())
+    }
+
+    /// The body of [`Self::predict_partitioned`], which undoes it on `None`.
+    fn partitioned_steps(
+        &mut self,
+        transition: &StateMatrix,
+        mapping: &NavNoiseMatrix,
+        density: &[F; N_NOISE],
+    ) -> Option<()> {
+        const WIDTH: usize = (N_NAV + N_NAV_NOISE).next_multiple_of(LANES);
+
+        // Sub-problem one, navigation block: W = [Φxx Uxx, Gxx], built from the
+        // old factors before anything is overwritten.
+        let mut w = [[0.0 as Scalar; WIDTH]; N_NAV];
+        for (i, row) in w.iter_mut().enumerate() {
+            let phi_row: [Scalar; N_NAV] =
+                core::array::from_fn(|k| transition.data[i][k] as Scalar);
+            for j in 0..N_NAV {
+                let stored = self.column_of(j);
+                let mut acc = phi_row[j];
+                for (a, b) in phi_row.iter().zip(stored.iter()) {
+                    acc += a * b;
+                }
+                row[j] = acc;
+            }
+            for c in 0..N_NAV_NOISE {
+                row[N_NAV + c] = mapping[(i, c)] as Scalar;
+            }
+        }
+        let mut weight = [0.0 as Scalar; WIDTH];
+        weight[..N_NAV].copy_from_slice(&self.diagonal[..N_NAV]);
+        for (slot, d) in weight[N_NAV..N_NAV + N_NAV_NOISE].iter_mut().zip(density) {
+            *slot = *d as Scalar;
+        }
+
+        // Sub-problem one, parameter columns: Uxp ← Φxx Uxp + Φxp Upp. Column
+        // `j` holds rows `0..j` with an implied one at `j`, and only its
+        // navigation rows change, so each is computed from its own old values.
+        for j in N_NAV..N_STATE {
+            let mut fresh = [0.0 as Scalar; N_NAV];
+            let stored = self.column_of(j);
+            for (out, phi) in fresh.iter_mut().zip(transition.data.iter()) {
+                let mut acc = phi.get(j).copied().unwrap_or(0.0) as Scalar;
+                for (u, p) in stored.iter().zip(phi.iter()) {
+                    acc += *p as Scalar * u;
+                }
+                *out = acc;
+            }
+            for (slot, value) in self.column_of_mut(j).iter_mut().zip(fresh.iter()) {
+                *slot = *value;
+            }
+        }
+
+        // Only now: Gram-Schmidt writes the navigation block of `U` and `D`.
+        self.orthogonalise(&mut w, &weight)?;
+
+        // Sub-problem two. `diag(I, M)` scales parameter row `i` by `mᵢ`; with
+        // the unit diagonal restored, entry `(i, j)` gains `mᵢ / mⱼ` and `Dⱼ`
+        // gains `mⱼ²`, where a navigation row's `m` is one. A negative `m` is
+        // algebraically fine, since only ratios and squares of it are used. One
+        // that is zero or not finite turns the column's navigation rows, whose
+        // own `m` is one, into something not finite, and `is_usable` refuses
+        // that.
+        let mut m = [1.0 as Scalar; N_STATE];
+        for (i, (slot, row)) in m.iter_mut().zip(transition.data.iter()).enumerate() {
+            if i >= N_NAV {
+                *slot = row.get(i).copied()? as Scalar;
+            }
+        }
+        for j in N_NAV..N_STATE {
+            let mj = m.get(j).copied()?;
+            let inverse = 1.0 / mj;
+            for (u, mi) in self.column_of_mut(j).iter_mut().zip(m.iter()) {
+                *u *= mi * inverse;
+            }
+            *self.diagonal.get_mut(j)? *= mj * mj;
+        }
+
+        // And each parameter's own noise, `qₖ eₖ eₖᵀ`, from its own channel at
+        // unit gain. `add_rank_one` ignores what it cannot use, which would
+        // pass a poisoned density off as no noise, so that is refused here.
+        let mut direction = StateVector::zeros();
+        for (k, q) in density.iter().skip(N_NAV_NOISE).enumerate() {
+            if !q.is_finite() || *q < 0.0 {
+                return None;
+            }
+            let entry = direction.data.get_mut(N_NAV + k)?.first_mut()?;
+            *entry = 1.0;
+            self.add_rank_one(*q, &direction);
+            *direction.data.get_mut(N_NAV + k)?.first_mut()? = 0.0;
+        }
+        Some(())
+    }
 }
 
 /// Dot product of two equal-length arrays, accumulated in [`LANES`]
@@ -590,9 +751,13 @@ impl Ud {
     /// `self` is written only after every pivot has succeeded and the result
     /// has been found to fit. A failure partway must not leave half of one
     /// covariance and half of another looking like a whole one.
-    fn orthogonalise<const W: usize>(
+    ///
+    /// `R` rows rather than always `N_STATE`: [`Self::predict_partitioned`]
+    /// sweeps the navigation block alone, and the rows it passes are the
+    /// leading ones of `U` and `D`.
+    fn orthogonalise<const R: usize, const W: usize>(
         &mut self,
-        w: &mut [[Scalar; W]; N_STATE],
+        w: &mut [[Scalar; W]; R],
         weight: &[Scalar; W],
     ) -> Option<()> {
         let mut pivot = [0.0 as Scalar; W];
@@ -652,8 +817,11 @@ fn pivoted<const W: usize>(row: &[Scalar; W], i: usize) -> Option<(&[Scalar], Sc
 /// Whether the factors [`Ud::orthogonalise`] left in `w` are within
 /// [`MAX_VARIANCE`]: `Pᵢᵢ = Σₖ Uᵢₖ² Dₖ` over `k ≥ i`. Every `D` here is positive,
 /// so a non-finite `U` makes its sum non-finite and is caught by the same test.
-fn orthogonalised_fits<const W: usize>(w: &[[Scalar; W]; N_STATE]) -> bool {
-    let mut variances = [0.0 as Scalar; N_STATE];
+///
+/// Over fewer rows than the state this is a lower bound on each variance, so
+/// what it refuses could not have fitted.
+fn orthogonalised_fits<const R: usize, const W: usize>(w: &[[Scalar; W]; R]) -> bool {
+    let mut variances = [0.0 as Scalar; R];
     for (k, row) in w.iter().enumerate() {
         let Some((column, d)) = pivoted(row, k) else {
             return false;
@@ -1170,6 +1338,236 @@ mod tests {
         assert!((p[(N_STATE - 1, N_STATE - 1)] - 2.0).abs() < 1.0e-6 * SLACK);
         assert!((p[(0, N_STATE - 1)] - 1.0).abs() < 1.0e-6 * SLACK);
         assert!((p[(0, 0)] - 1.5).abs() < 1.0e-6 * SLACK);
+    }
+
+    /// A transition, mapping and densities with the shape the filter's model
+    /// has: general dynamics for the navigation block, a navigation-to-
+    /// parameter coupling, and parameters that decay on their own and are
+    /// driven by their own channel. Everything else is zero.
+    ///
+    /// The full mapping, for [`Ud::predict`] and the dense reference;
+    /// [`Ud::predict_partitioned`] gets its navigation block.
+    fn structured_model(seed: u64) -> (StateMatrix, NoiseMatrix, [F; N_NOISE]) {
+        let mut rng = Rng(seed);
+        let mut phi = StateMatrix::identity();
+        for i in 0..N_NAV {
+            for j in 0..N_STATE {
+                phi[(i, j)] += 0.02 * rng.signed();
+            }
+        }
+        for i in N_NAV..N_STATE {
+            // Each parameter its own decay, so a mix-up between `mᵢ` and `mⱼ`
+            // cannot hide behind them being equal, as the filter's are.
+            phi[(i, i)] = 1.0 - 0.01 * (1.0 + rng.next());
+        }
+        let mut g = NoiseMatrix::zeros();
+        for i in 0..N_NAV {
+            for c in 0..N_NAV_NOISE {
+                g[(i, c)] = rng.signed();
+            }
+        }
+        // Unit gain from each parameter's channel, which is what the
+        // partitioned update assumes; the densities vary instead.
+        for k in 0..N_STATE - N_NAV {
+            g[(N_NAV + k, N_NAV_NOISE + k)] = 1.0;
+        }
+        let mut density = [0.0; N_NOISE];
+        for (k, d) in density.iter_mut().enumerate() {
+            *d = 0.01 * (k as F + 1.0) * (0.5 + rng.next());
+        }
+        (phi, g, density)
+    }
+
+    /// `Φ P Φᵀ + G diag(q) Gᵀ`, multiplied out.
+    fn dense_time_update(
+        p: &StateMatrix,
+        phi: &StateMatrix,
+        g: &NoiseMatrix,
+        density: &[F; N_NOISE],
+    ) -> StateMatrix {
+        let mut out = StateMatrix::zeros();
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                let mut acc = 0.0;
+                for a in 0..N_STATE {
+                    for b in 0..N_STATE {
+                        acc += phi[(i, a)] * p[(a, b)] * phi[(j, b)];
+                    }
+                }
+                for (c, q) in density.iter().enumerate() {
+                    acc += g[(i, c)] * q * g[(j, c)];
+                }
+                out[(i, j)] = acc;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_partitioned_time_update_matches_the_full_one() {
+        // The claim: the same factorisation as Thornton's full sweep, reached
+        // with Gram-Schmidt over nine rows instead of all of them. Checked
+        // against both the full sweep and the dense product, over covariances
+        // whose scales span four decades, so a parameter block that the
+        // partition gets wrong cannot hide below the navigation one.
+        for seed in [3u64, 19, 404] {
+            let p = covariance(seed, 1.0e4);
+            let (phi, g, density) = structured_model(seed ^ 0x5eed);
+            let dense = dense_time_update(&p, &phi, &g, &density);
+
+            let mut full = Ud::from_covariance(&p).unwrap();
+            full.predict(&phi, &g, &density).expect("well posed");
+            let mut partitioned = Ud::from_covariance(&p).unwrap();
+            partitioned
+                .predict_partitioned(&phi, &g.block(0, 0), &density)
+                .expect("well posed");
+
+            let against_dense = worst_relative(&dense, &partitioned.to_covariance());
+            assert!(
+                against_dense < 1.0e-10 * SLACK,
+                "seed {seed}: differs from the dense product by {against_dense:.2e}"
+            );
+            let against_full = worst_relative(&full.to_covariance(), &partitioned.to_covariance());
+            assert!(
+                against_full < 1.0e-11 * SLACK,
+                "seed {seed}: differs from the full sweep by {against_full:.2e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_partitioned_time_update_survives_a_long_run() {
+        // Rounding that a single step cannot show: a thousand steps through
+        // the same model, against the full sweep run alongside.
+        //
+        // The navigation block is made contractive first. The random one has
+        // eigenvalues outside the unit circle, and a thousand steps of that
+        // grows the covariance past what `f32` holds, in both sweeps alike,
+        // which would test overflow rather than rounding.
+        let p = covariance(77, 1.0e3);
+        let (mut phi, g, density) = structured_model(78);
+        let mut rng = Rng(79);
+        for i in 0..N_NAV {
+            for j in 0..N_NAV {
+                let diagonal = if i == j { 0.97 } else { 0.0 };
+                // Gershgorin: |λ| ≤ 0.97 + 9 · 0.003 < 1.
+                phi[(i, j)] = diagonal + 0.003 * rng.signed();
+            }
+        }
+        let mut full = Ud::from_covariance(&p).unwrap();
+        let mut partitioned = full;
+        for _ in 0..1_000 {
+            full.predict(&phi, &g, &density).unwrap();
+            partitioned
+                .predict_partitioned(&phi, &g.block(0, 0), &density)
+                .unwrap();
+        }
+        assert!(partitioned.is_healthy());
+        let worst = worst_relative(&full.to_covariance(), &partitioned.to_covariance());
+        assert!(worst < 1.0e-8 * SLACK, "drifted apart by {worst:.2e}");
+    }
+
+    #[test]
+    fn a_negative_parameter_decay_matches_the_full_update() {
+        // A correlation time shorter than the interval makes `m` negative. It
+        // is a poor model but a valid one, and the full sweep accepts it, so
+        // the partitioned update has to give the same answer rather than
+        // refuse or lose the sign.
+        let p = covariance(9, 1.0e2);
+        let (mut phi, g, density) = structured_model(10);
+        phi[(N_NAV, N_NAV)] = -0.4;
+        phi[(N_STATE - 1, N_STATE - 1)] = -1.3;
+        let mut full = Ud::from_covariance(&p).unwrap();
+        full.predict(&phi, &g, &density).unwrap();
+        let mut partitioned = Ud::from_covariance(&p).unwrap();
+        partitioned
+            .predict_partitioned(&phi, &g.block(0, 0), &density)
+            .unwrap();
+        let worst = worst_relative(&full.to_covariance(), &partitioned.to_covariance());
+        assert!(worst < 1.0e-11 * SLACK, "differs by {worst:.2e}");
+    }
+
+    #[test]
+    fn a_refused_partitioned_update_leaves_the_factors_alone() {
+        // Every way in, including the ones that only fail after the navigation
+        // block and the parameter columns have already been written.
+        let p = covariance(5, 1.0e2);
+        let (phi, g, density) = structured_model(6);
+        let nav: NavNoiseMatrix = g.block(0, 0);
+        let mut ud = Ud::from_covariance(&p).unwrap();
+        let (diagonal, before) = (ud.diagonal(), ud.to_covariance());
+        let mut refused_with =
+            |phi: &StateMatrix, nav: &NavNoiseMatrix, density: &[F; N_NOISE], what: &str| {
+                assert!(
+                    ud.predict_partitioned(phi, nav, density).is_none(),
+                    "{what}"
+                );
+                assert_eq!(ud.diagonal(), diagonal, "{what}: D changed");
+                assert_eq!(ud.to_covariance(), before, "{what}: U changed");
+            };
+
+        // The sweep failing with everything else in order: a navigation state
+        // that nothing maps to and no channel drives has no pivot, and every
+        // value here is finite, so only the sweep's own answer can refuse it.
+        let mut bad = phi;
+        let mut quiet = nav;
+        for j in 0..N_STATE {
+            bad[(N_NAV - 1, j)] = 0.0;
+        }
+        for c in 0..N_NAV_NOISE {
+            quiet[(N_NAV - 1, c)] = 0.0;
+        }
+        refused_with(&bad, &quiet, &density, "a navigation state with no pivot");
+
+        let mut refused = |phi: &StateMatrix, density: &[F; N_NOISE], what: &str| {
+            refused_with(phi, &nav, density, what)
+        };
+
+        let mut bad = phi;
+        bad[(N_STATE - 1, N_STATE - 1)] = 0.0;
+        refused(&bad, &density, "a parameter decay of zero");
+        bad[(N_STATE - 1, N_STATE - 1)] = F::NAN;
+        refused(&bad, &density, "a parameter decay that is not a number");
+        let mut bad = phi;
+        bad[(0, 1)] = F::NAN;
+        refused(&bad, &density, "a poisoned navigation block");
+        let mut bad = phi;
+        bad[(0, N_STATE - 1)] = F::NAN;
+        refused(&bad, &density, "a poisoned coupling to a parameter");
+        refused(
+            &StateMatrix::identity().scaled(1.0e20),
+            &density,
+            "growth past the variance limit",
+        );
+        for (value, what) in [
+            (F::NAN, "a parameter density that is not a number"),
+            (F::INFINITY, "an infinite parameter density"),
+            (-1.0, "a negative parameter density"),
+        ] {
+            let mut bad = density;
+            bad[N_NOISE - 1] = value;
+            refused(&phi, &bad, what);
+        }
+        let mut bad = density;
+        bad[N_NOISE - 1] = 2.0 * MAX_VARIANCE;
+        refused(&phi, &bad, "a parameter density past the variance limit");
+    }
+
+    #[test]
+    fn a_parameter_with_no_noise_is_only_rescaled() {
+        // `add_rank_one` skips `q = 0`, which has to mean "no noise" and not
+        // "refused": a quiet parameter is ordinary configuration.
+        let p = covariance(12, 1.0e2);
+        let (phi, g, mut density) = structured_model(13);
+        density[N_NAV_NOISE..].fill(0.0);
+        let mut full = Ud::from_covariance(&p).unwrap();
+        full.predict(&phi, &g, &density).unwrap();
+        let mut partitioned = Ud::from_covariance(&p).unwrap();
+        partitioned
+            .predict_partitioned(&phi, &g.block(0, 0), &density)
+            .unwrap();
+        let worst = worst_relative(&full.to_covariance(), &partitioned.to_covariance());
+        assert!(worst < 1.0e-11 * SLACK, "differs by {worst:.2e}");
     }
 
     #[test]
