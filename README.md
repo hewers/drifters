@@ -29,7 +29,7 @@ under QEMU.
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
 | | per-axis bias below 1 mm |
-| **Footprint** | **10.1 KiB** peak stack (15-state), 16.7 KiB (21-state), on Cortex-M4, late fixes included |
+| **Footprint** | **8.7 KiB** peak stack (15-state), 13.2 KiB (21-state), on Cortex-M4, late fixes included |
 | | 15.4 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
@@ -234,18 +234,18 @@ both, built and checked under emulation, and it has never been on a board.
 [docs/milestones.md](docs/milestones.md) lists the open work.
 
 What emulation does say about timing is a floor, and it is not a comfortable
-one. An IMU sample costs 3.9 million instructions in the default build on a
+one. An IMU sample costs 1.6 million instructions in the default build on a
 Cortex-M4, because that core's FPU is single precision and the filter's `f64`
-runs in software: at least 23 ms at 168 MHz, so it cannot follow a 100 Hz IMU
-there. `--features f32-covariance` removes 88 % of that, to 487 thousand, with
+runs in software: at least 9.5 ms at 168 MHz, so it cannot follow a 200 Hz IMU
+there. `--features f32-covariance` removes 78 % of that, to 348 thousand, with
 no measurable change in any result, and is the configuration to use on that
 part. The equivariant filter is 4.5 million dense, and 0.89 million with its
 covariance factored and held in `f32`, again with no measurable change.
 
 A Cortex-M7 with a double-precision FPU is a different problem, once built with
-`-C target-cpu=cortex-m7`. The same sample is 303 thousand instructions for the
+`-C target-cpu=cortex-m7`. The same sample is 88 thousand instructions for the
 ESKF and 277 thousand for the dense equivariant filter. `f32-covariance` then
-saves under 2 %, and the factored `f32` filter costs 20 % more than the dense
+saves under 3 %, and the factored `f32` filter costs 20 % more than the dense
 one. Those are instruction counts, and double-precision instructions take that
 core longer, so which build is fastest there needs a board.
 
@@ -424,7 +424,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   against a 3.3 cm error budget. The *covariance* is a separate question, and
   because it is stored factored the answer differs: `--features f32-covariance`
   halves it to 924 bytes and puts its arithmetic on the Cortex-M4F's
-  single-precision FPU instead of in soft-float — 88 % of the instructions
+  single-precision FPU instead of in soft-float — 78 % of the instructions
   an IMU sample costs there — with KF-GINS, GSDC and NEES all unchanged. See
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
 

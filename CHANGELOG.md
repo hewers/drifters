@@ -14,6 +14,20 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The ESKF's time update runs over the navigation states alone, and `add_imu` costs
+  59 % fewer instructions on a Cortex-M4 and 71 % fewer on a Cortex-M7.**
+  `Ud::predict_partitioned` handles the Gauss-Markov IMU errors separately, and the
+  dot product's scalar path names its partial sums. On a Cortex-M4 an `add_imu` goes
+  from 3 943 160 instructions to 1 597 560, from 486 920 to 348 120 with
+  `f32-covariance`, and at 15 states from 1 707 920 to 884 000 and from 279 960 to
+  230 560. The peak stack goes from 17 088 bytes to 13 520, from 13 124 to 11 880, from
+  10 360 to 8 888 and from 7 956 to 7 704, and CI's ceilings tighten to 15, 13 and
+  10 KiB. The harness's `.text` grows by 2 248 bytes to 206 408.
+- **`GinsEngine` grows by 56 bytes to 3 328, and `RewindEngine<120, 32>` by 168 to
+  21 576,** for rejection counts kept per kind of measurement and the raw angular
+  increment the zero-rate update reads. An accepted measurement of any kind still
+  restarts the count unless `count_rejections_per_kind` is set, so the recovery behaves
+  as before.
 - **The equivariant filter's global frame can turn, and its API says so. Breaking.**
   `lift`, `lambda1_literal` and `state_matrix` take `impl Into<GlobalFrame>`, so a
   gravity vector still works, and `state_matrix_entries` takes a `GlobalFrame`.
@@ -315,6 +329,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`GinsEngine::apply_zero_rate`**, a zero-angular-rate update for stops, which
+  observes the yaw-rate bias a zero-velocity update cannot. Through the rewind layer
+  too. On the comma2k19 holdout it takes the heading RMS from 1.29° to 1.15°.
+- **`WheelSpeedScale`** estimates a wheel-speed scale factor against GNSS ground speed.
+  On the comma2k19 holdout the median error at the end of a 30 s outage goes from
+  11.06 m to 6.94 m. The tail does not improve.
+- **`GinsOptions::count_rejections_per_kind`**, protobuf field 18, gives each kind of
+  measurement its own count towards the lockout recovery. It is off by default.
+- **`drifters comma` replays comma2k19**, with CAN speed as wheel-speed aiding and
+  comma's pose as the reference. See [docs/comma2k19.md](docs/comma2k19.md).
 - **Earth rotation inside the equivariant filter's group,**
   `EqfOptions::earth_in_group` and `--earth-in-group`, for the navigation-grade band
   of adr/0008. With the velocity `v + ω × p` the rotating tangent-frame system stays

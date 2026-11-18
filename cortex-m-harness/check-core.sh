@@ -47,10 +47,10 @@ rm -f "$reports/$core"-*
 # Peak stack ceilings. They are ceilings, not targets, and each leaves headroom
 # over what was measured, a late fix through the rewind layer included.
 #
-# - 18 KiB for 21 states, measured at 17 088 B, and 14 KiB with
-#   `f32-covariance`, measured at 13 124 B. The deepest path is the time update.
-# - 11 KiB for 15 states, measured at 10 360 B, and 9 KiB with
-#   `f32-covariance`, measured at 7 956 B: fitting where 21 states do not is the
+# - 15 KiB for 21 states, measured at 13 520 B, and 13 KiB with
+#   `f32-covariance`, measured at 11 880 B. The deepest path is the time update.
+# - 10 KiB for 15 states, measured at 8 888 B, and 9 KiB with
+#   `f32-covariance`, measured at 7 704 B: fitting where 21 states do not is the
 #   whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
 #   every configuration, with the Earth's rotation in its group or not.
@@ -61,9 +61,9 @@ rm -f "$reports/$core"-*
 # A job that fails to build measures nothing, which is why CI builds in a step
 # of its own before this runs.
 configurations=(
-  "default - 18432"
-  "f32 f32-covariance 14336"
-  "reduced reduced-state 11264"
+  "default - 15360"
+  "f32 f32-covariance 13312"
+  "reduced reduced-state 10240"
   "reduced-f32 reduced-state,f32-covariance 9216"
 )
 eqf_ceiling=20480

@@ -145,8 +145,8 @@ ULP anywhere, and a local coordinate costs `6e-8 × range`.
 
 **Why it is parked.** What remains is the state representation, the position rows of
 the transition matrix, every position measurement Jacobian and the protobuf schema.
-The mechanization is 18 % of `add_imu` with `f32-covariance`. Converting it as well
-as the covariance converted, about nine tenths, saves about **16 %**, and it spends
+The mechanization is 25 % of `add_imu` with `f32-covariance`. Converting it as well
+as the covariance converted, about nine tenths, saves about **22 %**, and it spends
 accuracy: `f32` position storage alone costs 7 % of NIS at a 1 km anchor.
 `drifters_core::local::LocalFrame` (exact geodesic conversions and the frame rotation,
 157 µrad at 1 km) and `drifters_filter::anchor` (the block-diagonal Jacobian,
@@ -244,7 +244,7 @@ fix needs, which is the case that matters.
 **No clock states.** The obvious design gives the filter receiver clock bias and
 drift, plus an inter-system bias per constellation. The number of those depends
 on which constellations are in view, so a fixed-size filter must carry the worst
-case always — against a crate whose argument is a 3 272-byte engine.
+case always — against a crate whose argument is a 3 328-byte engine.
 [`range`](../../crates/drifters-filter/src/range.rs) differences the ranges
 within each constellation instead, against that constellation's highest
 satellite. That cancels the receiver clock and the inter-system bias exactly,
@@ -359,7 +359,7 @@ outliers *from*.
 ## What the factorisation measures
 
 **Storage.** 231 scalars against 441: 1 848 bytes against 3 528, and an engine of
-3 272 bytes against 4 952.
+3 328 bytes against 5 008.
 
 **A dense `R` has to be whitened.** Bierman is scalar-sequential and assumes
 each row's noise is independent of the others'. Tight coupling breaks that:
@@ -406,11 +406,11 @@ Monte Carlo noise. Second order in `dt` is nothing to keep at 200 Hz.
 | one IMU propagation | 5 640 ns | **4 323 ns** |
 | one second at 200 Hz with a fix | 1 131 µs | **900 µs** |
 | `Eskf` | 3 704 B | **2 024 B** |
-| `GinsEngine` | 4 952 B | **3 272 B** |
+| `GinsEngine` | 5 008 B | **3 328 B** |
 | ESKF NEES, expected 15 | 13.877 | 13.874 |
 
 **The win is larger on the target.** x86 vectorises; a Cortex-M4F does not, and
 carries `f64` in software. Instructions retired per `add_imu` on `mps2-an386`,
-under `qemu -icount shift=0`: 3.94 million in double precision, **487 thousand**
+under `qemu -icount shift=0`: 1.60 million in double precision, **348 thousand**
 with `f32-covariance`, which the factorisation is what allows. Cycles still need
 a board, since QEMU models no pipeline.

@@ -351,8 +351,8 @@ and does not propagate.
 Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, with no engine-sized temporary. A late
-fix reaches the depth of the time update it replays and goes no further: 17 088
-bytes, 13 124 with `f32-covariance`, 10 360 at 15 states and 7 956 with both. The
+fix reaches the depth of the time update it replays and goes no further: 13 520
+bytes, 11 880 with `f32-covariance`, 8 888 at 15 states and 7 704 with both. The
 EqF's late fix measures 15 800 dense and 14 392 factored, no deeper than its own
 fix step in either. All are inside their CI ceilings, and all are part of the peak
 CI checks.
@@ -383,7 +383,7 @@ ESKF:
 
 These are the same with the Earth's rotation in the filter's group.
 
-Both are under the default ESKF's 17 088 and under a 20 KiB ceiling in CI. A late
+Both are above the default ESKF's 13 520 and under a 20 KiB ceiling in CI. A late
 fix through `EqfRewindEngine` measures the same as each form's own fix step.
 
 On a small part the constraint is work and not stack. The dense form is 4.51
@@ -391,7 +391,7 @@ million instructions per `add_imu` on a Cortex-M4, soft-float throughout on a co
 whose FPU is single precision, and at an instruction per cycle that is at least
 26.8 ms a sample at 168 MHz. The factored form is 0.89 million, a floor of 5.3 ms —
 inside a 100 Hz IMU's interval with about half of it to spare, and just over a
-200 Hz one's — against 487 thousand for the ESKF with `f32-covariance`. See
+200 Hz one's — against 348 thousand for the ESKF with `f32-covariance`. See
 [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4
@@ -401,14 +401,14 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 
 | operation | bytes |
 |---|---|
-| `add_imu` (mechanize + predict) | 17 088 |
+| `add_imu` (mechanize + predict) | 13 520 |
 | `apply_zupt` (3-dim update) | 7 216 |
 | `apply_height` (1-dim update) | 4 672 |
 | `apply_magnetometer` | 7 600 |
-| **peak** | **17 088** |
+| **peak** | **13 520** |
 
 The harness firmware, holding both engines, the aligner, semihosting and the panic
-handler, links to 204 160 bytes of `.text` and 4 084 of `.rodata`.
+handler, links to 206 408 bytes of `.text` and 4 084 of `.rodata`.
 
 ### How the stack is kept down
 
@@ -424,6 +424,14 @@ Written as chained expressions, `predict` would keep about a dozen.
    into a caller-supplied buffer.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
    copying 3 528 bytes per `+=`. The hot path uses the `&Matrix` variants.
+4. **The time update works on the navigation states.** Every state after the
+   ninth is a Gauss-Markov IMU error, so the transition matrix is block triangular
+   with a diagonal lower block. `Ud::predict_partitioned` does Gram-Schmidt over
+   nine rows and fifteen columns where the full recursion has twenty-one and
+   thirty-nine, and takes each parameter state with a rescaling and one rank-one
+   update. `a_partitioned_time_update_matches_the_full_one` pins it to the full
+   form. It removes about 60 % of the instructions in `add_imu` on a Cortex-M4 in
+   `f64` and on a Cortex-M7, and 15 % on a Cortex-M4 with `f32-covariance`.
 
 ### The 15-state configuration
 
@@ -435,7 +443,7 @@ filter to 15 states. Every matrix halves, and so does the stack:
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
 | `GinsEngine` | 3 328 B | 2 392 B |
-| peak stack | 17 088 B | **10 360 B** |
+| peak stack | 13 520 B | **8 888 B** |
 
 Both halve again under `f32-covariance`: 480, 608 and 1 912 bytes.
 
@@ -443,16 +451,16 @@ Peak stack by operation, in bytes:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 17 088 | 7 216 | **17 088** |
-| 21-state, `f32-covariance` | 13 124 | 6 388 | **13 124** |
-| 15-state (`reduced-state`) | 10 360 | 5 016 | **10 360** |
-| 15-state, `f32-covariance` | 7 956 | 4 580 | **7 956** |
+| 21-state, `f64` | 13 520 | 7 216 | **13 520** |
+| 21-state, `f32-covariance` | 11 880 | 6 388 | **11 880** |
+| 15-state (`reduced-state`) | 8 888 | 5 016 | **8 888** |
+| 15-state, `f32-covariance` | 7 704 | 4 580 | **7 704** |
 
 CI measures these on every run, and that is the number to trust over this
 table.
 
-`f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
-the largest single object on that frame and it halves.
+`f32-covariance` takes 12 % off `add_imu`, because the time update's working
+arrays halve.
 
 The peak is the **time update**. A held-state update stays in the factors:
 Bierman's recursion assumes an optimal gain and a held state is a non-optimal one,
@@ -461,7 +469,7 @@ quantities the recursion has already computed, so the update adds them to the
 factors. [state-model.md](state-model.md) has the derivation.
 
 Fifteen states is the most useful stack lever on a small part. It takes the peak
-from 17 088 to 10 360 bytes and changes no numerics: it estimates fewer things.
+from 13 520 to 8 888 bytes and changes no numerics: it estimates fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 
