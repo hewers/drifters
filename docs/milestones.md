@@ -245,6 +245,8 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 
 - [x] Bare-metal build and run on Cortex-M4F / M7 (`cortex-m-harness`, QEMU),
       the M7 with `f64` on its double-precision FPU
+- [x] Every `f32`/`f64` configuration run on both cores in CI, with their answers
+      compared (QEMU's FPU, not silicon)
 - [x] Stack-usage measurement, and the reduction it showed was needed
 - [x] In-place covariance propagation
 - [x] Data path links no panic machinery, checked in CI

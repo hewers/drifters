@@ -37,6 +37,23 @@ Needs `qemu-system-arm` on `PATH` and the `thumbv7em-none-eabihf` target:
 rustup target add thumbv7em-none-eabihf
 ```
 
+## Every configuration, on both cores
+
+```bash
+./check-core.sh m4 target/agreement    # f64 in software
+./check-core.sh m7 target/agreement    # f64 on the double-precision FPU
+cargo xtask agreement cortex-m-harness/target/agreement    # from the repository root
+```
+
+The script runs the harness and `src/bin/agreement.rs` in all four filter
+configurations (21 or 15 states, covariance in `f64` or `f32`), and holds each
+to its stack ceilings. `agreement` flies one simulated drive through the ESKF
+and both forms of the equivariant filter, fails if any of them ends unhealthy or
+far from the truth, and prints its final state exactly. `cargo xtask agreement`
+then requires the two cores to match to the bit and `f32` to stay close to
+`f64`. [`docs/testing.md`](../docs/testing.md) has the tolerances and what they
+do not show.
+
 ## What these numbers are worth
 
 | measurement | verdict |

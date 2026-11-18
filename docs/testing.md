@@ -263,7 +263,8 @@ rather than to the strict interval for exactly this reason.
 - **The non-additive features run separately.** `reduced-state` and
   `f32-covariance` each change what the filter computes rather than adding
   capability, so neither is covered by a build that merely enables it alongside
-  everything else. CI runs each alone, and `f32-covariance` runs the whole CLI
+  everything else. CI runs each alone, the bare-metal job also runs the two
+  together, and `f32-covariance` runs the whole CLI
   campaign as well as the unit tests — the point of that feature is that the
   results do not move, which is only checkable by measuring them.
 
@@ -702,6 +703,50 @@ RT1060 and the SAME70 have double precision. On a single-precision part this
 build faults at its first `f64` instruction, so the harness reads the core's
 feature register and refuses to start, and such a part belongs with the
 Cortex-M4 advice above.
+
+### Both cores, both precisions
+
+The stack figures say each build fits. They do not say each build computes the
+right thing, so CI also flies one drive through all of them. The `agreement`
+firmware runs 20 s of a level, constant-speed circle at 100 Hz, with a tactical
+IMU's biases and noise and a position fix each second, from a deliberately wrong
+start. It runs the ESKF and the equivariant filter in both covariance forms, and
+`cortex-m-harness/check-core.sh` repeats it in eight builds: Cortex-M4 and
+Cortex-M7, 21 and 15 states, covariance in `f64` and in `f32`.
+
+Each build first has to pass by itself: every filter healthy, no step or fix
+refused, and the final errors inside 0.15 m, 0.05 m/s, 1 mrad of tilt and 30 mrad
+of heading. It prints its final state in the shortest decimal that round-trips,
+so the report holds the exact bits, and `cargo xtask agreement` compares the
+eight reports:
+
+| check | requirement | measured |
+|---|---|---|
+| Cortex-M4 against Cortex-M7, same configuration | identical to the bit | identical, 288 values |
+| equivariant filter across the ESKF's features, which do not apply to it | identical to the bit | identical, 384 values |
+| ESKF, `f32` against `f64`: position, velocity, attitude | within 0.005 of the filter's sigma | 2.5 × 10⁻⁴ sigma at 21 states, 1.9 × 10⁻⁴ at 15 |
+| ESKF, `f32` against `f64`: reported sigma | within 0.5 % | 0.02 % |
+| ESKF, `f32` against `f64`: biases | 10⁻⁶ rad/s and 10⁻³ m/s² | 2.8 × 10⁻⁸ rad/s and 3.7 × 10⁻⁵ m/s² |
+| equivariant filter, factored `f32` against dense `f64` | the same tolerances | 0.6 % of tolerance |
+
+The largest difference uses 5 % of its tolerance. The check was tested by
+breaking things on purpose. It failed on one flipped bit in one printed value on
+the Cortex-M7, on a single gyro sample changed by one part in 10¹², and on fixes
+5 % noisier in the `f32` ESKF alone. It refused a missing report, a truncated
+report and a Cortex-M7 build without `target-cpu`, and the firmware failed by
+itself when the fixes were moved 0.5 m. A change of one unit in the last place to
+a single input sample did not fail, because rounding absorbed it before the final
+state, and fixes 0.1 % noisier in the `f32` ESKF stay inside the tolerance.
+
+**What the bit-for-bit result does not show.** QEMU implements the Cortex-M7's
+FPU in software, with its own soft-float library, so the comparison is between
+the compiler's soft-float and QEMU's. It is good evidence that the `f64` code
+generated for each core means the same thing, and it is no evidence about a real
+FPU. No Cortex-M7 with a single-precision FPU is run either. The Cortex-M4 build
+stands in for one, since both do `f64` in software, but that part itself has not
+been run. One drive also samples one trajectory, so `f32`'s small difference here
+is not a bound on what it does elsewhere. The longer campaign under
+`f32-covariance` is what speaks to that.
 
 ### Cycles on a board
 

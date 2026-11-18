@@ -5,6 +5,7 @@
 //! ```text
 //! cargo xtask proto           # regenerate the protobuf bindings
 //! cargo xtask proto --check   # verify the checked-in output is up to date
+//! cargo xtask agreement DIR   # compare the firmware builds' reports in DIR
 //! ```
 //!
 //! This crate is host-only and build-time. Nothing here is reachable from
@@ -14,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod agreement;
 mod proto;
 
 fn main() -> ExitCode {
@@ -29,6 +31,7 @@ fn main() -> ExitCode {
 
     let result = match task {
         "proto" => proto::run(check),
+        "agreement" => agreement::run(flags),
         other => {
             eprintln!("unknown task: {other}\n");
             usage();
@@ -48,7 +51,8 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!(
         "tasks:\n  \
-         proto [--check]   regenerate protobuf bindings, or verify they are current"
+         proto [--check]   regenerate protobuf bindings, or verify they are current\n  \
+         agreement DIR     compare the reports of cortex-m-harness/check-core.sh"
     );
 }
 

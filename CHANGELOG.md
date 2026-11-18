@@ -248,6 +248,14 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Every filter configuration now runs on both emulated cores, and CI compares
+  the answers.** `cortex-m-harness/check-core.sh` runs 21 and 15 states with
+  `f64` and `f32` covariance on a Cortex-M4 and a Cortex-M7, and a new `agreement`
+  firmware flies one simulated drive through the ESKF and both equivariant
+  filters in each. `cargo xtask agreement` requires the two cores to match to
+  the bit, and `f32` to stay within 0.005 of the filter's own sigma of `f64`. It
+  measures 2.5 × 10⁻⁴. QEMU emulates the Cortex-M7's FPU, so this says nothing
+  about a real one.
 - **The Cortex-M7, measured under QEMU.** With `-C target-cpu=cortex-m7` no
   `f64` arithmetic stays in software, and an `add_imu` costs 295 thousand
   instructions for the ESKF and 262 thousand for the dense equivariant filter,

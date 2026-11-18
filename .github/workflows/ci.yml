@@ -243,10 +243,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p drifters-interop --features nav-types-interop
 
-  # Boots the filter on an emulated Cortex-M4 and checks its stack high-water
-  # mark against a documented ceiling. Stack painting measures memory writes,
-  # which QEMU emulates exactly, so this number is trustworthy — unlike any
-  # timing measurement from an emulator, which is why none is taken.
+  # Boots every filter configuration on an emulated Cortex-M4 and Cortex-M7,
+  # checks each stack high-water mark against a documented ceiling, and compares
+  # what the builds computed. Stack painting measures memory writes, which QEMU
+  # emulates exactly, so those numbers are trustworthy — unlike any timing
+  # measurement from an emulator, which is why none is taken.
   cortex_m:
     name: bare-metal stack budget
     runs-on: ubuntu-latest
@@ -266,67 +267,27 @@ jobs:
           cargo build --release
           cargo build --release --features reduced-state
           cargo build --release --features f32-covariance
+          cargo build --release --features reduced-state,f32-covariance
           cargo build --release --bin panic_audit
-      - name: run harness under QEMU
+      # All four filter configurations on both cores: `f64` in software on the
+      # Cortex-M4, and on the double-precision FPU on the Cortex-M7. The stack
+      # ceilings and what each is for are in the script.
+      - name: every configuration on a Cortex-M4, with f64 in software
         working-directory: cortex-m-harness
-        run: |
-          set -o pipefail
-          cargo run --release | tee report.txt
-          peak=$(grep -oP '^PEAK\s+\K[0-9]+' report.txt)
-          echo "peak stack: $peak bytes"
-          # Ceiling, not a target. 22 KiB leaves headroom over the measured
-          # 20 800 B, a late fix through the rewind layer included, while
-          # still failing if a change reintroduces the
-          # expression-chained form that cost 35.3 KiB. It was 20 KiB until
-          # `Matrix::identity` became an iterator to satisfy clippy, which
-          # cost 1 672 B on the ZUPT path; that trade was made deliberately.
-          #
-          # This job could not build for three weeks — `cargo run` went
-          # ambiguous when a second binary was added — and in that window the
-          # peak grew 63 % unnoticed. A job that fails to build is a job that
-          # measures nothing, so the build is now a separate step above.
-          test "$peak" -lt 22528 || { echo "stack budget exceeded"; exit 1; }
-          # The equivariant filter's engine, under the 20 KiB the ESKF used to
-          # be held to. Its own label, because it is the same in every feature
-          # configuration. Measured at 15 480 B,
-          # down from 28 852 B before its covariance arithmetic was done in
-          # place. A late fix through its rewind layer measures the same.
-          eqf=$(grep -oP '^PEAK_EQF\s+\K[0-9]+' report.txt)
-          echo "equivariant filter peak stack: $eqf bytes"
-          test "$eqf" -lt 20480 || { echo "equivariant filter stack budget exceeded"; exit 1; }
-          # The same filter with its covariance factored and held in f32, the
-          # form for a single-precision FPU and the one that keeps pace with
-          # an IMU on this part. Measured at 14 008 B.
-          eqf32=$(grep -oP '^PEAK_EQF_F32\s+\K[0-9]+' report.txt)
-          echo "factored equivariant filter peak stack: $eqf32 bytes"
-          test "$eqf32" -lt 20480 || { echo "factored equivariant filter stack budget exceeded"; exit 1; }
-      - name: the 15-state configuration must fit a 16 KiB stack
+        run: ./check-core.sh m4 target/agreement
+      - name: every configuration on a Cortex-M7, with f64 in hardware
         working-directory: cortex-m-harness
-        run: |
-          set -o pipefail
-          cargo run --release --features reduced-state | tee reduced.txt
-          peak=$(grep -oP '^PEAK\s+\K[0-9]+' reduced.txt)
-          echo "reduced peak stack: $peak bytes"
-          # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 11 528 B, a late fix included.
-          test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
-      - name: the single-precision covariance must also fit
-        working-directory: cortex-m-harness
-        run: |
-          set -o pipefail
-          cargo run --release --features f32-covariance | tee f32.txt
-          peak=$(grep -oP '^PEAK\s+\K[0-9]+' f32.txt)
-          echo "f32-covariance peak stack: $peak bytes"
-          # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 20 808 B: the
-          # peak is the ZUPT update, where it saves nothing.
-          test "$peak" -lt 22528 || { echo "f32-covariance budget exceeded"; exit 1; }
+        run: ./check-core.sh m7 target/agreement
+      # The two cores must give the same answers to the bit, and `f32` must stay
+      # within a small fraction of the filter's own sigma of `f64`.
+      - name: both cores and both precisions must agree
+        run: cargo xtask agreement cortex-m-harness/target/agreement
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |
           # Every configuration: `f32-covariance` and `reduced-state` change
-          # what the filter computes, so neither inherits the default's audit.
-          for features in "" "--features f32-covariance" "--features reduced-state"; do
+          # what the filter computes, so none inherits the default's audit.
+          for features in "" "--features f32-covariance" "--features reduced-state" "--features reduced-state,f32-covariance"; do
             cargo build --release --bin panic_audit $features
             bin=target/thumbv7em-none-eabihf/release/panic_audit
             if nm "$bin" | grep -i 'core9panicking'; then
@@ -336,41 +297,15 @@ jobs:
             echo "no panic machinery linked [${features:-default}]"
           done
 
-      # `target-cpu=cortex-m7` is what turns on the double-precision FPU; the
-      # target by itself assumes single precision. `RUSTFLAGS` is written out in
-      # full because this replaces the workflow's value, it does not add to it.
-      - name: on a Cortex-M7, f64 runs in hardware and the budgets still hold
-        working-directory: cortex-m-harness
-        env:
-          RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
-          CARGO_TARGET_DIR: target-m7
-          CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: >-
-            qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic
-            -semihosting-config enable=on,target=native -kernel
-        run: |
-          set -o pipefail
-          cargo run --release | tee m7.txt
-          grep -q 'f64 in hardware' m7.txt
-          for limit in PEAK:22528 PEAK_EQF:20480 PEAK_EQF_F32:20480; do
-            label=${limit%:*}
-            value=$(grep -oP "^$label\s+\K[0-9]+" m7.txt)
-            echo "$label: $value bytes"
-            test "$value" -lt "${limit#*:}" || { echo "$label over budget"; exit 1; }
-          done
-          # The point of the build. If one of these is linked the flag has
-          # stopped reaching the code, and every M7 figure describes soft-float.
-          bin=target-m7/thumbv7em-none-eabihf/release/cortex-m-harness
-          if nm "$bin" | grep -E '__aeabi_d(add|sub|mul|div)$'; then
-            echo "double-precision arithmetic is still in software"
-            exit 1
-          fi
+      # `RUSTFLAGS` is written out in full because this replaces the workflow's
+      # value, it does not add to it.
       - name: on a Cortex-M7, the data path must link no panic machinery
         working-directory: cortex-m-harness
         env:
           RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
           CARGO_TARGET_DIR: target-m7
         run: |
-          for features in "" "--features f32-covariance" "--features reduced-state"; do
+          for features in "" "--features f32-covariance" "--features reduced-state" "--features reduced-state,f32-covariance"; do
             cargo build --release --bin panic_audit $features
             if nm target-m7/thumbv7em-none-eabihf/release/panic_audit | grep -i 'core9panicking'; then
               echo "the data path can reach a panic in [$features]; see docs/testing.md Layer 10"
