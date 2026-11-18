@@ -55,6 +55,8 @@ rm -f "$reports/$core"-*
 #   do not is the whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
 #   every configuration. Measured at 15 488 B dense and 14 016 B factored.
+# - 8 KiB for the initial alignment, which runs before an engine exists and so
+#   is not added to either figure above.
 #
 # This job once could not build for three weeks, and the peak grew 63 % in that
 # window unnoticed. A job that fails to build measures nothing, which is why CI
@@ -66,6 +68,7 @@ configurations=(
   "reduced-f32 reduced-state,f32-covariance 12288"
 )
 eqf_ceiling=20480
+align_ceiling=8192
 
 peak() { # label file
   grep -oP "^$1\\s+\\K[0-9]+" "$2"
@@ -110,6 +113,7 @@ for configuration in "${configurations[@]}"; do
   require_under PEAK "$(peak PEAK "$log")" "$ceiling"
   require_under PEAK_EQF "$(peak PEAK_EQF "$log")" "$eqf_ceiling"
   require_under PEAK_EQF_F32 "$(peak PEAK_EQF_F32 "$log")" "$eqf_ceiling"
+  require_under PEAK_ALIGN "$(peak PEAK_ALIGN "$log")" "$align_ceiling"
   check_arithmetic cortex-m-harness
 
   # A failure here is the firmware's own verdict: a filter unhealthy or too far

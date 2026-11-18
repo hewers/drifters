@@ -50,12 +50,14 @@ use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
 use panic_semihosting as _;
 
+use drifters_core::align::{AlignConfig, AlignPhase, Aligner, Alignment, HeadingSource};
+use drifters_core::earth::Wgs84;
 use drifters_core::estimator::Estimator;
 use drifters_core::frames::{Lla, Ned};
-use drifters_core::math::{Euler, Vec3};
+use drifters_core::math::{Euler, Quat, Vec3};
 use drifters_core::rewind::{FixOutcome, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
-use drifters_core::types::{GnssFix, ImuSample};
+use drifters_core::types::{GnssFix, ImuNoise, ImuSample};
 use drifters_eqf::linear::StateMatrix as DenseEqf;
 use drifters_eqf::{Covariance, EqFilter, EqfEngine, EqfOptions, Ud};
 use drifters_filter::state::{StateMatrix, N_STATE};
@@ -278,19 +280,26 @@ fn ticks_per_step<E: Estimator>(syst: &mut SYST, engine: &mut E) -> Option<u32> 
 /// instructions and a `vmul.f32` is one. That is the question M9 could not
 /// answer without a board, and this answers the useful half of it.
 fn report_instructions(label: &str, step: Option<u32>, calibration: Option<u32>) {
+    report_call(label, "add_imu", step, calibration);
+}
+
+/// [`report_instructions`] for a call that may not be `add_imu`.
+fn report_call(label: &str, call: &str, step: Option<u32>, calibration: Option<u32>) {
     match (step, calibration) {
         (Some(step), Some(calibration)) if calibration > 0 => {
             let instructions = u64::from(step) * CALIBRATION_INSTRUCTIONS / u64::from(calibration);
             hprintln!(
-                "{} add_imu = {} ({} ticks; only under -icount shift=0)",
+                "{} {} = {} ({} ticks; only under -icount shift=0)",
                 label,
+                call,
                 instructions,
                 step
             );
         }
         _ => hprintln!(
-            "{} add_imu = unmeasured (the 24-bit counter wrapped inside one step)",
-            label
+            "{} {} = unmeasured (the 24-bit counter wrapped inside one step)",
+            label,
+            call
         ),
     }
 }
@@ -449,6 +458,267 @@ fn padding(suffix: &str) -> &'static str {
     }
 }
 
+/// Interval of the simulated IMU the aligner is measured on, seconds.
+const ALIGN_DT: f64 = 0.01;
+/// Samples between GNSS fixes: 1 Hz.
+const ALIGN_STEPS_PER_FIX: u32 = 100;
+/// How long the vehicle stands before it moves, seconds.
+const ALIGN_REST: f64 = 13.0;
+/// Longest run of the simulation, seconds.
+const ALIGN_SECONDS: u32 = 60;
+/// The vehicle's heading, radians. Not zero, so that nothing passes by accident.
+const ALIGN_YAW: f64 = 1.0;
+/// Stack painted below each aligner call, bytes.
+///
+/// There are thousands of calls, and painting all of RAM for each would take
+/// minutes. A call reaching the end of this reads as using all of it, which is
+/// over the ceiling `check-core.sh` holds it to.
+const ALIGN_STACK_WINDOW: usize = 16 * 1024;
+
+/// What the aligner is handed next.
+enum AlignEvent {
+    Imu(ImuSample),
+    Fix(GnssFix),
+}
+
+/// How an alignment run is meant to get its heading.
+#[derive(Clone, Copy)]
+struct AlignCase {
+    name: &'static str,
+    config: fn() -> AlignConfig,
+    moves: bool,
+    velocity: bool,
+    source: HeadingSource,
+}
+
+/// A sensor too poor to see the Earth turn, so heading has to come from motion.
+fn align_sensor() -> ImuNoise {
+    ImuNoise {
+        gyro_arw: Vec3::splat(4.4e-5),
+        accel_vrw: Vec3::splat(1.7e-3),
+        gyro_bias_std: Vec3::splat(2.0e-5),
+        accel_bias_std: Vec3::splat(2.0e-3),
+        gyro_scale_std: Vec3::splat(5.0e-4),
+        accel_scale_std: Vec3::splat(5.0e-4),
+        correlation_time: 3600.0,
+    }
+}
+
+fn align_config() -> AlignConfig {
+    let mut config = AlignConfig::new(align_sensor());
+    config.gyro_bias_prior = Vec3::splat(1.0e-3);
+    config.accel_bias_prior = Vec3::splat(0.1);
+    config
+}
+
+/// A sensor good enough to find north standing still.
+fn gyrocompass_config() -> AlignConfig {
+    let mut noise = align_sensor();
+    noise.gyro_arw = Vec3::splat(1.0e-6);
+    noise.gyro_bias_std = Vec3::splat(1.0e-8);
+    let mut config = AlignConfig::new(noise);
+    config.gyro_bias_prior = Vec3::splat(1.0e-7);
+    config.accel_bias_prior = Vec3::splat(1.0e-3);
+    config
+}
+
+/// Every way the aligner can finish, so that each one's path is measured.
+const ALIGN_CASES: [AlignCase; 3] = [
+    AlignCase {
+        name: "GNSS velocity",
+        config: align_config,
+        moves: true,
+        velocity: true,
+        source: HeadingSource::GnssVelocity,
+    },
+    AlignCase {
+        name: "GNSS positions",
+        config: align_config,
+        moves: true,
+        velocity: false,
+        source: HeadingSource::GnssDisplacement,
+    },
+    AlignCase {
+        name: "gyrocompass",
+        config: gyrocompass_config,
+        moves: false,
+        velocity: false,
+        source: HeadingSource::Gyrocompass,
+    },
+];
+
+/// A level vehicle on the rotating Earth: it stands, then accelerates forward.
+///
+/// Hands every sample and fix to `feed` until `feed` returns true, and returns
+/// where the vehicle then is, as metres from [`origin`] and metres per second.
+fn drive_alignment(case: &AlignCase, mut feed: impl FnMut(AlignEvent) -> bool) -> (Vec3, Vec3) {
+    let start = origin();
+    let earth = Wgs84::omega_ie_n(start.lat);
+    let gravity = Wgs84::gravity_n(start.lat, start.height);
+    let attitude = Quat::from_euler(0.0, 0.0, ALIGN_YAW);
+    let forward = attitude.rotate(Vec3::new(1.0, 0.0, 0.0));
+    let epoch = GpsTime::new(2300, 1000.0);
+    let (mut offset, mut velocity) = (Vec3::ZERO, Vec3::ZERO);
+
+    for k in 1..=ALIGN_SECONDS * ALIGN_STEPS_PER_FIX {
+        let t = f64::from(k) * ALIGN_DT;
+        let accel = if case.moves && t > ALIGN_REST {
+            forward
+        } else {
+            Vec3::ZERO
+        };
+        let middle = velocity + accel * (ALIGN_DT * 0.5);
+        let specific = accel - gravity + (earth * 2.0).cross(middle);
+        offset += middle * ALIGN_DT;
+        velocity += accel * ALIGN_DT;
+        let time = epoch.add_seconds(t);
+        let done = feed(AlignEvent::Imu(ImuSample {
+            time,
+            dt: ALIGN_DT,
+            dtheta: attitude.rotate_inverse(earth) * ALIGN_DT,
+            dvel: attitude.rotate_inverse(specific) * ALIGN_DT,
+        }));
+        if done {
+            break;
+        }
+        if k % ALIGN_STEPS_PER_FIX == 0 {
+            let mut fix = GnssFix::position_only(
+                time,
+                start.shifted(Ned::from_vec3(offset)),
+                Vec3::splat(1.0),
+            );
+            if case.velocity {
+                fix.velocity = Some(Ned::from_vec3(velocity));
+                fix.velocity_std = Vec3::splat(0.1);
+            }
+            if feed(AlignEvent::Fix(fix)) {
+                break;
+            }
+        }
+    }
+    (offset, velocity)
+}
+
+/// Whether an alignment came out where the noiseless vehicle really is.
+fn alignment_is_right(a: &Alignment, case: &AlignCase, offset: Vec3, velocity: Vec3) -> bool {
+    let error = a.pva.attitude.quat * Quat::from_euler(0.0, 0.0, ALIGN_YAW).conjugate();
+    let tilt = Vec3::new(error.x, error.y, error.z) * 2.0;
+    let position = a
+        .pva
+        .position
+        .ned_from(origin().shifted(Ned::from_vec3(offset)))
+        .to_vec3();
+    a.heading_source == case.source
+        && tilt.amax() < 0.5_f64.to_radians()
+        && position.amax() < 0.5
+        && (a.pva.velocity.to_vec3() - velocity).amax() < 0.2
+}
+
+/// Peak stack of every call one alignment makes, and whether it came out right.
+///
+/// The simulation runs between the calls, outside the measured regions, so its
+/// geodesy is not charged to the aligner.
+fn align_stack(bottom: usize, case: &AlignCase) -> (usize, usize, bool) {
+    let Ok(mut aligner) = Aligner::new((case.config)()) else {
+        return (0, 0, false);
+    };
+    let window = stack_pointer()
+        .saturating_sub(ALIGN_STACK_WINDOW)
+        .max(bottom);
+    let (mut imu, mut fix) = (0, 0);
+    let (offset, velocity) = drive_alignment(case, |event| {
+        match event {
+            AlignEvent::Imu(s) => imu = imu.max(measure(window, || aligner.add_imu(&s)).1),
+            AlignEvent::Fix(f) => fix = fix.max(measure(window, || aligner.add_gnss(&f)).1),
+        }
+        aligner.phase() == AlignPhase::Aligned
+    });
+    let right = aligner
+        .alignment()
+        .is_some_and(|a| alignment_is_right(a, case, offset, velocity));
+    (imu, fix, right)
+}
+
+/// Ticks a whole alignment takes: mean and worst `add_imu`, worst `add_gnss`.
+///
+/// The worst `add_imu` is what an interrupt has to have time for. It is the
+/// sample that closes a one-second block, not the typical one.
+fn align_ticks(syst: &mut SYST, case: &AlignCase) -> Option<(u32, u32, u32)> {
+    let mut aligner = Aligner::new((case.config)()).ok()?;
+    let (mut total, mut samples, mut worst_imu, mut worst_fix) = (0_u64, 0_u32, 0, 0);
+    let mut wrapped = false;
+    drive_alignment(case, |event| {
+        match event {
+            AlignEvent::Imu(s) => match ticks(syst, || {
+                let _ = aligner.add_imu(&s);
+            }) {
+                Some(t) => {
+                    total += u64::from(t);
+                    samples += 1;
+                    worst_imu = worst_imu.max(t);
+                }
+                None => wrapped = true,
+            },
+            AlignEvent::Fix(f) => match ticks(syst, || aligner.add_gnss(&f)) {
+                Some(t) => worst_fix = worst_fix.max(t),
+                None => wrapped = true,
+            },
+        }
+        aligner.phase() == AlignPhase::Aligned
+    });
+    if wrapped || samples == 0 {
+        return None;
+    }
+    Some(((total / u64::from(samples)) as u32, worst_imu, worst_fix))
+}
+
+/// The initial alignment, down every path that can finish it. Returns whether
+/// each one reached the right answer.
+fn measure_aligner(bottom: usize, syst: &mut Option<SYST>, calibration: Option<u32>) -> bool {
+    hprintln!("");
+    hprintln!("--- initial alignment: static sizes (bytes) ---");
+    hprintln!("Aligner         {}", size_of::<Aligner>());
+    hprintln!("Alignment       {}", size_of::<Alignment>());
+    hprintln!("");
+    hprintln!("--- initial alignment: stack high-water (bytes) ---");
+
+    let mut peak = 0;
+    let mut right = true;
+    for case in &ALIGN_CASES {
+        let (imu, fix, ok) = align_stack(bottom, case);
+        hprintln!("{}: add_imu {}, add_gnss {}", case.name, imu, fix);
+        hprintln!("{}: aligned correctly: {}", case.name, ok);
+        peak = peak.max(imu).max(fix);
+        right &= ok;
+    }
+    hprintln!("");
+
+    // The velocity path is the one a vehicle with a receiver normally takes.
+    let counted = syst
+        .as_mut()
+        .and_then(|syst| align_ticks(syst, &ALIGN_CASES[0]));
+    report_call(
+        "INSTRUCTIONS_ALIGN",
+        "add_imu",
+        counted.map(|c| c.0),
+        calibration,
+    );
+    report_call(
+        "INSTRUCTIONS_ALIGN_WORST",
+        "add_imu",
+        counted.map(|c| c.1),
+        calibration,
+    );
+    report_call(
+        "INSTRUCTIONS_ALIGN_WORST",
+        "add_gnss",
+        counted.map(|c| c.2),
+        calibration,
+    );
+    hprintln!("PEAK_ALIGN                     {}", peak);
+    right
+}
+
 /// What this build does with `f64`, for the report's first lines.
 #[cfg(hard_f64)]
 const TARGET: &str = "thumbv7em-none-eabihf, target-cpu=cortex-m7 (f64 in hardware)";
@@ -602,7 +872,9 @@ fn main() -> ! {
     let dense = measure_eqf::<DenseEqf>(bottom, &mut syst, calibration, "", "dense f64");
     let factored = measure_eqf::<Ud<f32>>(bottom, &mut syst, calibration, "_F32", "factored f32");
     let eqf_healthy = dense && factored;
-    let healthy = healthy && eqf_healthy;
+    // Not `PEAK` either, and for the same reason.
+    let aligned = measure_aligner(bottom, &mut syst, calibration);
+    let healthy = healthy && eqf_healthy && aligned;
 
     if healthy {
         debug::exit(debug::EXIT_SUCCESS);

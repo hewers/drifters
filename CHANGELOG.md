@@ -248,6 +248,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Initial alignment: `drifters_core::align` produces the starting state and its
+  sigmas, so a caller no longer has to supply them.** The `Aligner` is fed the
+  same IMU samples and GNSS fixes as an engine. It detects a rest, levels, and
+  estimates the gyro and accelerometer biases. It takes heading by gyrocompass
+  where the gyro can resolve it, and otherwise by fitting the inertial track to
+  GNSS velocities or displacements once the vehicle moves.
+  `GinsOptions::with_alignment` and `EqfOptions::with_alignment` start either
+  engine from the result. It needs a stationary interval, allocates nothing, and
+  peaks at 5 356 bytes of stack on an emulated Cortex-M4 and 4 320 on a Cortex-M7,
+  under a new 8 KiB CI ceiling.
 - **Every filter configuration now runs on both emulated cores, and CI compares
   the answers.** `cortex-m-harness/check-core.sh` runs 21 and 15 states with
   `f64` and `f32` covariance on a Cortex-M4 and a Cortex-M7, and a new `agreement`

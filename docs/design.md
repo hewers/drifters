@@ -188,6 +188,58 @@ samples again, where `W` is the lateness the ring is sized to always cover; in
 steady state the layer copies and does not propagate. Sizes and timings are
 under [Resource budget](#the-rewind-layer).
 
+## Initial alignment
+
+An engine starts from a state and from sigmas saying how far to trust it. A
+device at power-on has neither, so
+[`drifters_core::align`](../crates/drifters-core/src/align.rs) works them out
+from the IMU and GNSS streams the engine is about to consume. The caller
+describes the sensor and nothing else.
+
+```text
+ IMU samples, GNSS fixes
+        │
+        ▼
+    Aligner ── Leveling ─▶ AwaitingHeading ─▶ EstimatingHeading ─▶ Aligned
+                                    │                                  ▲
+                                    └──── gyrocompass, if good enough ─┘
+        │
+        ▼
+    Alignment ─▶ GinsOptions::with_alignment ─▶ GinsEngine
+              └▶ EqfOptions::with_alignment  ─▶ EqfEngine
+```
+
+| source | gives | what limits it |
+|---|---|---|
+| mean specific force at rest | roll and pitch | a horizontal accelerometer bias is the same measurement as a tilt of `b/g` |
+| its length against normal gravity | accelerometer bias along gravity | the gravity model and the scale factor |
+| mean rate at rest | gyro bias, once heading is known | the rest's length, then the bias moving away from its rest value |
+| mean rate at rest, good gyro | heading, by gyrocompassing | an east gyro bias, invisible at rest |
+| motion, GNSS velocity | heading | velocity noise against the speed reached |
+| motion, GNSS positions only | heading | position noise against the distance covered |
+
+Heading from motion does not assume the vehicle moves along its body axis. From
+the end of the rest the strapdown equations run in the body frame at rest, with
+the rest means subtracted, which removes the gyro bias, the Earth's rate,
+gravity, the accelerometer bias and the tilt error together. What is left is a
+track known in a level frame of unknown heading, and the heading is the rotation
+that lays it over the GNSS track, in closed form.
+
+What it needs and does not do:
+
+- **A stationary interval, ten seconds by default.** A start already in motion
+  stays in `Leveling`.
+- **GNSS, or one surveyed fix,** for position, and motion or a gyro that can see
+  the Earth turn for heading.
+- **An honest `gyro_bias_prior` to gyrocompass.** An east bias cannot be detected
+  at rest, so an understated prior can give a wrong heading under a small sigma.
+- **Patience with position-only phones.** Displacement needs distance, and on the
+  traces tested the slowest took about 26 minutes from the start of the file.
+
+Why it is a separate step and not a mode of each engine is in
+[adr/0011](adr/0011-alignment-in-core.md), and the measured accuracy of the
+result and of its sigmas is in [testing.md](testing.md#layer-13--initial-alignment).
+
 ## Sans-IO
 
 `GinsEngine` has no dependency on how samples arrive. It exposes:

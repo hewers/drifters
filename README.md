@@ -33,7 +33,7 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 449, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 622, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -311,6 +311,41 @@ let mut options = GinsOptions::default()
     .with_antenna_lever_arm(lever_arm);
 options.max_consecutive_rejections = 20;
 ```
+
+### Starting from nothing
+
+Neither engine has to be told where it is. `drifters_core::align::Aligner` takes
+the same IMU samples and GNSS fixes, levels and measures the sensor's biases
+while the vehicle stands still, takes heading from the first stretch of driving,
+and hands back the state with a sigma for every part of it. A gyro good enough
+to see the Earth turn finds north without moving.
+
+```rust
+use drifters_core::align::{AlignConfig, AlignPhase, Aligner};
+
+let mut aligner = Aligner::new(AlignConfig::new(imu_noise))?;
+
+// In the IMU handler. Stand still for ten seconds, then drive.
+if aligner.add_imu(&sample) == AlignPhase::Aligned {
+    if let Some(alignment) = aligner.alignment() {
+        let options = GinsOptions::default()
+            .with_alignment(alignment)
+            .with_imu_noise(imu_noise);
+        let mut engine = GinsEngine::new(options)?;
+        engine.add_imu(sample)?; // the sample the state is valid at
+    }
+}
+
+// In the GNSS handler.
+aligner.add_gnss(&fix);
+```
+
+`EqfOptions::with_alignment` does the same for the equivariant filter. It needs
+a stationary start, so a launch already in motion will not align. What it
+achieves, and how far its sigmas can be believed, is in
+[docs/testing.md](docs/testing.md#layer-13--initial-alignment).
+
+### Options from a file
 
 With `--features serde` the same options read from a file on a host, and a
 partial file takes the defaults for the rest. A misspelt setting is an error,

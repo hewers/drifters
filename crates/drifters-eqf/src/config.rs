@@ -1,5 +1,6 @@
 //! Engine configuration, and its validation.
 
+use drifters_core::align::Alignment;
 use drifters_core::estimator::chi_squared;
 use drifters_core::frames::{Lla, Ned};
 // `Real` supplies the no_std float math; with `std` linked the inherent
@@ -201,6 +202,36 @@ impl EqfOptions {
             velocity,
             attitude: Attitude::from_euler(attitude.roll, attitude.pitch, attitude.yaw),
         };
+        self
+    }
+
+    /// Start from an initial alignment: its state, biases, sigmas and lever
+    /// arm replace whatever was set here before.
+    ///
+    /// The lever arm is a state here, so it starts at the alignment's value
+    /// and keeps [`initial_lever_arm_std`](Self::initial_lever_arm_std).
+    /// Scale factors have no state in this filter and the alignment's are
+    /// not used. Its accelerometer bias sigma already allows for the scale
+    /// factor along gravity, so adding
+    /// [`with_accel_scale_factor`](Self::with_accel_scale_factor) on top counts
+    /// that part twice, which errs towards trusting the bias less.
+    ///
+    /// The bias is the sensor's, with the Earth's rotation taken out. With
+    /// [`compensate_earth`](Self::compensate_earth) off the filter will see
+    /// that rotation as a bias of up to 7.3e-5 rad/s still to be learned, which
+    /// is well inside the prior of the sensors that mode suits. Give the engine
+    /// the sample at [`Alignment::time`] first, so that integration starts from
+    /// the instant the state describes.
+    pub fn with_alignment(mut self, alignment: &Alignment) -> Self {
+        self.initial_state = alignment.pva;
+        self.initial_gyro_bias = alignment.imu_error.gyro_bias;
+        self.initial_accel_bias = alignment.imu_error.accel_bias;
+        self.initial_lever_arm = alignment.antenna_lever_arm;
+        self.initial_position_std = alignment.position_std;
+        self.initial_velocity_std = alignment.velocity_std;
+        self.initial_attitude_std = alignment.attitude_std;
+        self.initial_gyro_bias_std = alignment.gyro_bias_std;
+        self.initial_accel_bias_std = alignment.accel_bias_std;
         self
     }
 

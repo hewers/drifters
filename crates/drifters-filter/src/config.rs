@@ -1,5 +1,6 @@
 //! Filter configuration.
 
+use drifters_core::align::Alignment;
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::types::{Attitude, ImuError, ImuNoise, Pva};
@@ -132,6 +133,27 @@ impl GinsOptions {
             velocity,
             attitude: Attitude::from_euler(attitude.roll, attitude.pitch, attitude.yaw),
         };
+        self
+    }
+
+    /// Start from an initial alignment: its state, sensor errors, sigmas and
+    /// lever arm replace whatever was set here before.
+    ///
+    /// The IMU noise model is not part of an alignment; set it with
+    /// [`with_imu_noise`](Self::with_imu_noise). Give the engine the sample at
+    /// [`Alignment::time`] first, so that integration starts from the instant
+    /// the state describes.
+    pub fn with_alignment(mut self, alignment: &Alignment) -> Self {
+        self.initial_state = alignment.pva;
+        self.initial_imu_error = alignment.imu_error;
+        self.initial_position_std = alignment.position_std;
+        self.initial_velocity_std = alignment.velocity_std;
+        self.initial_attitude_std = alignment.attitude_std;
+        self.initial_gyro_bias_std = alignment.gyro_bias_std;
+        self.initial_accel_bias_std = alignment.accel_bias_std;
+        self.initial_gyro_scale_std = alignment.gyro_scale_std;
+        self.initial_accel_scale_std = alignment.accel_scale_std;
+        self.antenna_lever_arm = alignment.antenna_lever_arm;
         self
     }
 

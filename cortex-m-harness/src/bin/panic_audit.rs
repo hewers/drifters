@@ -17,6 +17,7 @@
 #![no_main]
 
 use cortex_m_rt::entry;
+use drifters_core::align::{AlignConfig, Aligner};
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
@@ -81,15 +82,66 @@ fn main() -> ! {
     // a replay past the newer anchor all happen within a few iterations.
     let mut rewind = RewindEngine::<16, 4>::from_engine(engine);
 
+    // The initial alignment runs before any of the above has a state to start
+    // from, on the same interrupt.
+    let Ok(mut aligner) = Aligner::new(AlignConfig::default()) else {
+        loop {
+            core::hint::spin_loop();
+        }
+    };
+
     let mut t = 0.0;
+    let mut step = 0_u32;
     loop {
         t += 0.005;
+        step = step.wrapping_add(1);
         let sample = ImuSample {
             time: GpsTime::from_tow(t),
             dt: 0.005,
             dtheta: Vec3::new(1.0e-7, -2.0e-7, 3.0e-7),
             dvel: Vec3::new(1.0e-4, -2.0e-4, -0.049_05),
         };
+
+        // Standing for a quarter of a minute, then pulling away, with a fix
+        // every second, so that leveling, the strapdown track and the heading
+        // fit are all on the path. What it produces is then handed to both
+        // engines, as a device would.
+        let pulling_away = step % 12_000 > 3_000;
+        let aligner_sample = ImuSample {
+            dvel: Vec3::new(
+                sample.dvel.x + if pulling_away { 5.0e-3 } else { 0.0 },
+                sample.dvel.y,
+                sample.dvel.z,
+            ),
+            ..sample
+        };
+        let _ = aligner.add_imu(&aligner_sample);
+        if step % 200 == 0 {
+            let mut fix = GnssFix::position_only(
+                sample.time,
+                Lla::from_degrees(30.4, 114.4, 20.0),
+                Vec3::splat(1.0),
+            );
+            fix.velocity = Some(Ned::new(t, 0.0, 0.0));
+            fix.velocity_std = Vec3::splat(0.1);
+            aligner.add_gnss(&fix);
+        }
+        let _ = aligner.status();
+        if let Some(alignment) = aligner.alignment().copied() {
+            if let Ok(aligned) = GinsEngine::new(GinsOptions::default().with_alignment(&alignment))
+            {
+                // SAFETY: as for the write at the end of this loop.
+                unsafe { SINK += aligned.nav_state().position().height };
+            }
+            if let Ok(aligned) = EqfEngine::<Ud<f32>>::with_covariance(
+                EqfOptions::default().with_alignment(&alignment),
+            ) {
+                // SAFETY: as for the write at the end of this loop.
+                unsafe { SINK += aligned.nav_state().position().height };
+            }
+            aligner.reset();
+        }
+
         let _ = engine.add_imu(sample);
         let _ = engine.apply_zupt(Vec3::splat(0.02));
         let _ = engine.apply_height(20.0, 0.5);

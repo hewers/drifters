@@ -247,7 +247,9 @@ Worth knowing when a state refuses to converge:
   observed than the vertical one.
 - **Yaw** is nearly unobservable while stationary and level with a zero lever
   arm. It becomes observable under horizontal acceleration, which is why
-  alignment procedures involve motion.
+  alignment procedures involve motion, and why
+  [`drifters_core::align`](../crates/drifters-core/src/align.rs) takes heading
+  from a stretch of motion unless the gyro can see the Earth turn.
 - **Scale factors** need dynamics: `δs_a` needs specific force variation, `δs_g`
   needs rotation. A vehicle driving in a straight line at constant speed
   observes neither.

@@ -27,9 +27,12 @@ inside it, and a fix fifteen samples late through the rewind layer, whose
 replay runs nested inside the call. `PEAK` is
 the ESKF's peak stack, `PEAK_EQF` the equivariant filter's with its dense
 covariance and `PEAK_EQF_F32` with the factored single-precision one; CI holds
-the ESKF under 22 KiB and both EqF figures under 20 KiB. `src/bin/panic_audit.rs` is a second binary that links only the
-data paths — both estimators, both EqF covariance forms, both rewind layers —
-so that CI can check none reaches `core::panicking`.
+the ESKF under 22 KiB and both EqF figures under 20 KiB. `PEAK_ALIGN` is the
+initial alignment's deepest call, over a velocity, a position-only and a
+gyrocompass alignment that must each reach the right answer; CI holds it under
+8 KiB. `src/bin/panic_audit.rs` is a second binary that links only the
+data paths — both estimators, both EqF covariance forms, both rewind layers and
+the aligner — so that CI can check none reaches `core::panicking`.
 
 Needs `qemu-system-arm` on `PATH` and the `thumbv7em-none-eabihf` target:
 

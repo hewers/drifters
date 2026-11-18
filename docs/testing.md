@@ -820,6 +820,34 @@ firmware built without `f32-covariance` cannot keep up, drops 1 368 of 2 000
 samples and fails. Its timing is a model, for the reasons in the next
 section, so the margin it shows still needs silicon.
 
+### The aligner
+
+The [`Aligner`](../crates/drifters-core/src/align.rs) runs before an engine
+exists, so its stack and the engine's do not add up. The harness aligns three
+times, from GNSS velocity, from positions alone and by gyrocompass, feeding a
+simulated vehicle one call at a time with the simulator outside the measured
+region. Each run must also reach the right answer: attitude within 0.5°,
+position within 0.5 m, velocity within 0.2 m/s, and the expected heading source.
+A figure from an alignment that never finished cannot pass. `PEAK_ALIGN` is the
+deepest call of the three, and CI holds it under 8 KiB on both cores.
+
+| | Cortex-M4 | Cortex-M7 |
+|---|---|---|
+| `size_of::<Aligner>()`, bytes | 4 744 | 4 744 |
+| `size_of::<Alignment>()`, bytes | 472 | 472 |
+| peak stack, `add_imu`, bytes | 5 356 | 4 320 |
+| peak stack, `add_gnss`, bytes | 1 908 | 764 |
+| instructions, mean `add_imu` | 28 880 | 1 480 |
+| instructions, worst `add_imu` | 383 080 | 13 080 |
+| instructions, worst `add_gnss` | 58 600 | 3 880 |
+
+The instruction counts are from the velocity path under `-icount shift=0`, and
+resolve to 40 instructions, one SysTick tick. The aligner works in `f64`, which
+the M4 does in software. At the floors used above, one instruction per cycle at
+168 MHz on the M4 and half a cycle at 400 MHz on the M7, the worst `add_imu` is
+2.3 ms and 16 µs, and the mean is 0.17 ms and 1.9 µs. They are floors, for the
+reasons under [What QEMU cannot measure](#what-qemu-cannot-measure).
+
 ## Layer 10 — the data path links no panic machinery
 
 `cortex-m-harness/src/bin/panic_audit.rs` is a firmware binary containing only
@@ -889,6 +917,12 @@ non-holonomic was not among them. It surfaced when the rewind layer went in: a
 replay can repeat any aid, so linking one links them all. The audit proves the
 absence of panics in what it links, and nothing about what it does not.
 
+**`panic_fmt`, from `f64::clamp`.** The aligner's rest detector limits how far
+its gate may widen, and first wrote that limit with `clamp`, which panics when
+its bounds are out of order. They never are, because the configuration is
+validated, but the optimiser cannot see that, and all eight audit builds linked
+the panic. `.max(step).min(3.0 * step)` gives the same answer and links nothing.
+
 ### Scope
 
 This covers the steady-state data path of both estimators. For the ESKF:
@@ -901,8 +935,9 @@ physical units; and a late fix with a velocity through `EqfRewindEngine`,
 which is the shared rewind machinery monomorphised a second time. The same
 calls are made again on the factored single-precision engine and its rewind
 layer, whose Bierman, Thornton and whitening code is data path on the part it
-is for. It does not link `apply_pseudoranges` or the smoother, and so says
-nothing about them.
+is for. The aligner is covered as well: `add_imu`, `add_gnss`, `status`, `reset`
+and both engines' `with_alignment`. It does not link `apply_pseudoranges` or the
+smoother, and so says nothing about them.
 
 The equivariant filter linked nothing on the first build with its engine in
 the audit, which is worth recording precisely because the ESKF needed five
@@ -1103,3 +1138,134 @@ velocity-plus-attitude at 20 against 6, and only then did comparing the
 filter's predicted correlation against the sample correlation across runs —
 `+0.794` against `−0.697` — make it obvious that a sign rather than a magnitude
 was at fault. Both diagnostics are now in `drifters nees --eskf`.
+
+## Layer 13 — initial alignment
+
+An alignment is a state and a claim about how wrong that state is, and a filter
+started from it believes both. So both are tested, first where the truth is
+known exactly and then on recordings where it is not.
+
+```bash
+cargo test --release -p drifters-cli --test alignment -- --nocapture
+```
+
+The tests that need a recording skip when it is absent, and in a debug build.
+
+### Against a simulated vehicle
+
+Each Monte Carlo run draws the sensor's turn-on errors from the priors the
+aligner was given, then drives one vehicle through a rest and a pull-away. The
+simulator is not the aligner's model: it integrates the full equations, with
+transport rate, Coriolis, normal gravity with height, a tilted mount at an
+arbitrary yaw, and the antenna on a lever arm. Every error in the result is
+divided by the sigma reported for it. The RMS of that ratio must be below 1.6,
+which catches an overconfident alignment, and above 0.02, which catches one that
+has thrown its information away.
+
+| sensor | fixes | runs aligned | heading RMS | heading error ÷ sigma, RMS | mean time to align |
+|---|---|---|---|---|---|
+| tactical, bias unknown | velocity | 200 of 200 | 0.33° | 0.98 | 33.0 s |
+| automotive MEMS | velocity | 200 of 200 | 1.65° | 0.99 | 33.0 s |
+| consumer | velocity | 200 of 200 | 2.15° | 0.88 | 35.1 s |
+| tactical, bias unknown | positions only | 200 of 200 | 0.25° | 0.30 | 33.0 s |
+| automotive MEMS | positions only | 200 of 200 | 0.80° | 0.33 | 37.0 s |
+| consumer | positions only | 200 of 200 | 0.78° | 0.26 | 42.0 s |
+| tactical, bias known to 0.27 °/h | gyrocompass, at rest | 200 of 200 | 1.18° | 1.01 | 10.0 s |
+
+Two sets of sigmas are cautious here. With positions only, the heading sigma is
+three to four times the error seen. The simulated receiver puts most of its
+stated position sigma into an offset shared by every fix, which cancels in a
+displacement, and the aligner has only the stated figure to go on. Gyro-bias
+errors come to 0.33 of their sigma on MEMS parts and 0.16 on consumer ones,
+because that sigma is floored at the sensor's in-run figure. The simulated bias
+never changes, and a changing bias is what the floor is for;
+[ADR 0011](adr/0011-alignment-in-core.md) has the case from real data.
+
+Handing over is tested by flying on. Each engine is built from the alignment
+alone, ten seeds per grade, and fed the same GNSS for 60 s. The worst error at
+the end of those runs:
+
+| sensor | ESKF position | ESKF heading | EqF position | EqF heading |
+|---|---|---|---|---|
+| tactical, bias unknown | 0.10 m | 0.11° | 0.15 m | 0.12° |
+| automotive MEMS | 2.12 m | 0.68° | 2.57 m | 0.60° |
+| consumer | 6.10 m | 1.89° | 6.72 m | 1.98° |
+
+A further test tries twelve mounting yaws around the circle, each with its own
+course, and requires every heading within four sigmas of the truth. A method
+that took the body axis to follow the velocity would fail most of them.
+
+### Against KF-GINS
+
+The aligner uses 14.0 s of rest and 5.0 s of motion, and finishes from RTK
+displacements alone.
+
+| | roll | pitch | yaw |
+|---|---|---|---|
+| error | 0.049° | 0.029° | 1.482° |
+| sigma | 0.057° | 0.056° | 2.677° |
+
+The ESKF then runs for 600 s from nothing but that alignment. Horizontal RMS is
+0.061 m and the worst 0.331 m, and after 120 s the heading stays within 0.016°.
+The reference is this project's own full solution of the same recording, so it
+shows agreement with that solution and is not independent truth.
+
+### Against phones
+
+Four GSDC traces from one phone, each with Doppler velocity and with positions
+alone. Two things are compared. The heading is compared with a second alignment
+of the same IMU given the surveyed track, and must agree within three combined
+sigmas. The ESKF's horizontal RMS against survey-grade truth, from five seconds
+after alignment onward, is compared with the coarse start the phone runs used
+before: attitude from the first seconds of data, and generic sigmas of 5 m,
+2 m/s and 5°, 5° and 30°. It must stay within 10 % of the coarse start.
+
+| trace | fixes | aligned after | yaw sigma | heading vs surveyed (its sigma) | RMS aligned, `f64` | coarse, `f64` | aligned, `f32` | coarse, `f32` |
+|---|---|---|---|---|---|---|---|---|
+| `gsdc2023` | Doppler | 31.5 s | 4.6° | −4.92° (3.39°) | 6.15 m | 6.32 m | 6.07 m | 5.73 m |
+| `gsdc2023` | positions | 224.5 s | 2.9° | 0.82° (0.75°) | 11.30 m | 10.82 m | 11.30 m | 10.82 m |
+| `gsdc2023-b` | Doppler | 71.8 s | 5.1° | −2.01° (4.29°) | 5.23 m | 20.75 m | 4.84 m | 13.33 m |
+| `gsdc2023-b` | positions | 245.8 s | 2.9° | 1.58° (0.77°) | 6.15 m | 48.53 m | 6.15 m | 48.55 m |
+| `gsdc2023-c` | Doppler | 166.0 s | 3.7° | −0.24° (0.93°) | 3.72 m | 4.93 m | 4.54 m | 4.86 m |
+| `gsdc2023-c` | positions | 47.0 s | 8.4° | −4.52° (8.56°) | 7.10 m | 73.93 m | 7.10 m | 73.94 m |
+| `gsdc2023-d` | Doppler | 51.9 s | 5.5° | 1.04° (4.44°) | 4.15 m | 4.58 m | 4.19 m | 4.58 m |
+| `gsdc2023-d` | positions | 1 537.9 s | 6.8° | 1.70° (0.85°) | 3.31 m | 9.52 m | 3.31 m | 9.52 m |
+
+The aligned start is worse than the coarse one in two places: `gsdc2023` with
+positions, by 4 %, and with Doppler under `f32`, by 6 %. It is far better on the
+traces where the coarse start did badly, by up to ten times. The surveyed heading
+is computed from the same IMU, so it is not independent either.
+
+### One run of a phone trace is not a measurement
+
+Every RMS above is the median of nine runs whose starts lie about 0.6 mm apart
+in latitude, within 3 mm in all. The test began by comparing single runs, and
+failed under `f32` on `gsdc2023-c` with Doppler: 6.58 m aligned against 4.86 m
+coarse, where `f64` gave 3.72 m. Replacing one output of the alignment at a time
+moved the result both ways, and the same replacement helped in one precision and
+hurt in the other, which is what led to moving the start instead:
+
+| run | range over nine starts |
+|---|---|
+| `gsdc2023-c` Doppler, aligned, `f32` | 4.18 m to 7.99 m |
+| `gsdc2023-b` Doppler, coarse, `f64` | 11.72 m to 32.85 m |
+| `gsdc2023-b` Doppler, coarse, `f32` | 10.39 m to 25.77 m |
+
+Doppler runs on phones spend much of their time at the edge of the engine's
+gates. Their rejection streaks run to the limit of ten, where the engine inflates
+its covariance, and that happens tens of times per trace, so which fix gets
+through depends on the last digits of the state. The position-only runs do
+neither, and they agree between precisions to 0.02 m. This sensitivity belongs to the engine on this data and is
+still there. The test takes medians so that it judges the alignment and not one
+draw from it. The 10 % allowance was not changed.
+
+### What this does not show
+
+- A rest is required. An alignment started in motion never levels.
+- Position-only alignment on a phone can be slow: one trace needed about 26
+  minutes, waiting for a clean rest followed by enough movement.
+- A gyro-bias prior set too small can yield a wrong gyrocompass heading with a
+  small sigma, because an east bias cannot be told from heading at rest.
+- Every phone trace is the same phone model.
+- No test runs on hardware. The bare-metal figures in
+  [Layer 9](#the-aligner) come from QEMU.

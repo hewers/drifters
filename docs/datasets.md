@@ -10,8 +10,8 @@ is never a broken checkout.
 
 | what | size | needed for |
 |---|---|---|
-| [KF-GINS demo dataset](#kf-gins-demo-dataset) | 67 MB | the 3.3 cm accuracy regression, `drifters replay`, `drifters eqf` |
-| [GSDC 2023 phone trace](#gsdc-2023-phone-trace) | ~3.7 GB archive | the ground-truth comparison, `drifters gsdc` |
+| [KF-GINS demo dataset](#kf-gins-demo-dataset) | 67 MB | the 3.3 cm accuracy regression, `drifters replay`, `drifters eqf`, the [initial-alignment test](testing.md#layer-13--initial-alignment) |
+| [GSDC 2023 phone trace](#gsdc-2023-phone-trace) | ~3.7 GB archive | the ground-truth comparison, `drifters gsdc`, the initial-alignment test (which also uses the [held-out traces](#held-out-traces)) |
 | [Source papers](#source-papers) | 2 MB | reading along with `drifters-eqf`; the code does not need them |
 
 ## KF-GINS demo dataset

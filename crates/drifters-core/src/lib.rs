@@ -33,6 +33,8 @@
 //!   trait, GNSS epoch placement, gate thresholds.
 //! - [`rewind`] — applying a GNSS fix after its epoch, for any engine that
 //!   implements [`Rewindable`].
+//! - [`align`] — initial alignment: the starting state and its sigmas, worked
+//!   out from the IMU and GNSS, for any engine.
 //!
 //! [`Estimator`]: estimator::Estimator
 //! [`Rewindable`]: rewind::Rewindable
@@ -47,6 +49,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod align;
 pub mod earth;
 pub mod estimator;
 pub mod frames;

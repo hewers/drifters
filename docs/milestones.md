@@ -1114,3 +1114,25 @@ churn.
 Deliberately **not** blocking on M14. Its steps are measurement-gated and
 open-ended, and `0.x` exists precisely so a release does not have to wait for
 them.
+
+---
+
+## M17 — Initial alignment ✅ done
+
+Both engines used to need a position, velocity, attitude and sigmas from the
+caller. [`drifters_core::align`](../crates/drifters-core/src/align.rs) now works
+them out from the IMU and the receiver, and either engine starts from the result
+through `with_alignment`. [ADR 0011](adr/0011-alignment-in-core.md) records why
+it is a separate step, and
+[testing.md](testing.md#layer-13--initial-alignment) has the evidence.
+
+- [x] Rest detection, levelling, and gyro and accelerometer bias from a rest
+- [x] Heading by gyrocompass, where the gyro can resolve it
+- [x] Heading in motion, fitted to GNSS velocities or, without them, displacements
+- [x] Sigmas for every output, widened when the fixes disagree with the IMU
+- [x] 200-run Monte Carlo consistency for three sensor grades
+- [x] KF-GINS and four GSDC traces, in `f64` and `f32`
+- [x] No allocation and no linked panic path; stack under 8 KiB on both cores
+
+Open: a start already in motion is not handled, and none of this has run on
+hardware.
