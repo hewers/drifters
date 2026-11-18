@@ -10,6 +10,7 @@ use drifters_core::estimator::{epoch_tolerance, place, Estimator, Placement, Pva
 use drifters_core::frames::Ned;
 use drifters_core::math::Quat;
 use drifters_core::math::{Mat3, Matrix, Vec3};
+use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{usable_sigmas, Attitude, GnssFix, ImuSample, NavState, Pva};
 use drifters_core::F;
@@ -568,6 +569,22 @@ impl GinsEngine {
         self.stale_fixes
     }
 
+    /// Change how the IMU is taken to sit in the vehicle, as when a
+    /// [`MountingEstimator`] has finished. Returns `false` and changes nothing
+    /// if `mounting` is not [valid](VehicleMounting::is_valid).
+    ///
+    /// [`RewindEngine`](crate::RewindEngine) has no equivalent: a replay has to
+    /// see what the original call saw, so there it is set at construction.
+    ///
+    /// [`MountingEstimator`]: drifters_core::mounting::MountingEstimator
+    pub fn set_vehicle_mounting(&mut self, mounting: VehicleMounting) -> bool {
+        let valid = mounting.is_valid();
+        if valid {
+            self.options.vehicle_mounting = mounting;
+        }
+        valid
+    }
+
     /// Apply a zero-velocity update at the current state.
     ///
     /// See [`measurement::zero_velocity`]; the caller decides *when*, usually
@@ -599,16 +616,27 @@ impl GinsEngine {
         if self.state.speed() < min_speed {
             return Ok(false);
         }
-        let m = measurement::nonholonomic(&self.state.pva, sigma);
+        let m = measurement::nonholonomic_mounted(
+            &self.state.pva,
+            &self.options.vehicle_mounting,
+            sigma,
+        );
         self.apply(&m)
     }
 
-    /// Apply an odometer / wheel-speed update, m/s along the body forward axis.
+    /// Apply an odometer / wheel-speed update, m/s along the vehicle's forward
+    /// axis, which is the body's unless
+    /// [`vehicle_mounting`](GinsOptions::vehicle_mounting) says otherwise.
     pub fn apply_wheel_speed(&mut self, speed: F, sigma: F) -> Result<bool, FilterError> {
         if !(Aid::WheelSpeed { speed, sigma }).is_valid() {
             return Ok(false);
         }
-        let m = measurement::wheel_speed(&self.state.pva, speed, sigma);
+        let m = measurement::wheel_speed_mounted(
+            &self.state.pva,
+            &self.options.vehicle_mounting,
+            speed,
+            sigma,
+        );
         self.apply(&m)
     }
 
@@ -1377,6 +1405,48 @@ mod tests {
             after.abs() < before.abs() / 4.0,
             "slip went {before} -> {after}"
         );
+    }
+
+    #[test]
+    fn the_wheel_aids_use_the_configured_mounting() {
+        // The vehicle drives due north with its sensor turned 3° from it, so
+        // the sensor's own axes see side slip that is not there.
+        let yaw = 3.0 * drifters_core::math::DEG_TO_RAD;
+        let mounting = VehicleMounting::from_euler(0.0, 0.0, yaw);
+        let start = options_with(Ned::new(10.0, 0.0, 0.0), Euler::new(0.0, 0.0, yaw));
+        let heading = |e: &GinsEngine| e.nav_state().euler().yaw;
+
+        let mut mounted =
+            GinsEngine::new(start.with_vehicle_mounting(mounting)).expect("valid options");
+        assert!(mounted.apply_nonholonomic((0.05, 0.05), 1.0).unwrap());
+        assert!(mounted.apply_wheel_speed(10.0, 0.05).unwrap());
+        assert_relative_eq!(heading(&mounted), yaw, epsilon = 1e-9);
+
+        let mut unmounted = GinsEngine::new(start).expect("valid options");
+        assert!(unmounted.apply_nonholonomic((0.05, 0.05), 1.0).unwrap());
+        assert!((heading(&unmounted) - yaw).abs() > 0.1 * yaw);
+    }
+
+    #[test]
+    fn a_mounting_can_be_set_once_it_is_known() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let found = VehicleMounting::from_euler(0.0, 0.01, 0.02).with_forward_std(0.001);
+        assert!(e.set_vehicle_mounting(found));
+        assert_eq!(e.options().vehicle_mounting, found);
+
+        let invalid = VehicleMounting::ALIGNED.with_forward_std(F::NAN);
+        assert!(!e.set_vehicle_mounting(invalid));
+        assert_eq!(e.options().vehicle_mounting, found, "left as it was");
+    }
+
+    #[test]
+    fn an_invalid_mounting_is_refused_at_construction() {
+        let mut bad = VehicleMounting::ALIGNED;
+        bad.rotation.w = 0.5;
+        assert!(matches!(
+            GinsEngine::new(options().with_vehicle_mounting(bad)),
+            Err(ConfigError::InvalidMounting)
+        ));
     }
 
     #[test]

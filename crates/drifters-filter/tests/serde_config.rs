@@ -9,6 +9,7 @@
 #![cfg(feature = "serde")]
 
 use drifters_core::math::Vec3;
+use drifters_core::mounting::VehicleMounting;
 use drifters_filter::{ConfigError, GinsEngine, GinsOptions, StationarityConfig};
 
 /// What a project actually keeps in a file: the installation and a tuning
@@ -41,6 +42,35 @@ fn a_misspelt_setting_is_an_error() {
     let err = serde_json::from_str::<GinsOptions>(r#"{ "antena_lever_arm": [0.1, 0.0, -1.0] }"#)
         .unwrap_err();
     assert!(err.to_string().contains("antena_lever_arm"), "{err}");
+}
+
+/// A mounting found once is kept with the rest of the installation.
+#[test]
+fn a_vehicle_mounting_reads_from_a_file() {
+    let options: GinsOptions = serde_json::from_str(
+        r#"{ "vehicle_mounting": {
+            "rotation": { "w": 0.6, "x": 0.0, "y": 0.0, "z": 0.8 },
+            "forward_std": 0.002
+        } }"#,
+    )
+    .unwrap();
+    assert_eq!(options.vehicle_mounting.rotation.z, 0.8);
+    assert_eq!(options.vehicle_mounting.forward_std, 0.002);
+    assert!(GinsEngine::new(options).is_ok());
+    let default: GinsOptions = serde_json::from_str("{}").unwrap();
+    assert_eq!(default.vehicle_mounting, VehicleMounting::ALIGNED);
+
+    let not_unit: GinsOptions = serde_json::from_str(
+        r#"{ "vehicle_mounting": {
+            "rotation": { "w": 2.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+            "forward_std": 0.0
+        } }"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        GinsEngine::new(not_unit),
+        Err(ConfigError::InvalidMounting)
+    ));
 }
 
 /// Reading is not validating: there is one check, and it is in the

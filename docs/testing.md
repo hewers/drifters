@@ -1431,3 +1431,46 @@ and reaches less than this.
 - The aligner, the smoother or the CLI's parsers. None of them is driven here.
 - Long-horizon behaviour. A script is at most 256 calls, enough to wrap the rewind
   rings and reach the rejection limit, and nowhere near a drive.
+
+## Layer 15 — a sensor that does not point along its vehicle
+
+A non-holonomic constraint and a wheel speed describe the vehicle, and the filter's
+body frame is the sensor's. `crates/drifters-cli/tests/vehicle_mounting.rs` checks
+the rotation between them on a simulated automotive MEMS unit: full strapdown truth
+on a rotating Earth, turned 3°, pitched −2° and rolled 1.5° from a vehicle whose
+velocity lies along its own forward axis.
+
+Each of twelve runs has ten minutes of 1 Hz GNSS position and velocity while
+`MountingEstimator` watches, then a 60 s outage flown four times from the same state
+on the same samples, with non-holonomic and wheel-speed updates at 10 Hz:
+
+| the aids are told | horizontal error at the end, RMS |
+|---|---|
+| nothing (no aids) | 8.9 m |
+| the sensor is aligned | 4.6 m |
+| the estimated mounting | **1.1 m** |
+| the true mounting | 1.0 m |
+
+The forward axis comes out 0.076° RMS from the truth, which is 0.39 of the sigma
+reported for it. That sigma is deliberately pessimistic: it counts the filter's
+attitude sigma as an error shared by every sample, and the heading error in fact
+changes over ten minutes.
+
+Assumed aligned, the non-holonomic updates read about 0.8 m/s of slip against a
+0.1 m/s sigma and the gate refuses them, under 5 % getting through in every run, so
+that run has only its wheel speed. With the estimated mounting over 95 % are accepted.
+
+Two more tests pin what the documentation claims. A unit mounted sideways is found
+to better than 0.3°. And the estimator must not run alongside the constraints: with
+a non-holonomic update running against an aligned mounting, a 0.5° mount comes out
+0.491° wrong, against 0.011° with the aid off. The filter has been told the answer,
+and the estimator reads it back.
+
+### What this does not show
+
+- A real vehicle. The simulation has no tyre slip, no suspension movement and no
+  lever arm between the sensor and the rear axle, each of which puts real side
+  velocity into a turn or a bump. The estimator's turn-rate gate is there for them,
+  and has not been tested against them.
+- The equivariant filter. Its aids do not include these two, so it has no use for
+  the setting.

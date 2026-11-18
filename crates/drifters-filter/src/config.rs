@@ -3,6 +3,7 @@
 use drifters_core::align::Alignment;
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
+use drifters_core::mounting::VehicleMounting;
 use drifters_core::types::{Attitude, ImuError, ImuNoise, Pva};
 use drifters_core::F;
 
@@ -69,6 +70,13 @@ pub struct GinsOptions {
     /// down from the IMU reference point). This is the lever arm; getting its
     /// sign wrong shows up as a heading-dependent position bias.
     pub antenna_lever_arm: Vec3,
+    /// How the IMU sits in the vehicle, for the aids that are about the vehicle
+    /// rather than the sensor: non-holonomic constraints and wheel speed.
+    ///
+    /// Aligned by default. [`MountingEstimator`] finds it from a drive.
+    ///
+    /// [`MountingEstimator`]: drifters_core::mounting::MountingEstimator
+    pub vehicle_mounting: VehicleMounting,
     /// Consecutive gate rejections tolerated before the covariance is inflated.
     ///
     /// A filter that rejects every measurement is not being robust, it is
@@ -116,6 +124,7 @@ impl Default for GinsOptions {
             initial_accel_scale_std: Vec3::splat(1000.0 * PPM),
             imu_noise: ImuNoise::default(),
             antenna_lever_arm: Vec3::ZERO,
+            vehicle_mounting: VehicleMounting::ALIGNED,
             zupt_holds_attitude: true,
             max_consecutive_rejections: 10,
             rejection_inflation: 4.0,
@@ -160,6 +169,12 @@ impl GinsOptions {
     /// Set the GNSS antenna lever arm in the body frame, metres.
     pub fn with_antenna_lever_arm(mut self, lever_arm: Vec3) -> Self {
         self.antenna_lever_arm = lever_arm;
+        self
+    }
+
+    /// Set how the IMU sits in the vehicle.
+    pub fn with_vehicle_mounting(mut self, mounting: VehicleMounting) -> Self {
+        self.vehicle_mounting = mounting;
         self
     }
 
@@ -211,6 +226,9 @@ impl GinsOptions {
         if !self.antenna_lever_arm.is_finite() {
             return Some(ConfigError::InvalidLeverArm);
         }
+        if !self.vehicle_mounting.is_valid() {
+            return Some(ConfigError::InvalidMounting);
+        }
         // `is_finite` carries the NaN case, so the comparison can stay direct.
         if !self.rejection_inflation.is_finite() || self.rejection_inflation < 1.0 {
             return Some(ConfigError::InvalidInflation);
@@ -239,6 +257,8 @@ pub enum ConfigError {
     /// one would shrink the covariance, making the deadlock it exists to break
     /// permanent.
     InvalidInflation,
+    /// The vehicle mounting is not a unit rotation with a usable uncertainty.
+    InvalidMounting,
 }
 
 impl ConfigError {
@@ -251,6 +271,7 @@ impl ConfigError {
             Self::NegativeProcessNoise => "process noise densities must be >= 0",
             Self::InvalidLeverArm => "antenna lever arm is not finite",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
+            Self::InvalidMounting => "vehicle mounting must be a unit rotation with sigma >= 0",
         }
     }
 }

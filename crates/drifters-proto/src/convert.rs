@@ -27,6 +27,7 @@ use core::fmt;
 
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Quat, Vec3};
+use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{Attitude, GnssFix, ImuError, ImuNoise, ImuSample, NavState, Pva};
 use drifters_core::F;
@@ -475,6 +476,31 @@ pub fn state_matrix(msg: &pb::Covariance) -> Result<StateMatrix, ConvertError> {
 
 // --- configuration ------------------------------------------------------
 
+impl From<&VehicleMounting> for pb::VehicleMounting {
+    fn from(m: &VehicleMounting) -> Self {
+        let mut msg = Self {
+            r#forward_std_rad: m.forward_std,
+            ..Default::default()
+        };
+        msg.set_rotation((&m.rotation).into());
+        msg
+    }
+}
+
+impl TryFrom<&pb::VehicleMounting> for VehicleMounting {
+    type Error = ConvertError;
+
+    /// A present mounting has to say what it is: no rotation here is not the
+    /// same as no mounting, which is the outer field being absent.
+    fn try_from(msg: &pb::VehicleMounting) -> Result<Self, Self::Error> {
+        let rotation = require!(msg.r#rotation(), "vehicle_mounting.rotation").try_into()?;
+        Ok(Self {
+            rotation,
+            forward_std: msg.r#forward_std_rad,
+        })
+    }
+}
+
 impl From<&GinsOptions> for pb::GinsOptions {
     fn from(o: &GinsOptions) -> Self {
         let mut msg = Self {
@@ -496,6 +522,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
         msg.set_initial_accel_scale_std((&o.initial_accel_scale_std).into());
         msg.set_imu_noise((&o.imu_noise).into());
         msg.set_antenna_lever_arm_m((&o.antenna_lever_arm).into());
+        msg.set_vehicle_mounting((&o.vehicle_mounting).into());
         msg.set_zupt_holds_attitude(o.zupt_holds_attitude);
         msg
     }
@@ -546,6 +573,11 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
         options.imu_noise = require!(msg.r#imu_noise(), "imu_noise").try_into()?;
         options.antenna_lever_arm =
             require!(msg.r#antenna_lever_arm_m(), "antenna_lever_arm_m").into();
+        // Absent means aligned, which is what a configuration from before the
+        // field meant, and is what `GinsOptions::default` already holds.
+        if let Some(mounting) = msg.r#vehicle_mounting() {
+            options.vehicle_mounting = mounting.try_into()?;
+        }
         options.max_consecutive_rejections = msg.r#max_consecutive_rejections;
         options.rejection_inflation = msg.r#rejection_inflation;
         // Absent means "the recommended default", not false. A message
@@ -1133,6 +1165,7 @@ mod option_defaults {
             "initial_accel_scale_std",
             "imu_noise",
             "antenna_lever_arm",
+            "vehicle_mounting",
             "max_consecutive_rejections",
             "zupt_holds_attitude",
             "rejection_inflation",
@@ -1141,6 +1174,53 @@ mod option_defaults {
             fields, carried,
             "GinsOptions's fields changed; update both conversions and this list"
         );
+    }
+
+    #[test]
+    fn a_vehicle_mounting_survives_the_round_trip() {
+        let mounting = VehicleMounting::from_euler(0.01, -0.02, 0.03).with_forward_std(0.004);
+        let options = GinsOptions::default().with_vehicle_mounting(mounting);
+        let msg = pb::GinsOptions::from(&options);
+        let decoded = GinsOptions::try_from(&msg).expect("valid");
+        assert!(
+            (decoded
+                .vehicle_mounting
+                .rotation
+                .angle_to(mounting.rotation))
+            .abs()
+                < 1e-12
+        );
+        assert_eq!(decoded.vehicle_mounting.forward_std, 0.004);
+    }
+
+    #[test]
+    fn an_absent_vehicle_mounting_decodes_to_aligned() {
+        let mut msg = pb::GinsOptions::from(&GinsOptions::default());
+        msg.clear_vehicle_mounting();
+        let decoded = GinsOptions::try_from(&msg).expect("still valid");
+        assert_eq!(decoded.vehicle_mounting, VehicleMounting::ALIGNED);
+    }
+
+    #[test]
+    fn an_unusable_vehicle_mounting_is_refused() {
+        let base = pb::GinsOptions::from(&GinsOptions::default());
+
+        // Present, but with nothing in it.
+        let mut empty = base;
+        empty.set_vehicle_mounting(pb::VehicleMounting::default());
+        assert!(GinsOptions::try_from(&empty).is_err());
+
+        let mut zero = base;
+        let mut mounting = pb::VehicleMounting::default();
+        mounting.set_rotation(pb::Quaternion::default());
+        zero.set_vehicle_mounting(mounting);
+        assert!(GinsOptions::try_from(&zero).is_err());
+
+        let mut negative = base;
+        let mut mounting = pb::VehicleMounting::from(&VehicleMounting::ALIGNED);
+        mounting.r#forward_std_rad = -1.0;
+        negative.set_vehicle_mounting(mounting);
+        assert!(GinsOptions::try_from(&negative).is_err());
     }
 
     #[test]

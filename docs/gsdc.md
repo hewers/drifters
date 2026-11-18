@@ -116,9 +116,10 @@ truth.
 
 **Non-holonomic constraints** would help further — but the phone's
 sensor axes are not the vehicle's, and the mounting rotation is unknown, so NHC
-cannot be applied without estimating it first. The EqF's symmetry group
-estimates exactly that kind of extrinsic, which makes this a natural place to
-compare the two estimators.
+cannot be applied without estimating it first. `MountingEstimator` does that from
+a GNSS-aided drive, but this pipeline does not use it yet, and it needs a phone
+that stays put in its holder. The EqF's symmetry group estimates exactly that kind
+of extrinsic, which makes this a natural place to compare the two estimators.
 
 ## Reading it correctly
 

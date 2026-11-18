@@ -74,6 +74,14 @@ message ImuNoise {
 
 // Everything the engine needs to start.
 //
+// How the IMU sits in the vehicle carrying it.
+message VehicleMounting {
+  // q_vb, rotating body vectors into the vehicle's forward-right-down frame.
+  Quaternion rotation = 1;
+  // One-sigma uncertainty of the vehicle forward axis's direction, radians.
+  double forward_std_rad = 2;
+}
+
 // The initial standard deviations matter as much as the initial state: they set
 // the diagonal of P and therefore how hard the first fixes are allowed to pull
 // the solution. All must be strictly positive.
@@ -119,4 +127,9 @@ message GinsOptions {
   // behaviour that diverges. Absent means "use the recommended default", which
   // is true.
   optional bool zupt_holds_attitude = 16;
+
+  // Rotation from the sensor to the vehicle, used by the non-holonomic and
+  // wheel-speed updates. Absent means the two are aligned, which is what a
+  // configuration written before this field meant.
+  VehicleMounting vehicle_mounting = 17;
 }

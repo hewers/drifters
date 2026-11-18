@@ -33,8 +33,16 @@ them is a bug.
 - **y** right, out the starboard side
 - **z** down, through the belly
 
-An IMU mounted any other way needs a fixed boresight rotation applied in the
-driver, before samples reach `ImuSample`.
+The body frame is the sensor's. Nothing requires it to line up with the vehicle:
+the attitude the filter estimates is the sensor's, and an alignment finds it
+whichever way the sensor faces.
+
+The vehicle frame (v) is also forward-right-down, and it matters only to the aids
+that are statements about the vehicle, non-holonomic constraints and wheel speed.
+`GinsOptions::vehicle_mounting` holds the rotation between the two,
+`v_v = C_vb · v_b`, and `MountingEstimator` finds its yaw and pitch from a
+GNSS-aided drive. Roll about the forward axis is not observable from velocity and
+does not change those aids when their two sigmas are equal.
 
 ### Navigation frame (n) — north-east-down (NED)
 

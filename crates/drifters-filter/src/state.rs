@@ -177,17 +177,18 @@ mod size_tests {
         // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
         // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
         // largest single saving the engine has had — then 3 232 when the epoch
-        // tolerance stopped being a field and came from the last interval.
+        // tolerance stopped being a field and came from the last interval, then
+        // 3 272 when the options gained the vehicle mounting.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (
                 cfg!(feature = "smoothing"),
                 cfg!(feature = "f32-covariance")
             ) {
-                (true, false) => 21_480,
-                (true, true) => 20_560,
-                (false, false) => 3_232,
-                (false, true) => 2_312,
+                (true, false) => 21_520,
+                (true, true) => 20_600,
+                (false, false) => 3_272,
+                (false, true) => 2_352,
             },
             "whole engine"
         );
@@ -217,10 +218,10 @@ mod size_tests {
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (cfg!(feature = "smoothing"), f32_covariance) {
-                (true, false) => 11_808,
-                (true, true) => 11_328,
-                (false, false) => 2_296,
-                (false, true) => 1_816,
+                (true, false) => 11_848,
+                (true, true) => 11_368,
+                (false, false) => 2_336,
+                (false, true) => 1_856,
             },
             "whole engine"
         );

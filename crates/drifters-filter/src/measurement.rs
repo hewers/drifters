@@ -31,6 +31,8 @@
 //! point; a real installation has a lever arm to the wheel axle, which under
 //! rotation contributes `ω × l`. For a metre-scale offset at driving yaw rates
 //! that is a few cm/s — below the noise these models are given, but not zero.
+//! The rotation between the sensor and the vehicle is modelled, by
+//! [`VehicleMounting`].
 
 use drifters_core::frames::Ned;
 // `Real` supplies the no_std float math; see drifters_core::math::real for why
@@ -38,6 +40,7 @@ use drifters_core::frames::Ned;
 #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{wrap_pi, Mat3, Matrix, Vec3};
+use drifters_core::mounting::VehicleMounting;
 use drifters_core::types::{ImuSample, Pva};
 use drifters_core::F;
 
@@ -104,6 +107,17 @@ fn body_velocity_jacobians(pva: &Pva) -> (Mat3, Mat3) {
     (wrt_velocity, wrt_attitude)
 }
 
+/// The velocity in the vehicle frame, with its Jacobians against `δv` and `φ`.
+///
+/// `v_vehicle = C_vb·Cᵀ·v_n`, and `C_vb` is a constant, so each Jacobian is the
+/// body-frame one with `C_vb` in front.
+fn vehicle_velocity(pva: &Pva, mounting: &VehicleMounting) -> (Vec3, Mat3, Mat3) {
+    let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(pva);
+    let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+    let c = mounting.to_dcm();
+    (c * v_body, c.matmul(&wrt_velocity), c.matmul(&wrt_attitude))
+}
+
 /// Zero-velocity update (ZUPT): assert the vehicle is not moving.
 ///
 /// The single most valuable auxiliary measurement for a low-cost system. During
@@ -160,9 +174,26 @@ pub fn zero_velocity(pva: &Pva, sigma: Vec3) -> Measurement<3> {
 /// minimum speed.
 ///
 /// `sigma` is the one-sigma slip allowance for (lateral, vertical), m/s.
+///
+/// This form takes the sensor's axes to be the vehicle's. See
+/// [`nonholonomic_mounted`].
 pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
-    let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(pva);
-    let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+    nonholonomic_mounted(pva, &VehicleMounting::ALIGNED, sigma)
+}
+
+/// [`nonholonomic`], for a sensor mounted at an angle to the vehicle.
+///
+/// The constraint is on the **vehicle** frame's lateral and vertical velocity.
+/// An uncertain mounting widens both sigmas by `speed · forward_std`, because a
+/// forward axis wrong by a small angle reads as that much side slip.
+pub fn nonholonomic_mounted(
+    pva: &Pva,
+    mounting: &VehicleMounting,
+    sigma: (F, F),
+) -> Measurement<2> {
+    let (v_vehicle, wrt_velocity, wrt_attitude) = vehicle_velocity(pva, mounting);
+    let slack = v_vehicle.norm() * mounting.forward_std;
+    let slack = slack * slack;
 
     let mut jacobian = Matrix::<2, N_STATE>::zeros();
     // Rows 1 and 2 of the body-velocity Jacobians: lateral and vertical.
@@ -180,9 +211,12 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
     }
 
     Measurement {
-        innovation: Matrix::<2, 1>::from_column([v_body.y, v_body.z]),
+        innovation: Matrix::<2, 1>::from_column([v_vehicle.y, v_vehicle.z]),
         jacobian,
-        noise: Matrix::<2, 2>::from_diagonal(&[sigma.0 * sigma.0, sigma.1 * sigma.1]),
+        noise: Matrix::<2, 2>::from_diagonal(&[
+            sigma.0 * sigma.0 + slack,
+            sigma.1 * sigma.1 + slack,
+        ]),
         gate: Some(crate::eskf::chi_squared::P999[2]),
         held: HeldStates::NONE,
     }
@@ -198,9 +232,25 @@ pub fn nonholonomic(pva: &Pva, sigma: (F, F)) -> Measurement<2> {
 /// this model does not estimate — the 21-state vector has no odometer scale
 /// state. Absorb it into `sigma`, or add a 22nd state if the odometer is
 /// load-bearing over long outages.
+///
+/// This form takes the sensor's axes to be the vehicle's. See
+/// [`wheel_speed_mounted`].
 pub fn wheel_speed(pva: &Pva, speed: F, sigma: F) -> Measurement<1> {
-    let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(pva);
-    let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+    wheel_speed_mounted(pva, &VehicleMounting::ALIGNED, speed, sigma)
+}
+
+/// [`wheel_speed`], for a sensor mounted at an angle to the vehicle: the speed
+/// is along the **vehicle's** forward axis.
+///
+/// An error in the mounting changes this by the cosine of a small angle, so
+/// unlike [`nonholonomic_mounted`] it does not widen the noise.
+pub fn wheel_speed_mounted(
+    pva: &Pva,
+    mounting: &VehicleMounting,
+    speed: F,
+    sigma: F,
+) -> Measurement<1> {
+    let (v_vehicle, wrt_velocity, wrt_attitude) = vehicle_velocity(pva, mounting);
 
     let mut jacobian = Matrix::<1, N_STATE>::zeros();
     for c in 0..3 {
@@ -209,7 +259,7 @@ pub fn wheel_speed(pva: &Pva, speed: F, sigma: F) -> Measurement<1> {
     }
 
     Measurement {
-        innovation: Matrix::<1, 1>::from_column([v_body.x - speed]),
+        innovation: Matrix::<1, 1>::from_column([v_vehicle.x - speed]),
         jacobian,
         noise: Matrix::<1, 1>::from_column([sigma * sigma]),
         gate: Some(crate::eskf::chi_squared::P999[1]),
@@ -568,6 +618,125 @@ mod tests {
         let pva = state_with(Ned::new(10.0, 0.0, 0.0), Euler::default());
         let z = wheel_speed(&pva, 9.5, 0.1).innovation.to_column();
         assert_relative_eq!(z[0], 0.5, epsilon = 1e-12);
+    }
+
+    /// A sensor turned and tilted in a vehicle that is driving and banking.
+    fn mounted_case() -> (Pva, VehicleMounting, Ned) {
+        let mounting = VehicleMounting::from_euler(0.02, -0.035, 0.05);
+        let vehicle = drifters_core::math::Quat::from_euler(0.03, 0.01, 0.8);
+        let forward = vehicle.rotate(Vec3::new(1.0, 0.0, 0.0)) * 20.0;
+        let velocity = Ned::from_vec3(forward);
+        let pva = Pva {
+            position: Lla::from_degrees(30.5282, 114.3569, 25.0),
+            velocity,
+            attitude: Attitude::from_quat(vehicle * mounting.rotation),
+        };
+        (pva, mounting, velocity)
+    }
+
+    #[test]
+    fn a_vehicle_on_its_own_axis_satisfies_the_mounted_constraints() {
+        let (pva, mounting, _) = mounted_case();
+        let z = nonholonomic_mounted(&pva, &mounting, (0.1, 0.1))
+            .innovation
+            .to_column();
+        assert_relative_eq!(z[0], 0.0, epsilon = 1e-12);
+        assert_relative_eq!(z[1], 0.0, epsilon = 1e-12);
+        let z = wheel_speed_mounted(&pva, &mounting, 20.0, 0.1)
+            .innovation
+            .to_column();
+        assert_relative_eq!(z[0], 0.0, epsilon = 1e-12);
+
+        // Taken as aligned, the same drive reads as a metre per second of slip.
+        let z = nonholonomic(&pva, (0.1, 0.1)).innovation.to_column();
+        assert!(z[0].abs() > 0.9, "{}", z[0]);
+    }
+
+    #[test]
+    fn the_mounted_jacobians_are_the_derivatives_of_the_innovations() {
+        let (pva, mounting, _) = mounted_case();
+        let innovations = |p: &Pva| {
+            let lateral = nonholonomic_mounted(p, &mounting, (0.1, 0.1))
+                .innovation
+                .to_column();
+            let forward = wheel_speed_mounted(p, &mounting, 20.0, 0.1)
+                .innovation
+                .to_column();
+            [lateral[0], lateral[1], forward[0]]
+        };
+        let nhc = nonholonomic_mounted(&pva, &mounting, (0.1, 0.1));
+        let wheel = wheel_speed_mounted(&pva, &mounting, 20.0, 0.1);
+        let analytic = |row: usize, column: usize| {
+            if row < 2 {
+                nhc.jacobian[(row, column)]
+            } else {
+                wheel.jacobian[(0, column)]
+            }
+        };
+
+        let step = 1e-6;
+        for axis in 0..3 {
+            let mut unit = Vec3::ZERO;
+            unit[axis] = step;
+
+            // δv is estimate minus truth, so it adds to the estimate.
+            let shifted = |sign: F| {
+                let mut p = pva;
+                p.velocity = Ned::from_vec3(pva.velocity.to_vec3() + unit * sign);
+                innovations(&p)
+            };
+            let (up, down) = (shifted(1.0), shifted(-1.0));
+            for row in 0..3 {
+                let numeric = (up[row] - down[row]) / (2.0 * step);
+                assert_relative_eq!(analytic(row, V_ID + axis), numeric, epsilon = 1e-7);
+            }
+
+            // `C_true = (I + [φ×]) C_est`, so φ turns the estimate by −φ.
+            let turned = |sign: F| {
+                let mut p = pva;
+                let turn = drifters_core::math::Quat::from_rotation_vector(unit * -sign);
+                p.attitude = Attitude::from_quat(turn * pva.attitude.quat);
+                innovations(&p)
+            };
+            let (up, down) = (turned(1.0), turned(-1.0));
+            for row in 0..3 {
+                let numeric = (up[row] - down[row]) / (2.0 * step);
+                assert_relative_eq!(analytic(row, PHI_ID + axis), numeric, epsilon = 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn an_aligned_mounting_is_the_body_frame_constraint() {
+        let (pva, _, _) = mounted_case();
+        let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(&pva);
+        let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+
+        let m = nonholonomic(&pva, (0.1, 0.2));
+        let z = m.innovation.to_column();
+        assert_eq!((z[0], z[1]), (v_body.y, v_body.z));
+        assert_eq!(m.noise[(0, 0)], 0.1 * 0.1);
+        assert_eq!(m.noise[(1, 1)], 0.2 * 0.2);
+        let w = wheel_speed(&pva, 3.0, 0.1);
+        assert_eq!(w.innovation.to_column()[0], v_body.x - 3.0);
+        for c in 0..3 {
+            assert_eq!(m.jacobian[(0, V_ID + c)], wrt_velocity[(1, c)]);
+            assert_eq!(m.jacobian[(1, PHI_ID + c)], wrt_attitude[(2, c)]);
+            assert_eq!(w.jacobian[(0, V_ID + c)], wrt_velocity[(0, c)]);
+            assert_eq!(w.jacobian[(0, PHI_ID + c)], wrt_attitude[(0, c)]);
+        }
+    }
+
+    #[test]
+    fn an_uncertain_mounting_widens_the_side_slip_allowance_only() {
+        let (pva, mounting, _) = mounted_case();
+        let unsure = mounting.with_forward_std(0.01);
+        let m = nonholonomic_mounted(&pva, &unsure, (0.1, 0.2));
+        // 20 m/s at 0.01 rad is 0.2 m/s.
+        assert_relative_eq!(m.noise[(0, 0)], 0.01 + 0.04, epsilon = 1e-12);
+        assert_relative_eq!(m.noise[(1, 1)], 0.04 + 0.04, epsilon = 1e-12);
+        let w = wheel_speed_mounted(&pva, &unsure, 20.0, 0.1);
+        assert_relative_eq!(w.noise[(0, 0)], 0.01, epsilon = 1e-15);
     }
 
     #[test]

@@ -14,6 +14,10 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **Non-holonomic and wheel-speed updates are now about the vehicle.**
+  `GinsOptions::vehicle_mounting` holds the rotation from the sensor to the vehicle
+  and defaults to aligned, which gives the same numbers as before. `GinsEngine` grows
+  by 40 bytes to 3 272 and `RewindEngine<120, 32>` by 120 to 21 408.
 - **Holding a state no longer forms the covariance, and the ESKF's peak stack
   falls by 10 % to 37 %.** A held-state update was a dense Joseph round trip. It
   is now Bierman's update plus one rank-one update of the factors per measurement
@@ -289,6 +293,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **IMU-to-vehicle mounting.** `drifters_core::mounting` adds `VehicleMounting` and
+  `MountingEstimator`, which finds the yaw and pitch of the mounting from a
+  GNSS-aided drive, allocation-free. In a simulated drive with a MEMS unit it finds
+  the forward axis to 0.076° RMS, and a 60 s GNSS outage on the wheel aids ends 1.1 m
+  off with the estimate, 1.0 m with the true mounting and 4.6 m assuming alignment.
+  `measurement::nonholonomic_mounted`, `measurement::wheel_speed_mounted`,
+  `GinsOptions::with_vehicle_mounting`, `GinsEngine::set_vehicle_mounting` and
+  `ConfigError::InvalidMounting` go with it, and `drifters.v1.GinsOptions` gains
+  field 17, whose absence means aligned. See [Layer 15](docs/testing.md).
 - **Engine-level fuzzing.** A new `engine` target in `fuzz/` drives arbitrary IMU,
   GNSS and aiding sequences through both engines, every covariance form and both
   rewind layers. After every call it asserts no panic, finite output, finite factors

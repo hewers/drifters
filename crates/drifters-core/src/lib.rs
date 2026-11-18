@@ -55,6 +55,7 @@ pub mod estimator;
 pub mod frames;
 pub mod local;
 pub mod math;
+pub mod mounting;
 pub mod rewind;
 pub mod time;
 pub mod types;

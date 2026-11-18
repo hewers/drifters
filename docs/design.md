@@ -319,7 +319,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 232 | **2 312** |
+| `GinsEngine` total | 3 272 | **2 352** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -337,10 +337,10 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 232 | **21 288** |
-| `f32-covariance` | 2 312 | 18 528 |
-| `reduced-state` | 2 296 | 18 480 |
-| both | 1 816 | 17 040 |
+| default | 3 272 | **21 408** |
+| `f32-covariance` | 2 352 | 18 648 |
+| `reduced-state` | 2 336 | 18 600 |
+| both | 1 856 | 17 160 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
@@ -463,10 +463,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 232 B | 2 296 B |
+| `GinsEngine` | 3 272 B | 2 336 B |
 | peak stack | 16 480 B | **9 504 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 816 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 856 bytes.
 
 The peak-stack figures above are M8's. Re-measured under QEMU after the
 covariance was factored, and again when the equivariant filter's engine joined
@@ -546,8 +546,8 @@ implemented, in `drifters-filter::measurement`:
 | GNSS position | 3 | δr, φ (via lever arm) | the primary aid |
 | GNSS velocity | 3 | δv, φ (via lever arm) | applied when the fix carries it |
 | Zero-velocity (ZUPT) | 3 | δv | detected during stops; strongly observes gyro bias |
-| Non-holonomic (NHC) | 2 | δv, φ | wheeled vehicles: no sideways or vertical motion |
-| Odometer / wheel speed | 1 | δv, φ | bounds drift through GNSS outages |
+| Non-holonomic (NHC) | 2 | δv, φ | wheeled vehicles: no sideways or vertical motion, in the vehicle frame |
+| Odometer / wheel speed | 1 | δv, φ | along the vehicle's forward axis; bounds drift through GNSS outages |
 | Barometric height | 1 | δr_d | bounds the unstable vertical channel |
 | Magnetometer heading | 1 | φ_d | coarse yaw when stationary |
 
@@ -555,6 +555,12 @@ ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
 low-cost MEMS system usable through a GNSS outage. Measured on a stationary
 30 s outage with a 0.02 m/s² accelerometer bias, ZUPT holds drift to 0.012 m
 against 9.0 m for dead reckoning.
+
+The two vehicle models go through `GinsOptions::vehicle_mounting`, because a
+sensor turned one degree from the vehicle reads 0.35 m/s of side slip at 20 m/s.
+The rotation is a setting and not a state: `MountingEstimator` finds it from a
+GNSS-aided drive with those two aids off, and any remaining uncertainty widens the
+non-holonomic noise by `speed · forward_std`.
 
 Every model is gated by a chi-squared test on the normalised innovation squared,
 sharing the single Cholesky factorisation the update already needs. Gating is

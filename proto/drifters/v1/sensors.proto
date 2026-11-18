@@ -53,7 +53,7 @@ message AuxMeasurement {
     ZeroVelocity zero_velocity = 2;
     // Barometric height, which bounds the unstable INS vertical channel.
     BarometricHeight barometric_height = 3;
-    // Odometer / wheel speed along the body forward axis.
+    // Odometer / wheel speed along the vehicle forward axis.
     WheelSpeed wheel_speed = 4;
     // Non-holonomic constraints for a wheeled vehicle.
     NonHolonomic non_holonomic = 5;
@@ -74,17 +74,19 @@ message BarometricHeight {
 }
 
 message WheelSpeed {
-  // Speed along the body forward axis, m/s.
+  // Speed along the vehicle forward axis, m/s. The vehicle frame is the body
+  // frame turned by GinsOptions.vehicle_mounting.
   double speed_mps = 1;
   double speed_std_mps = 2;
 }
 
 // A wheeled vehicle does not slip sideways and does not leave the ground, so
-// the body-frame lateral and vertical velocities are zero.
+// the vehicle-frame lateral and vertical velocities are zero. The vehicle frame
+// is the body frame turned by GinsOptions.vehicle_mounting.
 message NonHolonomic {
-  // One-sigma slip allowance, lateral (body y), m/s.
+  // One-sigma slip allowance, lateral (vehicle y), m/s.
   double lateral_std_mps = 1;
-  // One-sigma allowance, vertical (body z), m/s.
+  // One-sigma allowance, vertical (vehicle z), m/s.
   double vertical_std_mps = 2;
   // Minimum speed below which the constraint carries no information and must
   // not be applied, m/s.

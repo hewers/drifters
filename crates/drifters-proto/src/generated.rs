@@ -2700,7 +2700,7 @@ pub mod drifters_ {
                 ZeroVelocity(super::ZeroVelocity),
                 /// Barometric height, which bounds the unstable INS vertical channel.
                 BarometricHeight(super::BarometricHeight),
-                /// Odometer / wheel speed along the body forward axis.
+                /// Odometer / wheel speed along the vehicle forward axis.
                 WheelSpeed(super::WheelSpeed),
                 /// Non-holonomic constraints for a wheeled vehicle.
                 NonHolonomic(super::NonHolonomic),
@@ -3072,7 +3072,8 @@ pub mod drifters_ {
         }
         #[derive(Debug, Default, PartialEq, Clone, Copy)]
         pub struct WheelSpeed {
-            /// Speed along the body forward axis, m/s.
+            /// Speed along the vehicle forward axis, m/s. The vehicle frame is the body
+            /// frame turned by GinsOptions.vehicle_mounting.
             pub r#speed_mps: f64,
             pub r#speed_std_mps: f64,
         }
@@ -3227,12 +3228,13 @@ pub mod drifters_ {
             }
         }
         /// A wheeled vehicle does not slip sideways and does not leave the ground, so
-        /// the body-frame lateral and vertical velocities are zero.
+        /// the vehicle-frame lateral and vertical velocities are zero. The vehicle frame
+        /// is the body frame turned by GinsOptions.vehicle_mounting.
         #[derive(Debug, Default, PartialEq, Clone, Copy)]
         pub struct NonHolonomic {
-            /// One-sigma slip allowance, lateral (body y), m/s.
+            /// One-sigma slip allowance, lateral (vehicle y), m/s.
             pub r#lateral_std_mps: f64,
-            /// One-sigma allowance, vertical (body z), m/s.
+            /// One-sigma allowance, vertical (vehicle z), m/s.
             pub r#vertical_std_mps: f64,
             /// Minimum speed below which the constraint carries no information and must
             /// not be applied, m/s.
@@ -5812,6 +5814,232 @@ pub mod drifters_ {
         }
         /// Everything the engine needs to start.
         ///
+        /// How the IMU sits in the vehicle carrying it.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct VehicleMounting {
+            /// q_vb, rotating body vectors into the vehicle's forward-right-down frame.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#rotation: Quaternion,
+            /// One-sigma uncertainty of the vehicle forward axis's direction, radians.
+            pub r#forward_std_rad: f64,
+            /// Tracks presence of optional and message fields
+            pub _has: VehicleMounting_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for VehicleMounting {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#rotation() == other.r#rotation());
+                ret &= (self.r#forward_std_rad == other.r#forward_std_rad);
+                ret
+            }
+        }
+        impl VehicleMounting {
+            /// Return a reference to `rotation` as an `Option`
+            #[inline]
+            pub fn r#rotation(&self) -> ::core::option::Option<&Quaternion> {
+                self._has.r#rotation().then_some(&self.r#rotation)
+            }
+            /// Set the value and presence of `rotation`
+            #[inline]
+            pub fn set_rotation(&mut self, value: Quaternion) -> &mut Self {
+                self._has.set_rotation();
+                self.r#rotation = value.into();
+                self
+            }
+            /// Return a mutable reference to `rotation` as an `Option`
+            #[inline]
+            pub fn mut_rotation(&mut self) -> ::core::option::Option<&mut Quaternion> {
+                self._has.r#rotation().then_some(&mut self.r#rotation)
+            }
+            /// Clear the presence of `rotation`
+            #[inline]
+            pub fn clear_rotation(&mut self) -> &mut Self {
+                self._has.clear_rotation();
+                self
+            }
+            /// Take the value of `rotation` and clear its presence
+            #[inline]
+            pub fn take_rotation(&mut self) -> ::core::option::Option<Quaternion> {
+                let val = self
+                    ._has
+                    .r#rotation()
+                    .then(|| ::core::mem::take(&mut self.r#rotation));
+                self._has.clear_rotation();
+                val
+            }
+            /// Builder method that sets the value of `rotation`. Useful for initializing the message.
+            #[inline]
+            pub fn init_rotation(mut self, value: Quaternion) -> Self {
+                self.set_rotation(value);
+                self
+            }
+            /// Return a reference to `forward_std_rad`
+            #[inline]
+            pub fn r#forward_std_rad(&self) -> &f64 {
+                &self.r#forward_std_rad
+            }
+            /// Return a mutable reference to `forward_std_rad`
+            #[inline]
+            pub fn mut_forward_std_rad(&mut self) -> &mut f64 {
+                &mut self.r#forward_std_rad
+            }
+            /// Set the value of `forward_std_rad`
+            #[inline]
+            pub fn set_forward_std_rad(&mut self, value: f64) -> &mut Self {
+                self.r#forward_std_rad = value.into();
+                self
+            }
+            /// Builder method that sets the value of `forward_std_rad`. Useful for initializing the message.
+            #[inline]
+            pub fn init_forward_std_rad(mut self, value: f64) -> Self {
+                self.r#forward_std_rad = value.into();
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for VehicleMounting {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#rotation;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_rotation();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#forward_std_rad;
+                            {
+                                let val = decoder.decode_double()?;
+                                let val_ref = &val;
+                                if *val_ref != 0.0 {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for VehicleMounting {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Quaternion as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#forward_std_rad;
+                    if *val_ref != 0.0 {
+                        encoder.encode_varint32(17u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    let val_ref = &self.r#forward_std_rad;
+                    if *val_ref != 0.0 {
+                        size += 1usize + 8;
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `VehicleMounting`
+        pub mod VehicleMounting_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `rotation`
+                #[inline]
+                pub const fn r#rotation(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `rotation`
+                #[inline]
+                pub const fn set_rotation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `rotation`
+                #[inline]
+                pub const fn clear_rotation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `rotation`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_rotation(mut self) -> Self {
+                    self.set_rotation();
+                    self
+                }
+            }
+        }
         /// The initial standard deviations matter as much as the initial state: they set
         /// the diagonal of P and therefore how hard the first fixes are allowed to pull
         /// the solution. All must be strictly positive.
@@ -5870,6 +6098,12 @@ pub mod drifters_ {
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#zupt_holds_attitude: bool,
+            /// Rotation from the sensor to the vehicle, used by the non-holonomic and
+            /// wheel-speed updates. Absent means the two are aligned, which is what a
+            /// configuration written before this field meant.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#vehicle_mounting: VehicleMounting,
             /// Tracks presence of optional and message fields
             pub _has: GinsOptions_::_Hazzer,
         }
@@ -5908,6 +6142,7 @@ pub mod drifters_ {
                         == other.r#max_consecutive_rejections);
                 ret &= (self.r#rejection_inflation == other.r#rejection_inflation);
                 ret &= (self.r#zupt_holds_attitude() == other.r#zupt_holds_attitude());
+                ret &= (self.r#vehicle_mounting() == other.r#vehicle_mounting());
                 ret
             }
         }
@@ -6580,6 +6815,51 @@ pub mod drifters_ {
                 self.set_zupt_holds_attitude(value);
                 self
             }
+            /// Return a reference to `vehicle_mounting` as an `Option`
+            #[inline]
+            pub fn r#vehicle_mounting(
+                &self,
+            ) -> ::core::option::Option<&VehicleMounting> {
+                self._has.r#vehicle_mounting().then_some(&self.r#vehicle_mounting)
+            }
+            /// Set the value and presence of `vehicle_mounting`
+            #[inline]
+            pub fn set_vehicle_mounting(&mut self, value: VehicleMounting) -> &mut Self {
+                self._has.set_vehicle_mounting();
+                self.r#vehicle_mounting = value.into();
+                self
+            }
+            /// Return a mutable reference to `vehicle_mounting` as an `Option`
+            #[inline]
+            pub fn mut_vehicle_mounting(
+                &mut self,
+            ) -> ::core::option::Option<&mut VehicleMounting> {
+                self._has.r#vehicle_mounting().then_some(&mut self.r#vehicle_mounting)
+            }
+            /// Clear the presence of `vehicle_mounting`
+            #[inline]
+            pub fn clear_vehicle_mounting(&mut self) -> &mut Self {
+                self._has.clear_vehicle_mounting();
+                self
+            }
+            /// Take the value of `vehicle_mounting` and clear its presence
+            #[inline]
+            pub fn take_vehicle_mounting(
+                &mut self,
+            ) -> ::core::option::Option<VehicleMounting> {
+                let val = self
+                    ._has
+                    .r#vehicle_mounting()
+                    .then(|| ::core::mem::take(&mut self.r#vehicle_mounting));
+                self._has.clear_vehicle_mounting();
+                val
+            }
+            /// Builder method that sets the value of `vehicle_mounting`. Useful for initializing the message.
+            #[inline]
+            pub fn init_vehicle_mounting(mut self, value: VehicleMounting) -> Self {
+                self.set_vehicle_mounting(value);
+                self
+            }
         }
         impl ::micropb::MessageDecode for GinsOptions {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
@@ -6711,6 +6991,13 @@ pub mod drifters_ {
                                 *mut_ref = val as _;
                             };
                             self._has.set_zupt_holds_attitude();
+                        }
+                        17u32 => {
+                            let mut_ref = &mut self.r#vehicle_mounting;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_vehicle_mounting();
                         }
                         _ => {
                             decoder.skip_wire_value(tag.wire_type())?;
@@ -6909,6 +7196,18 @@ pub mod drifters_ {
                         break 'msg (::core::result::Result::<usize, _>::Err(err));
                     }
                 }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< VehicleMounting as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
                 ::core::result::Result::Ok(max_size)
             };
             fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
@@ -7038,6 +7337,14 @@ pub mod drifters_ {
                     {
                         encoder.encode_varint32(128u32)?;
                         encoder.encode_bool(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#vehicle_mounting()
+                    {
+                        encoder.encode_varint32(138u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
                     }
                 }
                 Ok(())
@@ -7203,6 +7510,17 @@ pub mod drifters_ {
                         .r#zupt_holds_attitude()
                     {
                         size += 2usize + 1;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#vehicle_mounting()
+                    {
+                        size
+                            += 2usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
                     }
                 }
                 size
@@ -7567,6 +7885,31 @@ pub mod drifters_ {
                 #[inline]
                 pub const fn init_zupt_holds_attitude(mut self) -> Self {
                     self.set_zupt_holds_attitude();
+                    self
+                }
+                /// Query presence of `vehicle_mounting`
+                #[inline]
+                pub const fn r#vehicle_mounting(&self) -> bool {
+                    (self.0[1] & 64) != 0
+                }
+                /// Set presence of `vehicle_mounting`
+                #[inline]
+                pub const fn set_vehicle_mounting(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 64;
+                    self
+                }
+                /// Clear presence of `vehicle_mounting`
+                #[inline]
+                pub const fn clear_vehicle_mounting(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !64;
+                    self
+                }
+                /// Builder method that sets the presence of `vehicle_mounting`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_vehicle_mounting(mut self) -> Self {
+                    self.set_vehicle_mounting();
                     self
                 }
             }

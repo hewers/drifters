@@ -20,6 +20,7 @@ use cortex_m_rt::entry;
 use drifters_core::align::{AlignConfig, Aligner};
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
+use drifters_core::mounting::{MountingEstimator, VehicleMounting};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine, Ud};
@@ -40,11 +41,13 @@ static mut SINK: f64 = 0.0;
 
 #[entry]
 fn main() -> ! {
-    let options = GinsOptions::default().with_initial_state(
-        Lla::from_degrees(30.4, 114.4, 20.0),
-        Ned::ZERO,
-        Euler::new(0.0, 0.0, 0.0),
-    );
+    let options = GinsOptions::default()
+        .with_initial_state(
+            Lla::from_degrees(30.4, 114.4, 20.0),
+            Ned::ZERO,
+            Euler::new(0.0, 0.0, 0.0),
+        )
+        .with_vehicle_mounting(VehicleMounting::from_euler(0.01, -0.02, 0.03));
     let Ok(mut engine) = GinsEngine::new(options) else {
         loop {
             core::hint::spin_loop();
@@ -81,6 +84,8 @@ fn main() -> ! {
     // it. Small rings, so that rotation, eviction from a full event ring and
     // a replay past the newer anchor all happen within a few iterations.
     let mut rewind = RewindEngine::<16, 4>::from_engine(engine);
+    // Finding the mounting runs beside the filter, on the states it produces.
+    let mut mounting = MountingEstimator::default();
 
     // The initial alignment runs before any of the above has a state to start
     // from, on the same interrupt.
@@ -145,6 +150,13 @@ fn main() -> ! {
         let _ = engine.add_imu(sample);
         let _ = engine.apply_zupt(Vec3::splat(0.02));
         let _ = engine.apply_height(20.0, 0.5);
+        let _ = engine.apply_nonholonomic((0.1, 0.1), 0.5);
+        let _ = engine.apply_wheel_speed(0.0, 0.1);
+        let _ = mounting.update(&engine.nav_state(), &engine.pva_std(), sample.gyro());
+        if let Some(found) = mounting.estimate() {
+            let _ = engine.set_vehicle_mounting(found.mounting);
+            mounting.reset();
+        }
 
         let _ = rewind.add_imu(sample);
         let _ = rewind.apply_zupt(Vec3::splat(0.02));

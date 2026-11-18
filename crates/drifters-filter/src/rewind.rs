@@ -95,13 +95,13 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 232 | **21 288** |
-//! | `f32-covariance` | 2 312 | 18 528 |
-//! | `reduced-state` | 2 296 | 18 480 |
-//! | both | 1 816 | 17 040 |
-//! | `smoothing` | 21 480 | 76 032 |
+//! | default | 3 272 | **21 408** |
+//! | `f32-covariance` | 2 352 | 18 648 |
+//! | `reduced-state` | 2 336 | 18 600 |
+//! | both | 1 856 | 17 160 |
+//! | `smoothing` | 21 520 | 76 152 |
 //!
-//! The default row is 3 × 3 232 for the engines, 120 × 64 for the samples,
+//! The default row is 3 × 3 272 for the engines, 120 × 64 for the samples,
 //! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!
@@ -166,7 +166,7 @@ pub enum Aid {
     },
     /// [`GinsEngine::apply_wheel_speed`].
     WheelSpeed {
-        /// Speed along the body forward axis, m/s.
+        /// Speed along the vehicle's forward axis, m/s.
         speed: F,
         /// Its one-sigma noise, m/s.
         sigma: F,
@@ -944,7 +944,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_288);
+            assert_eq!(size_of::<Representative>(), 21_408);
         }
     }
 
