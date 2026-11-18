@@ -17,3 +17,16 @@ python3 prototypes/gsdc_robust_wls.py gsdc2023-b     # any datasets/ subdirector
 ```
 
 Needs `numpy` and a GSDC trace; see [`../docs/datasets.md`](../docs/datasets.md).
+
+## `comma2k19_demo.py`
+
+Writes comma2k19's Hugging Face demo split — 64 segments packed as Parquet —
+back out in the dataset's own one-array-per-file layout, so `drifters comma`
+reads the demo split, comma's example segment and the full dataset alike. Not a
+prototype of anything; it is here because results on the 64 segments depend on it.
+
+```bash
+python3 prototypes/comma2k19_demo.py datasets/comma2k19-demo datasets/comma2k19
+```
+
+Needs `pyarrow` and `numpy`; see [`../docs/datasets.md`](../docs/datasets.md#comma2k19).
