@@ -22,7 +22,7 @@ Workspace, licences, lint configuration, CI, and this documentation set.
 
 | job | what it would catch |
 |---|---|
-| `test` | three OSes, all-features, no-default-features, and `reduced-state` |
+| `test` | three OSes, all-features (without `defmt` on Windows, where it cannot link), no-default-features, and `reduced-state` |
 | `lint` | `cargo fmt --check`, clippy with `-D warnings` |
 | `no_std` | bare-metal build of all four shipped crates on three targets |
 | `msrv` | a dependency quietly raising the minimum Rust version |

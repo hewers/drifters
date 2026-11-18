@@ -379,7 +379,8 @@ drifters-filter = { version = "0.1", features = ["f32-covariance", "defmt"] }
 
 `f32-covariance` puts the covariance arithmetic on the single-precision FPU, and
 `defmt` gives every public type a `defmt::Format` for logging. Neither feature
-allocates.
+allocates. `defmt` is for firmware: a Windows host binary built with it does not
+link under MSVC, because the logger and linker symbols it needs are missing there.
 
 On a Cortex-M7 with a double-precision FPU, such as an STM32H7, build with
 `RUSTFLAGS="-C target-cpu=cortex-m7"` to run `f64` in hardware. The target alone

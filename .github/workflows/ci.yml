@@ -31,7 +31,21 @@ jobs:
       # `gnss-rtk-interop`, pulling AGPL code and a large dependency tree into
       # every ordinary CI run. The `interop` job covers the permissive adapter
       # deliberately and on its own. See docs/adr/0003.
-      - run: cargo test --workspace --exclude drifters-interop --all-features
+      - if: runner.os != 'Windows'
+        run: cargo test --workspace --exclude drifters-interop --all-features
+      # `defmt` needs a global logger and linker-script symbols that only
+      # firmware supplies. The Linux and macOS linkers discard the code that
+      # refers to them, but MSVC's stops with LNK2019, so a host binary built
+      # with `defmt` cannot link here. Every other feature still runs, and the
+      # list comes from the manifests so that a new feature is not missed.
+      - if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          features=$(cargo metadata --no-deps --format-version 1 | jq -j '
+            [.packages[] | select(.name != "drifters-interop") | .name as $p
+             | .features | keys[] | select(. != "defmt") | "\($p)/\(.)"]
+            | join(",")')
+          cargo test --workspace --exclude drifters-interop --features "$features"
       - run: cargo test --workspace --no-default-features
       # `reduced-state` and `f32-covariance` are both non-additive: one removes
       # states, the other changes the numerics of every filter in the build.
