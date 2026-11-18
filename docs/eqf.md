@@ -92,7 +92,9 @@ comparing it with the ESKF on the KF-GINS dataset requires converting geodetic
 fixes to local NED about an anchor. The flat-Earth modelling error is then a
 real term in the comparison and must be **measured and reported**, not assumed
 negligible. Re-deriving an Earth-referenced equivariant filter is a research
-task, not an implementation one.
+task, not an implementation one. Earth rotation alone turned out not to need that,
+and is available as an option: see
+[Earth rotation in the group](#earth-rotation-in-the-group).
 
 ### 2. The state is 21-dimensional but not our 21 states
 
@@ -418,12 +420,14 @@ directly comparable. Run it with
 `drifters replay --engine eqf --config <kf-gins.yaml>`, or `drifters eqf` for
 short; `--engine eskf,eqf` runs both. The Earth model is the one
 [adr/0008](adr/0008-earth-model-by-sensor-grade.md) picks for the gyroscope —
-compensated, for this one — and `--flat-earth` or `--earth-rate` overrides it.
+compensated, for this one — and `--flat-earth`, `--earth-rate` or
+`--earth-in-group` overrides it.
 
 | | horizontal RMS | vertical RMS | NIS |
 |---|---|---|---|
 | ESKF (Earth-referenced, handed the lever arm) | **0.033 m** | 0.018 m | 1.46 |
 | EqF, + input-side Earth compensation (the default here) | 0.035 m | 0.019 m | 1.55 |
+| EqF, Earth rotation in the group (`--earth-in-group`) | 0.035 m | 0.019 m | 1.76 |
 | EqF, flat Earth as written (`--flat-earth`) | 0.943 m | 0.069 m | 6 718 |
 
 At GCU's α = 0, the engine's default. With GCU off altogether,
@@ -932,15 +936,12 @@ f(X)Y + X f(Y) − X f(I) Y = (XA+BX)Y + X(YA+BY) − X(A+B)Y = BXY + XYA   ✓
 
 Everything below is about whether an Earth term can be written in that form.
 
-**Rotating Earth — the obstruction is frame choice, not physics.** In ECEF the
-dynamics need `Ṙ ⊃ −ω_ie^ R` and `v̇ ⊃ −2 ω_ie^ v`. Both draw on the *same*
-top-left block of `B`, which supplies `−ω_ie^ v` where `−2 ω_ie^ v` is required.
-The naive embedding does not fit. In an **inertial frame there is no Coriolis
-term at all**, and the dynamics recover the paper's structure exactly — which
-says the difficulty is the rotating frame rather than Earth rotation itself.
-Whether a clean ECEF construction exists in the literature should be checked
-against refs [11]–[14] and Barrau & Bonnabel before either adopting or
-dismissing it.
+**Rotating Earth — the obstruction is the choice of velocity, not physics.** In an
+Earth-fixed frame the dynamics need `Ṙ ⊃ −ω_ie^ R` and `v̇ ⊃ −2 ω_ie^ v`. Both draw
+on the *same* top-left block of `B`, which supplies `−ω_ie^ v` where `−2 ω_ie^ v` is
+required, so velocity over the ground does not fit. In an **inertial frame there is
+no Coriolis term at all**, and the velocity that frame sees does fit, written in the
+turning axes. [Earth rotation in the group](#earth-rotation-in-the-group) does that.
 
 **Ellipsoidal Earth — this is the real obstruction, in every frame.** Constant
 gravity enters as `(G − N)T` with `G` fixed. Position-dependent gravity `g(p)`
@@ -976,12 +977,73 @@ three bands: below 1, model nothing; 1 to 1000, compensate the input; above
 destroys the gyrocompassing channel that a navigation-grade sensor is bought
 for. `flat_earth_verdict` computes the band.
 
-**Recommendation.** Implement the paper faithfully first and compare on
-consumer-grade terms, where its assumptions hold. Treat an Earth-referenced
-equivariant filter as a separate, later investigation — starting with input-side
-Earth-rate compensation (`ω_ib − R̂ᵀ ω_ie`), noting that this makes the input
-depend on the estimate and so needs checking against the lift's assumptions
-rather than assuming it is free.
+**What was done, in order.** The paper first, as written, compared on
+consumer-grade terms where its assumptions hold. Then input-side Earth-rate
+compensation (`ω_ib − R̂ᵀ ω_ie`), which makes the input depend on the estimate and
+so had to be checked against the lift's assumptions. Then the rotation in the group.
+
+### Earth rotation in the group
+
+`EqfOptions::earth_in_group`, or `--earth-in-group` on the command line. The
+filter's frame is the anchor's tangent plane, fixed to the Earth, and `ω` is the
+Earth's rate in it, constant. With velocity over the ground `v`, the system is
+
+```text
+Ṙ = R(ω_m − b_ω)^ − ω^R
+ṗ = v
+v̇ = R(a_m − b_a) + g − 2ω × v − ω × (ω × p)
+```
+
+Take instead `v' = v + ω × p`, the velocity a non-rotating frame sees, in the
+turning axes. Both the Coriolis and the centrifugal terms collapse into one:
+
+```text
+ṗ  = v' − ω × p
+v̇' = R(a_m − b_a) + g − ω × v'
+```
+
+So `Ṫ = T(W − B + N) + (G − N)T` with `G = (−ω, g, 0)^`. This is the paper's form,
+with a rotation added to `G`, and it is group-affine on the same group. No state is
+added, and the navigation states keep the exact error dynamics that buys. What follows
+from it:
+
+| | flat | Earth in the group |
+|---|---|---|
+| rate the lift turns by | `ω_m − b_ω` | `ω_m − b_ω − R̂ᵀω` |
+| lift's velocity input | `a_m − b_a + R̂ᵀg` | `a_m − b_a + R̂ᵀ(g − ω × v')` |
+| lift's position input | `R̂ᵀv` | `R̂ᵀ(v' − ω × p)` |
+| `A_t⁰`, attitude, velocity and position diagonals | 0 | `−ω^` |
+| `A_t⁰`, the lever arm's and magnetometer's diagonals | `(Âω_m + γ̂_ω)^` | `(Âω_m + γ̂_ω − ω)^` |
+| GNSS velocity fix `y_v` | as measured | `y_v + ω × y_p`, noise `R_v + ω^ R_p ω^ᵀ` |
+| velocity reported | `v` | `v' − ω × p` |
+| physical velocity error | `δv` | `δv' − ω^ δp` |
+
+Two entries are easy to get wrong. The block from attitude to the magnetometer's
+rotation is `−(Âω_m + γ̂_ω)^`, with no `ω`, because attitude error does not act on
+the Earth's rate there: `Sᵀ·rate = Êᵀ exp(−ε_E)[exp(ε_φ)(Âω − Âb) − ω_e]`. The first
+derivation had it wrong and a numerical Jacobian caught it. And the velocity fix uses
+the *measured* antenna position, which is why that position's noise joins the fix's.
+
+A still navigation-grade unit, 0.003 °/h at 30° latitude, starting 3° off in heading
+and told only that it is not moving, reaches 0.026° RMS after 900 s with an error 1.03
+times its claimed sigma. The ESKF reaches 0.025°, the limit set by the gyro-bias prior
+is 0.022°, and the filter with its input compensated stays about 4° off. On KF-GINS, a
+tactical IMU that does not need the model, it matches compensation at 0.0353 m
+against 0.0350 m. Its NIS is higher, 1.76 against 1.55, which has not been
+investigated. It costs 4.7 % more instructions per sample dense and 2.4 % factored,
+and no more stack. The evidence is in
+[testing.md](testing.md#layer-17--the-earth-inside-the-group).
+
+**It is for a unit at or near its anchor.** The rotation is exact, but:
+
+- Gravity is one constant vector. The real one changes by about `g/R` per metre, 150
+  mGal at 1 km, and modelling that would give up group-affineness. There is no Schuler
+  behaviour either, for the same reason.
+- `ω` and the axes are the anchor's, and the plane leaves the ellipsoid by `L²/2R`.
+- Deflection of the vertical is not modelled, as in the ESKF.
+
+So it suits finding north and working close to where the unit started. A
+navigation-grade unit that travels should use the ESKF.
 
 ---
 
@@ -1058,17 +1120,17 @@ harness code:
 
 | | dense `f64` | factored `f32` |
 |---|---|---|
-| `EqfEngine` | 4 680 bytes | **2 080 bytes** |
-| `EqfRewindEngine<120, 32>` | 25 632 bytes | 17 832 bytes |
-| peak stack, a late fix through the rewind layer included | 15 520 bytes | **14 112 bytes** |
-| instructions per `add_imu` | 4.48 million | **0.87 million** |
-| at an instruction per cycle, 168 MHz | 26.7 ms | **5.2 ms** |
+| `EqfEngine` | 4 704 bytes | **2 104 bytes** |
+| `EqfRewindEngine<120, 32>` | 25 704 bytes | 17 904 bytes |
+| peak stack, a late fix through the rewind layer included | 15 800 bytes | **14 392 bytes** |
+| instructions per `add_imu` | 4.51 million | **0.89 million** |
+| at an instruction per cycle, 168 MHz | 26.8 ms | **5.3 ms** |
 | panic machinery linked | none | none |
 
 Both stack figures are under 20 KiB, and CI holds both to it. An instruction per cycle is the best a Cortex-M4 does, so the last row is
 a floor: the dense form cannot keep pace with an IMU on this part at any
 usual rate, and the factored one keeps pace with 100 Hz with about half the
-interval to spare and misses 200 Hz, its floor being 3 % over the 5 ms. It is a
+interval to spare and misses 200 Hz, its floor being 6 % over the 5 ms. It is a
 floor on time, not a measurement of it; timing needs a board.
 
 The ranking belongs to that core. On a Cortex-M7 built for its double-precision
@@ -1200,8 +1262,8 @@ footprint and measured firmware budget are untouched.
     and `EqfRewindEngine` are generic over how `Σ` is held: dense `f64` by
     default, or `Ud<f32>`, Thornton and Bierman in single precision, for a
     part whose FPU is single precision. Equal to the dense form to rounding in
-    `f64` and to the third decimal on every dataset in `f32`; 0.87 million
-    instructions per sample on a Cortex-M4 against the dense form's 4.48.
+    `f64` and to the third decimal on every dataset in `f32`; 0.89 million
+    instructions per sample on a Cortex-M4 against the dense form's 4.51.
     See [What it costs on a microcontroller](#what-it-costs-on-a-microcontroller).
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no

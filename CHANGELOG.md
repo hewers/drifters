@@ -14,6 +14,18 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The equivariant filter's global frame can turn, and its API says so. Breaking.**
+  `lift`, `lambda1_literal` and `state_matrix` take `impl Into<GlobalFrame>`, so a
+  gravity vector still works, and `state_matrix_entries` takes a `GlobalFrame`.
+  `EqFilter::gravity` and `Propagation::gravity` become `frame`. The functions in
+  `physical` that map to physical errors (`jacobian`, `jacobian_inverse`,
+  `covariance`, `variances`, `covariance_from_std`, `block_covariance`) gain an
+  `earth_rate` argument, zero for the flat model. `EqFilter` and `EqfEngine` grow by 24
+  bytes, to 4 704 and 2 104 for the engine and 25 704 and 17 904 for
+  `EqfRewindEngine<120, 32>`, and the engine's peak stack on a Cortex-M4 goes from
+  15 520 to 15 800 bytes dense and from 14 112 to 14 392 factored.
+- **`drifters eqf` runs a navigation-grade gyroscope instead of refusing it.** Chosen
+  by grade, it now puts the Earth's rotation in the filter's group.
 - **Magnetometer rejections no longer lead to covariance inflation, in the
   equivariant filter.** Repeated rejection inflates the covariance on the premise that
   the measurements are sound and the filter is not. A magnetometer beside something
@@ -303,6 +315,14 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **Earth rotation inside the equivariant filter's group,**
+  `EqfOptions::earth_in_group` and `--earth-in-group`, for the navigation-grade band
+  of adr/0008. With the velocity `v + ω × p` the rotating tangent-frame system stays
+  group-affine on the same group, so the Coriolis and centrifugal terms are exact and
+  heading stays observable from the Earth's rate. In simulation a still 0.003 °/h unit
+  starting 3° off finds north to 0.026° RMS, against the ESKF's 0.025° and about 4°
+  with the input compensated. It is for a unit at or near its anchor: gravity stays
+  one constant vector. It cannot be combined with `compensate_earth`.
 - **A three-axis magnetometer for the ESKF, with its calibration.**
   `GinsEngine::apply_magnetometer` and `RewindEngine::apply_magnetometer` take the
   field in the body frame and a reference in NED, and correct every state correlated

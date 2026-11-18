@@ -14,7 +14,8 @@
 //!   --out <dir>        output directory (default: alongside the config)
 //!   --week <n>         GPS week number for the timestamps (default: 0)
 //!   --earth-rate       EqF: compensate the input for Earth rotation
-//!   --flat-earth       EqF: do not (default: decided by the gyro's grade, adr/0008)
+//!   --earth-in-group   EqF: turn the filter's frame with the Earth instead
+//!   --flat-earth       EqF: neither (default: decided by the gyro's grade, adr/0008)
 //!   --alpha <a|off>    EqF: GCU convergence rate, or off (default: 0)
 //!   --compare <svg>    one figure of every engine run (default engines: both)
 //!   --quiet            suppress progress output
@@ -45,7 +46,7 @@ fn usage() {
     eprintln!(
         "usage: drifters <replay|plot|eqf> --config <path> [--engine eskf,eqf]\n\
          \x20         [--imu <path>] [--gnss <path>] [--out <dir>] [--week <n>] [--quiet]\n\
-         \x20         [--earth-rate | --flat-earth] [--alpha <a|off>]\n\
+         \x20         [--earth-rate | --earth-in-group | --flat-earth] [--alpha <a|off>]\n\
          \x20         [--figure <svg>] [--compare <svg>]\n\
          \x20      drifters <gsdc|tune> --dir <path> [--engine eskf,eqf] [...]\n\
          \n\
@@ -63,12 +64,13 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(index + 1).map(String::as_str)
 }
 
-/// `--earth-rate` or `--flat-earth`, or neither for the gyroscope's grade to
-/// decide.
+/// `--earth-rate`, `--earth-in-group` or `--flat-earth`, or none of them for
+/// the gyroscope's grade to decide.
 fn earth_model(args: &[String]) -> Result<eqf::EarthModel, String> {
     eqf::EarthModel::from_switches(
         args.iter().any(|a| a == "--earth-rate"),
         args.iter().any(|a| a == "--flat-earth"),
+        args.iter().any(|a| a == "--earth-in-group"),
     )
 }
 
@@ -164,13 +166,8 @@ fn run_replay_command(
     let config = kfgins::Config::read(&config_path)?;
     let base = config_path.parent().unwrap_or(Path::new("."));
     // Bias stability is per-axis in the config; the ratio is a property of
-    // the part, so the largest axis stands for it. Resolved only when the EqF
-    // runs, so that a gyroscope it refuses does not stop the ESKF.
-    let compensate = if engines.iter().any(|kind| kind.is_eqf()) {
-        earth.compensate(config.options.imu_noise.gyro_bias_std.amax())?
-    } else {
-        false
-    };
+    // the part, so the largest axis stands for it.
+    let earth = earth.resolve(config.options.imu_noise.gyro_bias_std.amax());
 
     // The config's own paths are relative to KF-GINS's working directory, which
     // is rarely ours, so resolve them next to the config file and let the
@@ -215,7 +212,7 @@ fn run_replay_command(
                 report
             }
             EngineKind::Eqf | EngineKind::EqfF32 => {
-                let options = eqf::kfgins_options(&config, &gnss, compensate, alpha);
+                let options = eqf::kfgins_options(&config, &gnss, earth, alpha);
                 let report = if *kind == EngineKind::Eqf {
                     let engine = drifters_eqf::EqfEngine::new(options)?;
                     replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?
@@ -233,16 +230,26 @@ fn run_replay_command(
         reports.push(report);
     }
 
-    let label = |kind: EngineKind| match kind {
-        EngineKind::Eskf => "drifters ESKF (Earth-referenced, 21 states)",
-        EngineKind::Eqf if compensate => {
+    let label = |kind: EngineKind| match (kind, earth) {
+        (EngineKind::Eskf, _) => "drifters ESKF (Earth-referenced, 21 states)",
+        (EngineKind::Eqf, eqf::EarthTreatment::Compensated) => {
             "drifters EqF (flat Earth + input-side Earth compensation)"
         }
-        EngineKind::Eqf => "drifters EqF (flat Earth, as the paper writes it)",
-        EngineKind::EqfF32 if compensate => {
+        (EngineKind::Eqf, eqf::EarthTreatment::InGroup) => {
+            "drifters EqF (tangent frame turning with the Earth)"
+        }
+        (EngineKind::Eqf, eqf::EarthTreatment::Flat) => {
+            "drifters EqF (flat Earth, as the paper writes it)"
+        }
+        (EngineKind::EqfF32, eqf::EarthTreatment::Compensated) => {
             "drifters EqF, f32 factored (flat Earth + input-side Earth compensation)"
         }
-        EngineKind::EqfF32 => "drifters EqF, f32 factored (flat Earth)",
+        (EngineKind::EqfF32, eqf::EarthTreatment::InGroup) => {
+            "drifters EqF, f32 factored (tangent frame turning with the Earth)"
+        }
+        (EngineKind::EqfF32, eqf::EarthTreatment::Flat) => {
+            "drifters EqF, f32 factored (flat Earth)"
+        }
     };
 
     if let Some(figure) = flag(args, "--compare") {
@@ -281,10 +288,10 @@ fn run_replay_command(
             .collect();
         let comparison = plot::Comparison {
             dataset: "KF-GINS demo — Leador-A15, 57 min of driving, RTK",
-            subtitle: if compensate {
-                "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF is twenty-seven times worse."
-            } else {
-                "Open-loop antenna residual before each fix. Tactical grade: the flat-Earth EqF cannot follow the horizontal Earth rate, and carries it as a metre of error."
+            subtitle: match earth {
+                eqf::EarthTreatment::Compensated => "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF is twenty-seven times worse.",
+                eqf::EarthTreatment::InGroup => "Open-loop antenna residual before each fix. Tactical grade, with the Earth's rotation held in the EqF's symmetry group.",
+                eqf::EarthTreatment::Flat => "Open-loop antenna residual before each fix. Tactical grade: the flat-Earth EqF cannot follow the horizontal Earth rate, and carries it as a metre of error.",
             },
             error_label: "Horizontal residual, predicted antenna position vs fix (log scale)",
             log_error: true,
@@ -582,10 +589,10 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "\nEqF: {}; Earth rate {}",
             eqf::describe_alpha(report.eqf_alpha),
-            if report.eqf_earth_rate {
-                "compensated"
-            } else {
-                "not modelled (flat Earth)"
+            match report.eqf_earth {
+                eqf::EarthTreatment::Compensated => "compensated",
+                eqf::EarthTreatment::InGroup => "inside the symmetry group",
+                eqf::EarthTreatment::Flat => "not modelled (flat Earth)",
             }
         );
         println!(

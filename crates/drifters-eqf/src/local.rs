@@ -1,9 +1,10 @@
 //! Local-tangent-frame adapter: geodetic in, geodetic out.
 //!
-//! [`EqFilter`](crate::filter::EqFilter) works in a flat, non-rotating Cartesian
-//! frame: that is the system the paper's lift and linearisation are derived for,
-//! and adding Earth terms would break the group-affine structure the derivation
-//! depends on. GNSS is geodetic. This module is the boundary between them.
+//! [`EqFilter`](crate::filter::EqFilter) works in a Cartesian frame with one
+//! gravity vector. As the paper has it the frame does not turn, and
+//! [`Anchor::rotating_frame`] gives the one that does; the rate fits in the
+//! group, as [`crate::lift`] shows, where gravity that varies with position
+//! would not. GNSS is geodetic. This module is the boundary between them.
 //!
 //! # Two modelling errors, and their size
 //!
@@ -21,7 +22,8 @@
 //!
 //! [`compensate_earth`] removes the first-order part of the second error at the
 //! input. It is off by default, deviates from the published filter, and has a
-//! ceiling: see the gyrocompassing note on that function.
+//! ceiling: see the gyrocompassing note on that function. Above the ceiling,
+//! [`Anchor::rotating_frame`] puts the rate in the filter's own model.
 //!
 //! [adr/0008]: https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md
 
@@ -30,7 +32,7 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Mat3, Vec3};
 use drifters_core::F;
 
-use crate::lift::Input;
+use crate::lift::{GlobalFrame, Input};
 
 /// A fixed geodetic origin for the filter's Cartesian frame.
 ///
@@ -60,6 +62,16 @@ impl Anchor {
             origin,
             gravity: Wgs84::gravity_n(origin.lat, origin.height),
         }
+    }
+
+    /// The anchor's tangent frame, fixed to the Earth and so turning with it.
+    ///
+    /// The rate is the Earth's at the anchor. Over a vehicle's journey the
+    /// tangent plane and its gravity stay the anchor's as well, so what limits
+    /// this is the frame, as for the flat one: see
+    /// [`GlobalFrame`].
+    pub fn rotating_frame(&self) -> GlobalFrame {
+        GlobalFrame::rotating(self.gravity, Wgs84::omega_ie_n(self.origin.lat))
     }
 
     /// Geodetic position to local NED metres.
@@ -129,7 +141,9 @@ pub enum FlatEarthVerdict {
     CompensateInput,
     /// Earth rate is the measurement that determines heading. Input-side
     /// compensation removes that capability, so this band needs Earth rotation
-    /// inside the symmetry group. Navigation grade and better, below 0.01 °/h.
+    /// inside the symmetry group, which
+    /// [`EqfOptions::earth_in_group`](crate::config::EqfOptions::earth_in_group)
+    /// provides. Navigation grade and better, below 0.01 °/h.
     ModelInGroup,
 }
 
@@ -140,9 +154,10 @@ impl FlatEarthVerdict {
     ///
     /// `None` is [`FlatEarthVerdict::ModelInGroup`]: a gyroscope good enough
     /// to find north from Earth rate loses exactly that by having it
-    /// subtracted from its input, and is out of this filter's scope rather
-    /// than covered by either choice. A caller that runs it anyway should do
-    /// so by choosing, not by default.
+    /// subtracted from its input, and ignoring the rate is worse. Such a
+    /// gyroscope wants
+    /// [`EqfOptions::earth_in_group`](crate::config::EqfOptions::earth_in_group)
+    /// instead, near its anchor, and the ESKF if it travels.
     #[inline]
     pub fn compensates_input(self) -> Option<bool> {
         match self {

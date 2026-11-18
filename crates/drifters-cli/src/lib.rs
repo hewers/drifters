@@ -428,8 +428,8 @@ pub struct GsdcReport {
     pub smoothed_horizontal: Vec<(f64, f64)>,
     /// The GCU convergence rate the EqF ran with, `None` for off.
     pub eqf_alpha: Option<f64>,
-    /// Whether the EqF compensated its input for Earth rate.
-    pub eqf_earth_rate: bool,
+    /// What the EqF did about the Earth's rotation.
+    pub eqf_earth: eqf::EarthTreatment,
     /// Per-epoch horizontal error of the phone's own solution against truth,
     /// `(tow, metres)`.
     pub gnss_horizontal: Vec<(f64, f64)>,
@@ -671,7 +671,7 @@ pub fn run_gsdc(
     // By grade from the datasheet figure, not the scaled process noise: the
     // scale is a tuning of how much the model is trusted, and says nothing
     // about whether the part can see the Earth turn.
-    let eqf_earth_rate = earth.compensate(gsdc_imu_noise(1.0).gyro_bias_std.amax())?;
+    let eqf_earth = earth.resolve(gsdc_imu_noise(1.0).gyro_bias_std.amax());
 
     let mut report = GsdcReport {
         runs: Vec::new(),
@@ -679,7 +679,7 @@ pub fn run_gsdc(
         smoothed: None,
         smoothed_horizontal: Vec::new(),
         eqf_alpha: alpha,
-        eqf_earth_rate,
+        eqf_earth,
         gnss_horizontal: Vec::new(),
         gnss_velocity: truth::ErrorStats::new(),
         gnss_velocity_count: 0,
@@ -786,7 +786,7 @@ pub fn run_gsdc(
                     attitude,
                     &noise,
                     accel_scale_std,
-                    eqf_earth_rate,
+                    eqf_earth,
                     alpha,
                 );
                 if kind == EngineKind::Eqf {

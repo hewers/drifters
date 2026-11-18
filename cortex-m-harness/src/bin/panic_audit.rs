@@ -54,12 +54,19 @@ fn main() -> ! {
             core::hint::spin_loop();
         }
     };
-    // The equivariant filter's engine, on the same terms.
-    let Ok(mut eqf) = EqfEngine::new(EqfOptions::default().with_initial_state(
-        Lla::from_degrees(30.4, 114.4, 20.0),
-        Ned::ZERO,
-        Euler::new(0.0, 0.0, 0.0),
-    )) else {
+    // The equivariant filter's engine, on the same terms. Whether the Earth
+    // is in its group is hidden from the optimiser, which would otherwise
+    // fold away one side of every branch on it and audit only the other.
+    let earth_in_group = core::hint::black_box(true);
+    let Ok(mut eqf) = EqfEngine::new(
+        EqfOptions::default()
+            .with_initial_state(
+                Lla::from_degrees(30.4, 114.4, 20.0),
+                Ned::ZERO,
+                Euler::new(0.0, 0.0, 0.0),
+            )
+            .with_earth_in_group(earth_in_group),
+    ) else {
         loop {
             core::hint::spin_loop();
         }
@@ -69,13 +76,15 @@ fn main() -> ! {
     let mut eqf_rewind = EqfRewindEngine::<16, 4>::from_engine(eqf);
     // The same filter with its covariance factored and held in f32: Bierman,
     // Thornton and the whitening are data path on a part that runs it.
-    let Ok(mut eqf32) =
-        EqfEngine::<Ud<f32>>::with_covariance(EqfOptions::default().with_initial_state(
-            Lla::from_degrees(30.4, 114.4, 20.0),
-            Ned::ZERO,
-            Euler::new(0.0, 0.0, 0.0),
-        ))
-    else {
+    let Ok(mut eqf32) = EqfEngine::<Ud<f32>>::with_covariance(
+        EqfOptions::default()
+            .with_initial_state(
+                Lla::from_degrees(30.4, 114.4, 20.0),
+                Ned::ZERO,
+                Euler::new(0.0, 0.0, 0.0),
+            )
+            .with_earth_in_group(earth_in_group),
+    ) else {
         loop {
             core::hint::spin_loop();
         }

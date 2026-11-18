@@ -39,7 +39,7 @@ use drifters_core::math::{Cholesky, Mat3, Matrix, Quat, Vec3};
 use drifters_eqf::filter::{EqFilter, ProcessNoise};
 use drifters_eqf::group::State;
 use drifters_eqf::lie::{Se23, Se3Tangent};
-use drifters_eqf::lift::Input;
+use drifters_eqf::lift::{GlobalFrame, Input};
 
 use crate::stats::{self, Running};
 
@@ -114,7 +114,7 @@ impl Rng {
 /// `_estimate` is kept for the callers that pass it. The estimate is
 /// determined by `x`, so the map never needed both.
 pub fn physical_jacobian(x: &drifters_eqf::group::Symmetry, _estimate: &State) -> Matrix<DIM, DIM> {
-    drifters_eqf::physical::jacobian(x)
+    drifters_eqf::physical::jacobian(x, Vec3::ZERO)
 }
 
 /// The physical state error, `truth − estimate`, in the same order.
@@ -341,6 +341,7 @@ fn initial_covariance_scaled(strength: f64, estimate: &State) -> Matrix<DIM, DIM
     let s = initial_sigma().map(|v| v * strength);
     drifters_eqf::physical::covariance_from_std(
         &drifters_eqf::group::Symmetry::from_state(estimate),
+        Vec3::ZERO,
         &s,
     )
 }
@@ -383,6 +384,33 @@ pub fn run_nees_with<C: drifters_eqf::Covariance>(
     seed: u64,
     dt: f64,
     strength: f64,
+) -> NeesReport {
+    run_nees_turning::<C>(runs, seconds, seed, dt, strength, Turning::default())
+}
+
+/// How fast the world and the filter's idea of it turn, rad/s in the global
+/// frame. Both are zero in the paper's setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Turning {
+    /// The rate the truth is simulated with.
+    pub world: Vec3,
+    /// The rate the filter is told.
+    pub filter: Vec3,
+}
+
+/// As [`run_nees_with`], in a world that turns.
+///
+/// The truth is the filter's own state: its velocity is the group velocity
+/// `v + ω × p`, so the error is scored in the same coordinates as a
+/// non-rotating run. A filter told the world's rate should read as it does
+/// there, and one told anything else should not.
+pub fn run_nees_turning<C: drifters_eqf::Covariance>(
+    runs: usize,
+    seconds: f64,
+    seed: u64,
+    dt: f64,
+    strength: f64,
+    turning: Turning,
 ) -> NeesReport {
     let settle = 10.0;
     let gnss_every = (1.0 / dt).round() as usize; // 1 Hz, whatever dt is
@@ -444,7 +472,7 @@ pub fn run_nees_with<C: drifters_eqf::Covariance>(
         let Some(mut filter) = EqFilter::<C>::with_covariance(
             &start,
             &initial_covariance_scaled(strength, &start),
-            GRAVITY,
+            GlobalFrame::rotating(GRAVITY, turning.filter),
         ) else {
             report.singular += 1;
             continue;
@@ -476,19 +504,28 @@ pub fn run_nees_with<C: drifters_eqf::Covariance>(
             // it dominates NEES as the noise is reduced. Measured with the old
             // stepper, NEES ran 23.9, 26.4, 47.5, 287 as `strength` fell from 1
             // to 0.03 — the harness measuring itself.
+            //
+            // A turning world is stepped through the frame that does not turn
+            // and coincides with it at the start of the step. There the group
+            // velocity is an ordinary velocity, gravity is what rotates, and
+            // the same quadrature applies.
             let r0 = truth.pose.rotation;
+            let world = |s: f64| Quat::from_rotation_vector(turning.world * s).to_dcm();
             let force = |s: f64| {
-                r0.matmul(&Quat::from_rotation_vector(omega * s).to_dcm()) * accel + GRAVITY
+                r0.matmul(&Quat::from_rotation_vector(omega * s).to_dcm()) * accel
+                    + world(s) * GRAVITY
             };
             let simpson = |a: f64, b: f64| {
                 (force(a) + force(0.5 * (a + b)) * 4.0 + force(b)) * ((b - a) / 6.0)
             };
             let dv = simpson(0.0, dt);
             let half = simpson(0.0, 0.5 * dt);
-            truth.pose.position =
-                truth.pose.position + truth.pose.velocity * dt + (half * 4.0 + dv) * (dt / 6.0);
-            truth.pose.velocity += dv;
-            truth.pose.rotation = r0.matmul(&Quat::from_rotation_vector(omega * dt).to_dcm());
+            let back = world(dt).transpose();
+            truth.pose.position = back
+                * (truth.pose.position + truth.pose.velocity * dt + (half * 4.0 + dv) * (dt / 6.0));
+            truth.pose.velocity = back * (truth.pose.velocity + dv);
+            truth.pose.rotation =
+                back.matmul(&r0.matmul(&Quat::from_rotation_vector(omega * dt).to_dcm()));
             // Bias random walk, at the density the filter is given.
             truth.bias = truth.bias
                 + Se3Tangent::new(
@@ -745,6 +782,42 @@ mod tests {
         let x = drifters_eqf::group::Symmetry::from_state(&moved);
         let j = physical_jacobian(&x, &moved);
         assert_eq!(j.block::<3, 3>(6, 0), -Vec3::new(1000.0, 0.0, 0.0).skew());
+    }
+
+    /// The turning world, at a rate some 600 times the Earth's so that an
+    /// error in any term of the rotating model would show. Told the rate, the
+    /// filter must score what it scores in a still world.
+    #[test]
+    fn a_filter_told_how_the_world_turns_stays_consistent() {
+        use drifters_eqf::linear::StateMatrix;
+        let spin = Vec3::new(0.025, -0.015, 0.030);
+        let run = |world, filter| {
+            let turning = Turning { world, filter };
+            run_nees_turning::<StateMatrix>(20, 120.0, 20_261_118, 0.01, 1.0, turning)
+        };
+        let still = run(Vec3::ZERO, Vec3::ZERO).overall.mean();
+        let told = run(spin, spin).overall.mean();
+        let untold = run(spin, Vec3::ZERO).overall.mean();
+        println!("NEES: still {still:.2}, told {told:.2}, untold {untold:.0}");
+        assert!((18.0..24.0).contains(&told), "{told}");
+        assert!((told - still).abs() < 1.5, "{told} against {still}");
+        assert!(untold > 1_000.0, "{untold}");
+    }
+
+    /// The factored form through the same world, so that the sparse square it
+    /// takes and the frame's terms on the pose diagonal are seen to agree.
+    #[test]
+    fn the_factored_form_is_consistent_in_a_turning_world_too() {
+        let spin = Vec3::new(0.025, -0.015, 0.030);
+        let turning = Turning {
+            world: spin,
+            filter: spin,
+        };
+        let nees =
+            run_nees_turning::<drifters_eqf::Ud<f32>>(10, 120.0, 20_261_119, 0.01, 1.0, turning)
+                .overall
+                .mean();
+        assert!((17.0..25.0).contains(&nees), "{nees}");
     }
 
     /// A zero error must give a zero NEES, whatever the covariance.

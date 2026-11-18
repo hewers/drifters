@@ -45,7 +45,7 @@ use drifters_core::F;
 
 use crate::group::{act_direction, act_position, act_velocity, Symmetry};
 use crate::lie::Se23Tangent;
-use crate::lift::Input;
+use crate::lift::{GlobalFrame, Input};
 
 /// Dimension of the state, and the side of [`StateMatrix`].
 pub const DIM: usize = 21;
@@ -97,9 +97,16 @@ pub type OutputMatrix = Matrix<3, DIM>;
 /// numerical Jacobian agrees with the corrected form and disagrees with the
 /// printed one by exactly `ad_γ̂`, which is how this was found rather than
 /// assumed.
-pub fn state_matrix(x: &Symmetry, u: &Input, gravity: Vec3) -> StateMatrix {
+///
+/// # In a rotating frame
+///
+/// `G = (−ω, g, 0)` puts `ω` in three places. `ad_G` adds `−ω^` to each pose
+/// block of `₁A`, `₂A` takes the new `G` as it stands, and `₃A` becomes the
+/// body's rate relative to the frame, `Â ᴵω + γ̂_ω − ω`. The attitude column
+/// of the magnetometer row keeps the rate without `ω`.
+pub fn state_matrix(x: &Symmetry, u: &Input, frame: impl Into<GlobalFrame>) -> StateMatrix {
     let mut m = StateMatrix::zeros();
-    state_matrix_entries(x, u, gravity, |i, j, value| m.data[i][j] = value);
+    state_matrix_entries(x, u, frame.into(), |i, j, value| m.data[i][j] = value);
     m
 }
 
@@ -112,9 +119,13 @@ pub fn state_matrix(x: &Symmetry, u: &Input, gravity: Vec3) -> StateMatrix {
 pub(crate) fn state_matrix_entries(
     x: &Symmetry,
     u: &Input,
-    gravity: Vec3,
+    frame: GlobalFrame,
     mut put: impl FnMut(usize, usize, F),
 ) {
+    let GlobalFrame {
+        gravity,
+        earth_rate,
+    } = frame;
     let a = x.a();
     let mut block = |r0: usize, c0: usize, b: &Mat3| {
         for i in 0..3 {
@@ -128,6 +139,14 @@ pub(crate) fn state_matrix_entries(
     // position. The two non-zero blocks of the extended-pose dynamics.
     block(3, 0, &gravity.skew());
     block(6, 3, &Mat3::identity());
+    // The frame's rotation, on each of the three. Absent rather than zero in
+    // a flat frame, so the factored form's sparse square still skips them.
+    if frame.rotates() {
+        let turn = (-earth_rate).skew();
+        block(0, 0, &turn);
+        block(3, 3, &turn);
+        block(6, 6, &turn);
+    }
 
     // The pose's dependence on the bias. The identity blocks come from the
     // input entering the lift as (ω − b_ω) and (a − b_a); the p̂^ comes from
@@ -136,18 +155,22 @@ pub(crate) fn state_matrix_entries(
     block(3, 12, &Mat3::identity());
     block(6, 9, &x.c.position.skew());
 
-    // ₃A, the bias-corrected rate in the global frame, on the lever arm and
-    // the magnetometer calibration.
-    let a3 = (a * u.omega + x.gamma.omega).skew();
+    // ₃A, the bias-corrected rate in the global frame and relative to it, on
+    // the lever arm and the magnetometer calibration. The attitude column of
+    // the calibration row takes the rate without the frame's share: S's
+    // `exp(ε_φ)` meets the `Rᵀω` of the lift and cancels, so an attitude error
+    // never reaches the frame's rate.
+    let turning = a * u.omega + x.gamma.omega;
+    let a3 = (turning - earth_rate).skew();
     block(15, 15, &a3);
     block(18, 18, &a3);
-    block(18, 0, &-a3);
+    block(18, 0, &-turning.skew());
     block(18, 9, &Mat3::identity());
 
-    // ₂A, the bias block. W = (ω, a, 0), G = (0, g, 0). The γ̂ is the bias
+    // ₂A, the bias block. W = (ω, a, 0), G = (−ω_ie, g, 0). The γ̂ is the bias
     // correction the printed equation omits — see the doc comment.
     let w = Se23Tangent::new(u.omega, u.accel, Vec3::ZERO);
-    let g = Se23Tangent::new(Vec3::ZERO, gravity, Vec3::ZERO);
+    let g = Se23Tangent::new(-earth_rate, gravity, Vec3::ZERO);
     let bias = (x.gamma + (x.c.adjoint_apply(w) + g).pi()).ad();
     for i in 0..6 {
         for j in 0..6 {
@@ -379,6 +402,51 @@ mod tests {
                 assert_close(*value, analytic[(i, k)], "A_t0", i, k);
             }
         }
+    }
+
+    /// The same Jacobian in a rotating frame, at a rate large enough that any
+    /// block missing its share of it fails by orders of magnitude.
+    #[test]
+    fn the_state_matrix_matches_a_numerical_jacobian_in_a_rotating_frame() {
+        let (x, u) = (observer(), input());
+        let frame = GlobalFrame::rotating(GRAVITY, Vec3::new(0.012, -0.007, 0.021));
+        let analytic = state_matrix(&x, &u, frame);
+
+        for k in 0..DIM {
+            let e = basis(k);
+            let fwd = lift(&at(&e, H, &x), &u, frame).to_array();
+            let back = lift(&at(&e, -H, &x), &u, frame).to_array();
+
+            let mut d = [0.0; DIM];
+            for i in 0..DIM {
+                d[i] = (fwd[i] - back[i]) / (2.0 * H);
+            }
+            let column = x.adjoint_apply(Algebra::from_array(&d)).to_array();
+
+            for (i, value) in column.iter().enumerate() {
+                assert_close(*value, analytic[(i, k)], "A_t0", i, k);
+            }
+        }
+
+        let turn = (-frame.earth_rate).skew();
+        for block in [0, 3, 6] {
+            assert_eq!(analytic.block::<3, 3>(block, block), turn);
+        }
+    }
+
+    /// A flat frame hands over nothing on the pose diagonal. The factored
+    /// covariance's square skips zero entries, and these would be nine rows
+    /// of work for nothing on every step of every flat filter.
+    #[test]
+    fn a_flat_frame_leaves_the_pose_diagonal_alone() {
+        let (x, u) = (observer(), input());
+        let mut handed_over = 0;
+        state_matrix_entries(&x, &u, GRAVITY.into(), |i, j, _| {
+            if i < 9 && j < 9 && i / 3 == j / 3 {
+                handed_over += 1;
+            }
+        });
+        assert_eq!(handed_over, 0);
     }
 
     /// The blocks the paper names, checked individually against the assembled

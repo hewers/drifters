@@ -68,4 +68,11 @@ fn a_written_configuration_reads_back_unchanged() {
     let json = serde_json::to_string_pretty(&options).unwrap();
     let back: EqfOptions = serde_json::from_str(&json).unwrap();
     assert_eq!(format!("{back:?}"), format!("{options:?}"));
+
+    options.compensate_earth = false;
+    options.earth_in_group = true;
+    let json = serde_json::to_string_pretty(&options).unwrap();
+    let back: EqfOptions = serde_json::from_str(&json).unwrap();
+    assert!(back.earth_in_group);
+    assert_eq!(format!("{back:?}"), format!("{options:?}"));
 }

@@ -348,8 +348,8 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 632 bytes** with
-the dense covariance and 17 832 with the factored `f32` one: the rings are
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 704 bytes** with
+the dense covariance and 17 904 with the factored `f32` one: the rings are
 identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
@@ -365,7 +365,7 @@ late with an aid recorded every third sample. The replay runs nested inside
 no engine-sized temporary, and a frame of its own of **152 bytes**. A late fix
 reaches the depth of the time update it replays and goes no further: 17 088
 bytes, 13 124 with `f32-covariance` and 10 360 at 15 states. The EqF's late fix
-measures 15 520 dense and 14 112 factored, no deeper than its own fix step in
+measures 15 800 dense and 14 392 factored, no deeper than its own fix step in
 either. All are inside their CI ceilings, and all are part of the peak CI
 checks.
 
@@ -378,9 +378,9 @@ add only a small frame. That was correct this time. It is still how the
 | item | dense `f64` | factored `f32` |
 |---|---|---|
 | `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
-| `EqFilter<C>` (observer state + `Σ` + gravity + GCU rate) | 3 832 | 1 232 |
+| `EqFilter<C>` (observer state + `Σ` + gravity and Earth rate + GCU rate) | 3 856 | 1 256 |
 | `EqfOptions` | 648 | 648 |
-| `EqfEngine<C>` total | **4 680** | **2 080** |
+| `EqfEngine<C>` total | **4 704** | **2 104** |
 
 Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
 `rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
@@ -393,10 +393,12 @@ ESKF:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 14 136 | 10 460 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 520 | 14 112 |
+| `add_imu` (propagate) | 14 160 | 10 564 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 800 | 14 392 |
 | `apply_magnetometer` | 14 480 | 13 096 |
-| **peak** | **15 520** | **14 112** |
+| **peak** | **15 800** | **14 392** |
+
+These are the same with the Earth's rotation in the filter's group.
 
 Under the ESKF's own 17 088, and both under a 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
@@ -405,10 +407,10 @@ Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-y
 the 1.9 KB its update paths have gained since, which is not yet explained.
 
 On a small part the constraint was never stack. It was work: the dense form
-is 4.48 million instructions per `add_imu` on a Cortex-M4, soft-float
+is 4.51 million instructions per `add_imu` on a Cortex-M4, soft-float
 throughout on a core whose FPU is single precision, and at an instruction per
-cycle that is at least 26.7 ms a sample at 168 MHz. The factored form is 0.87
-million, a floor of 5.2 ms — inside a 100 Hz IMU's interval with about half of
+cycle that is at least 26.8 ms a sample at 168 MHz. The factored form is 0.89
+million, a floor of 5.3 ms — inside a 100 Hz IMU's interval with about half of
 it to spare, and just over a 200 Hz one's — against 486 thousand for the
 ESKF with `f32-covariance`. See [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 

@@ -27,6 +27,38 @@
 //! the lift must reproduce that. Their tests are the three "stays constant"
 //! assertions, so a sign error in any of them appears as motion in a state that
 //! should not move.
+//!
+//! # Earth rotation stays inside the group
+//!
+//! In a frame fixed to the Earth, turning at `ω` and with `g₀` the plumb
+//! gravity at its origin, a vehicle obeys
+//!
+//! ```text
+//! Ṙ = R(ᴵω − b_ω)^ − ω^R
+//! ṗ = v
+//! v̇ = R(ᴵa − b_a) + g₀ − 2ω×v − ω×(ω×p)
+//! ```
+//!
+//! Written that way the Coriolis term has twice the coefficient of the
+//! attitude term, and no element of `se₂(3)` produces both. The velocity is
+//! the wrong coordinate. With `v' = v + ω×p`, the velocity seen from a frame
+//! that does not turn but is written on the Earth-fixed axes,
+//!
+//! ```text
+//! ṗ  = v' − ω×p
+//! v̇' = R(ᴵa − b_a) + g₀ − ω×v'
+//! ```
+//!
+//! and all three rows now carry the same `−ω^` on the left. That is
+//!
+//! ```text
+//! Ṫ = T(W − B + N) + (G − N)T,    G = (−ω, g₀, 0)^
+//! ```
+//!
+//! the paper's equation with one more constant in `G`, so the system stays
+//! group affine and (6)–(9) stand with `G` read this way. [`GlobalFrame`] holds
+//! the two constants. `the_lift_reproduces_the_physics_of_a_rotating_frame`
+//! checks the result against the first set of equations, in `v`.
 
 use drifters_core::math::{Matrix, Vec3};
 
@@ -51,26 +83,97 @@ impl Input {
     }
 }
 
+/// What the global frame contributes to the dynamics: the constant element
+/// `G = (−ω, g, 0)` of `se₂(3)`.
+///
+/// With `earth_rate` zero this is the paper's flat, non-rotating Earth, and a
+/// bare gravity vector converts to exactly that. With it set, the frame is
+/// fixed to the Earth, and the velocity the filter holds is
+/// [`group_velocity`](Self::group_velocity) and not the velocity over the
+/// ground. See the [module documentation](self).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct GlobalFrame {
+    /// The constant gravity vector `ᴳg`: `(0, 0, +9.81)` or so in this
+    /// project's NED convention. Plumb gravity, so it already includes the
+    /// centrifugal term at the origin.
+    pub gravity: Vec3,
+    /// The frame's rotation rate `ω` in its own axes, rad/s.
+    pub earth_rate: Vec3,
+}
+
+impl GlobalFrame {
+    /// A flat frame that does not rotate, as the paper has it.
+    #[inline]
+    pub const fn flat(gravity: Vec3) -> Self {
+        Self {
+            gravity,
+            earth_rate: Vec3::ZERO,
+        }
+    }
+
+    /// A frame fixed to an Earth turning at `earth_rate`.
+    #[inline]
+    pub const fn rotating(gravity: Vec3, earth_rate: Vec3) -> Self {
+        Self {
+            gravity,
+            earth_rate,
+        }
+    }
+
+    /// Whether the frame turns at all.
+    #[inline]
+    pub fn rotates(&self) -> bool {
+        self.earth_rate != Vec3::ZERO
+    }
+
+    /// The velocity the group holds, `v' = v + ω×p`, for a velocity `v` over
+    /// the ground at `position`.
+    #[inline]
+    pub fn group_velocity(&self, velocity: Vec3, position: Vec3) -> Vec3 {
+        velocity + self.earth_rate.cross(position)
+    }
+
+    /// The velocity over the ground, `v = v' − ω×p`, for the group's `v'` at
+    /// `position`.
+    #[inline]
+    pub fn ground_velocity(&self, group_velocity: Vec3, position: Vec3) -> Vec3 {
+        group_velocity - self.earth_rate.cross(position)
+    }
+}
+
+impl From<Vec3> for GlobalFrame {
+    #[inline]
+    fn from(gravity: Vec3) -> Self {
+        Self::flat(gravity)
+    }
+}
+
 /// The lift `Λ(ξ, u)`, equations (6)–(9).
 ///
-/// `gravity` is the constant `ᴳg` of the paper's flat, non-rotating Earth — a
-/// vector in the global frame, so `(0, 0, +9.81)` in this project's NED
-/// convention. See the crate docs for why it is constant here and not in the
-/// ESKF.
-pub fn lift(xi: &State, u: &Input, gravity: Vec3) -> Algebra {
+/// `frame` is usually a [`GlobalFrame`]. A bare vector is the constant `ᴳg` of
+/// the paper's flat, non-rotating Earth. See the crate docs for why gravity is
+/// constant here and not in the ESKF.
+pub fn lift(xi: &State, u: &Input, frame: impl Into<GlobalFrame>) -> Algebra {
+    let GlobalFrame {
+        gravity,
+        earth_rate,
+    } = frame.into();
     // (6), in closed form. The 5×5 product T⁻¹(G − N)T collapses because G − N
-    // is non-zero only in the two columns that meet T's identity corner:
+    // is non-zero only in the columns that meet T's identity corner:
     //
-    //     T⁻¹(G − N)T = (0, Rᵀg, Rᵀv)^ − N
+    //     T⁻¹(G − N)T = (−Rᵀω, Rᵀ(g − ω×v), Rᵀ(v − ω×p))^ − N
     //
     // so the two N's cancel and no 5×5 arithmetic survives. `lambda1_literal`
     // evaluates the matrix form and the tests assert the two agree.
     let r_t = xi.pose.rotation.transpose();
-    let rate = u.omega - xi.bias.omega;
+    let (velocity, position) = (xi.pose.velocity, xi.pose.position);
+    // The body's rate relative to the frame, which is what turns R.
+    let rate = u.omega - xi.bias.omega - r_t * earth_rate;
     let c = Se23Tangent::new(
         rate,
-        u.accel - xi.bias.nu + r_t * gravity,
-        r_t * xi.pose.velocity,
+        u.accel - xi.bias.nu + r_t * (gravity - earth_rate.cross(velocity)),
+        r_t * (velocity - earth_rate.cross(position)),
     );
 
     Algebra {
@@ -79,7 +182,7 @@ pub fn lift(xi: &State, u: &Input, gravity: Vec3) -> Algebra {
         // se(3) part of Λ₁ through Ad_{B⁻¹} in the state action.
         gamma: xi.bias.bracket(c.pi()),
         // (8): the lever arm rides on Aᵀ, so it needs t^ times the rotational
-        // part of Λ₁, which is the bias-corrected gyro rate.
+        // part of Λ₁, the bias-corrected gyro rate less the frame's own.
         delta: xi.lever.cross(rate),
         // (9): the magnetometer calibration rides on Aᵀ S E, so the E-direction
         // has to undo the Aᵀ, in S's frame.
@@ -92,10 +195,11 @@ pub fn lift(xi: &State, u: &Input, gravity: Vec3) -> Algebra {
 /// Kept because it is the only direct transcription of (6) in the codebase:
 /// [`lift`] ships the collapsed form, and this is what proves the collapse.
 /// Not on any hot path.
-pub fn lambda1_literal(xi: &State, u: &Input, gravity: Vec3) -> Matrix<5, 5> {
+pub fn lambda1_literal(xi: &State, u: &Input, frame: impl Into<GlobalFrame>) -> Matrix<5, 5> {
+    let frame = frame.into();
     let w = Se23Tangent::new(u.omega, u.accel, Vec3::ZERO).wedge();
     let b = Se23Tangent::new(xi.bias.omega, xi.bias.nu, Vec3::ZERO).wedge();
-    let g = Se23Tangent::new(Vec3::ZERO, gravity, Vec3::ZERO).wedge();
+    let g = Se23Tangent::new(-frame.earth_rate, frame.gravity, Vec3::ZERO).wedge();
 
     // N is not in se₂(3): its single 1 sits at (3, 4), below the wedge's block.
     // It supplies ṗ = v, which no se₂(3) element can, and cancels out of Λ₁.
@@ -120,6 +224,9 @@ mod tests {
     use crate::lie::Se23;
 
     const GRAVITY: Vec3 = Vec3::new(0.0, 0.0, 9.81);
+    /// A rate some four hundred times the Earth's, so that a term missing
+    /// from the lift is far above the tolerance of a numerical derivative.
+    const SPINNING: GlobalFrame = GlobalFrame::rotating(GRAVITY, Vec3::new(0.012, -0.007, 0.021));
 
     fn rot(x: F, y: F, z: F) -> Mat3 {
         Quat::from_rotation_vector(Vec3::new(x, y, z)).to_dcm()
@@ -155,6 +262,79 @@ mod tests {
                 assert_relative_eq!(literal[(i, j)], closed[(i, j)], epsilon = 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn the_closed_form_holds_in_a_rotating_frame_too() {
+        let (xi, u) = (state(), input());
+        let literal = lambda1_literal(&xi, &u, SPINNING);
+        let closed = lift(&xi, &u, SPINNING).c.wedge();
+        for i in 0..5 {
+            for j in 0..5 {
+                assert_relative_eq!(literal[(i, j)], closed[(i, j)], epsilon = 1e-12);
+            }
+        }
+    }
+
+    /// The whole claim of the module docs, against the equations of motion
+    /// as any navigation text writes them: in the velocity over the ground,
+    /// with Coriolis at twice the coefficient and the centrifugal term.
+    #[test]
+    fn the_lift_reproduces_the_physics_of_a_rotating_frame() {
+        let (xi, u) = (state(), input());
+        let w = SPINNING.earth_rate;
+        let lambda = lift(&xi, &u, SPINNING);
+        let h = 1e-6;
+        let fwd = act_state(&curve(lambda, h), &xi);
+        let back = act_state(&curve(lambda, -h), &xi);
+        let scale = 1.0 / (2.0 * h);
+
+        let (r, v_group, p) = (xi.pose.rotation, xi.pose.velocity, xi.pose.position);
+        let v = SPINNING.ground_velocity(v_group, p);
+        let rate = u.omega - xi.bias.omega;
+
+        let r_dot = (fwd.pose.rotation - back.pose.rotation).scaled(scale);
+        let expect_r = r.matmul(&rate.skew()) - w.skew().matmul(&r);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_relative_eq!(r_dot[(i, j)], expect_r[(i, j)], epsilon = 1e-6);
+            }
+        }
+
+        let ground = |s: &State| SPINNING.ground_velocity(s.pose.velocity, s.pose.position);
+        let v_dot = (ground(&fwd) - ground(&back)) * scale;
+        let expect_v =
+            r * (u.accel - xi.bias.nu) + GRAVITY - w.cross(v) * 2.0 - w.cross(w.cross(p));
+        let p_dot = (fwd.pose.position - back.pose.position) * scale;
+        for i in 0..3 {
+            assert_relative_eq!(v_dot[i], expect_v[i], epsilon = 1e-6);
+            assert_relative_eq!(p_dot[i], v[i], epsilon = 1e-6);
+        }
+
+        for (a, b) in fwd.bias.to_array().iter().zip(back.bias.to_array().iter()) {
+            assert_relative_eq!((a - b) * scale, 0.0, epsilon = 1e-7);
+        }
+        for i in 0..3 {
+            assert_relative_eq!((fwd.lever[i] - back.lever[i]) * scale, 0.0, epsilon = 1e-7);
+            for j in 0..3 {
+                let moved = (fwd.mag[(i, j)] - back.mag[(i, j)]) * scale;
+                assert_relative_eq!(moved, 0.0, epsilon = 1e-7);
+            }
+        }
+    }
+
+    /// Zero rate is not an approximation of the flat frame: it is the flat
+    /// frame, to the bit.
+    #[test]
+    fn a_frame_that_does_not_turn_is_the_flat_one() {
+        let (xi, u) = (state(), input());
+        let frame = GlobalFrame::rotating(GRAVITY, Vec3::ZERO);
+        assert!(!frame.rotates() && SPINNING.rotates());
+        assert_eq!(frame, GlobalFrame::from(GRAVITY));
+        assert_eq!(
+            lift(&xi, &u, frame).to_array(),
+            lift(&xi, &u, GRAVITY).to_array()
+        );
     }
 
     /// The lift's defining property, checked numerically:

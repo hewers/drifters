@@ -43,7 +43,7 @@ use crate::covariance::{Covariance, Propagation};
 use crate::gcu;
 use crate::group::{act_state, Algebra, State, Symmetry};
 use crate::lie::Se3Tangent;
-use crate::lift::{lift, Input};
+use crate::lift::{lift, GlobalFrame, Input};
 use crate::linear::{
     direction_output_matrix, position_output_matrix, transported_direction, transported_position,
     transported_velocity, velocity_output_matrix, OutputMatrix, StateMatrix, DIM,
@@ -175,8 +175,9 @@ pub struct EqFilter<C: Covariance = StateMatrix> {
     pub x: Symmetry,
     /// The error covariance `Σ`, in normal coordinates.
     pub sigma: C,
-    /// The constant global gravity vector `ᴳg`.
-    pub gravity: Vec3,
+    /// What the global frame contributes: gravity, and its rotation if it has
+    /// one.
+    pub frame: GlobalFrame,
     /// GCU convergence rate `α ∈ [0, 1]`, or `None` for no inflation at all.
     ///
     /// `Some(0.0)` is not off: `β` still doubles the state's share of the
@@ -195,11 +196,14 @@ impl EqFilter {
     /// and a replay that built this directly and never set it ran there
     /// unawares; the divergence it recorded was then attributed to the Earth
     /// model. See docs/eqf.md.
-    pub fn new(initial: &State, sigma: Matrix<DIM, DIM>, gravity: Vec3) -> Self {
+    ///
+    /// `frame` is a gravity vector for the paper's flat Earth, or a
+    /// [`GlobalFrame`].
+    pub fn new(initial: &State, sigma: Matrix<DIM, DIM>, frame: impl Into<GlobalFrame>) -> Self {
         Self {
             x: Symmetry::from_state(initial),
             sigma,
-            gravity,
+            frame: frame.into(),
             alpha: Some(0.0),
         }
     }
@@ -209,11 +213,15 @@ impl<C: Covariance> EqFilter<C> {
     /// Start from an initial estimate and a dense covariance, held in
     /// whatever form `C` is. `None` if `sigma` is not positive definite,
     /// which the dense form does not check and a factorisation must.
-    pub fn with_covariance(initial: &State, sigma: &StateMatrix, gravity: Vec3) -> Option<Self> {
+    pub fn with_covariance(
+        initial: &State,
+        sigma: &StateMatrix,
+        frame: impl Into<GlobalFrame>,
+    ) -> Option<Self> {
         Some(Self {
             x: Symmetry::from_state(initial),
             sigma: C::from_dense(sigma)?,
-            gravity,
+            frame: frame.into(),
             alpha: Some(0.0),
         })
     }
@@ -259,9 +267,9 @@ impl<C: Covariance> EqFilter<C> {
         let estimate = self.nav_state();
 
         // X̂ ← X̂ exp(dt Λ̂): right translation, per the module docs.
-        let start = lift(&estimate, u, self.gravity);
+        let start = lift(&estimate, u, self.frame);
         let half = self.x.compose(&Symmetry::exp(start.scaled(0.5 * dt)));
-        let midpoint = lift(&act_state(&half, &State::default()), u, self.gravity);
+        let midpoint = lift(&act_state(&half, &State::default()), u, self.frame);
         let next = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
         if !observer_usable(&half) || !observer_usable(&next) {
             return false;
@@ -275,7 +283,7 @@ impl<C: Covariance> EqFilter<C> {
             observer: &next,
             estimate: &estimate,
             input: u,
-            gravity: self.gravity,
+            frame: self.frame,
             dt,
             noise: q,
         });
@@ -291,6 +299,11 @@ impl<C: Covariance> EqFilter<C> {
     }
 
     /// Fuse a GNSS antenna velocity `ᴳν`, which needs the rate that built it.
+    ///
+    /// In a rotating frame `antenna` is the velocity the group holds, not the
+    /// one over the ground:
+    /// [`GlobalFrame::group_velocity`](crate::lift::GlobalFrame::group_velocity)
+    /// of the receiver's velocity, at the antenna's position.
     pub fn update_velocity(&mut self, antenna: Vec3, omega: Vec3, noise: &Mat3) -> Option<F> {
         let transported = transported_velocity(&self.x, omega);
         // The global-frame rate: see `velocity_output_matrix` for why this is
@@ -430,10 +443,10 @@ impl<C: Covariance> EqFilter<C> {
 pub(crate) fn noise_mapping(
     observer: &Symmetry,
     estimate: &State,
-    gravity: Vec3,
+    frame: GlobalFrame,
 ) -> Matrix<DIM, NOISE> {
     let mut g = Matrix::<DIM, NOISE>::zeros();
-    noise_mapping_entries(observer, estimate, gravity, |row, column, value| {
+    noise_mapping_entries(observer, estimate, frame, |row, column, value| {
         g[(row, column)] = value;
     });
     g
@@ -446,10 +459,10 @@ pub(crate) fn noise_mapping(
 pub(crate) fn noise_mapping_entries(
     observer: &Symmetry,
     estimate: &State,
-    gravity: Vec3,
+    frame: GlobalFrame,
     mut put: impl FnMut(usize, usize, F),
 ) {
-    let quiet = lift(estimate, &Input::default(), gravity);
+    let quiet = lift(estimate, &Input::default(), frame);
 
     for axis in 0..6 {
         let mut n = Input::default();
@@ -459,7 +472,7 @@ pub(crate) fn noise_mapping_entries(
             n.accel[axis - 3] = 1.0;
         }
         let linear = Algebra::from_array(&sub(
-            &lift(estimate, &n, gravity).to_array(),
+            &lift(estimate, &n, frame).to_array(),
             &quiet.to_array(),
         ));
         let column = observer.adjoint_apply(linear).to_array();
@@ -716,15 +729,15 @@ mod tests {
         fn propagate_as_an_expression(&mut self, u: &Input, dt: F, q: &ProcessNoise) {
             let estimate = self.nav_state();
 
-            let start = lift(&estimate, u, self.gravity);
+            let start = lift(&estimate, u, self.frame);
             let half = self.x.compose(&Symmetry::exp(start.scaled(0.5 * dt)));
-            let midpoint = lift(&act_state(&half, &State::default()), u, self.gravity);
+            let midpoint = lift(&act_state(&half, &State::default()), u, self.frame);
             self.x = self.x.compose(&Symmetry::exp(midpoint.scaled(dt)));
 
-            let a = crate::linear::state_matrix(&half, u, self.gravity);
+            let a = crate::linear::state_matrix(&half, u, self.frame);
             let a_dt = a * dt;
             let phi = Matrix::<DIM, DIM>::identity() + a_dt + a_dt.matmul(&a_dt) * 0.5;
-            let g = noise_mapping(&self.x, &estimate, self.gravity);
+            let g = noise_mapping(&self.x, &estimate, self.frame);
             let noise = g
                 .matmul(&Matrix::<NOISE, NOISE>::from_diagonal(&q.to_array()))
                 .mul_transpose(&g);

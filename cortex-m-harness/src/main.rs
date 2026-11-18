@@ -368,19 +368,28 @@ fn fix_step<E: Estimator>(bottom: usize, engine: &mut E, t: f64, velocity: bool)
     measure(bottom, || engine.add_imu(sample(t))).1
 }
 
+/// What one run of [`measure_eqf`] is called in its report.
+struct EqfRun {
+    /// For a reader.
+    name: &'static str,
+    /// The labels CI reads.
+    instructions: &'static str,
+    peak: &'static str,
+}
+
 /// One covariance form of the equivariant filter through every measurement:
 /// a plain step, a step with a fix, one with a fix and a velocity, a
 /// magnetometer update, a late fix through the rewind layer, and the
-/// instructions per `add_imu`. `suffix` goes on the `INSTRUCTIONS_EQF` and
-/// `PEAK_EQF` labels CI reads. Returns whether the filter is healthy after.
+/// instructions per `add_imu`. Returns whether the filter is healthy after.
 fn measure_eqf<C: Covariance>(
     bottom: usize,
     syst: &mut Option<SYST>,
     calibration: Option<u32>,
-    suffix: &str,
-    name: &str,
+    options: EqfOptions,
+    run: &EqfRun,
 ) -> bool {
-    let mut eqf = match EqfEngine::<C>::with_covariance(eqf_options()) {
+    let name = run.name;
+    let mut eqf = match EqfEngine::<C>::with_covariance(options) {
         Ok(e) => e,
         Err(e) => {
             hprintln!("configuration rejected: {}", e.as_str());
@@ -430,12 +439,8 @@ fn measure_eqf<C: Covariance>(
     let step = syst
         .as_mut()
         .and_then(|syst| ticks_per_step(syst, &mut eqf));
-    // Labels built by hand: there is no allocator for `format!`.
-    match suffix {
-        "" => report_instructions("INSTRUCTIONS_EQF", step, calibration),
-        _ => report_instructions("INSTRUCTIONS_EQF_F32", step, calibration),
-    }
-    hprintln!("PEAK_EQF{}{}{}", suffix, padding(suffix), eqf_peak);
+    report_instructions(run.instructions, step, calibration);
+    hprintln!("{}{}{}", run.peak, padding(run.peak), eqf_peak);
 
     let healthy = eqf.is_healthy()
         && eqf.covariance().asymmetry() < 1.0e-9
@@ -451,11 +456,9 @@ fn measure_eqf<C: Covariance>(
 }
 
 /// Spaces to align a `PEAK_EQF…` label's value with the other columns.
-fn padding(suffix: &str) -> &'static str {
-    match suffix.len() {
-        0 => "                       ",
-        _ => "                   ",
-    }
+fn padding(label: &str) -> &'static str {
+    const COLUMN: &str = "                               ";
+    COLUMN.get(label.len()..).unwrap_or(" ")
 }
 
 /// Interval of the simulated IMU the aligner is measured on, seconds.
@@ -879,9 +882,54 @@ fn main() -> ! {
 
     // Not `PEAK`: CI reads that label for the ESKF's ceilings, two of which
     // are tighter than this estimator has any reason to meet.
-    let dense = measure_eqf::<DenseEqf>(bottom, &mut syst, calibration, "", "dense f64");
-    let factored = measure_eqf::<Ud<f32>>(bottom, &mut syst, calibration, "_F32", "factored f32");
-    let eqf_healthy = dense && factored;
+    let dense = measure_eqf::<DenseEqf>(
+        bottom,
+        &mut syst,
+        calibration,
+        eqf_options(),
+        &EqfRun {
+            name: "dense f64",
+            instructions: "INSTRUCTIONS_EQF",
+            peak: "PEAK_EQF",
+        },
+    );
+    let factored = measure_eqf::<Ud<f32>>(
+        bottom,
+        &mut syst,
+        calibration,
+        eqf_options(),
+        &EqfRun {
+            name: "factored f32",
+            instructions: "INSTRUCTIONS_EQF_F32",
+            peak: "PEAK_EQF_F32",
+        },
+    );
+    // With the Earth's rotation in the group, where a velocity fix has a full
+    // noise matrix and the factored form must whiten it.
+    let turning = eqf_options().with_earth_in_group(true);
+    let dense_turning = measure_eqf::<DenseEqf>(
+        bottom,
+        &mut syst,
+        calibration,
+        turning,
+        &EqfRun {
+            name: "dense f64, Earth in group",
+            instructions: "INSTRUCTIONS_EQF_EARTH",
+            peak: "PEAK_EQF_EARTH",
+        },
+    );
+    let factored_turning = measure_eqf::<Ud<f32>>(
+        bottom,
+        &mut syst,
+        calibration,
+        turning,
+        &EqfRun {
+            name: "factored f32, Earth in group",
+            instructions: "INSTRUCTIONS_EQF_EARTH_F32",
+            peak: "PEAK_EQF_EARTH_F32",
+        },
+    );
+    let eqf_healthy = dense && factored && dense_turning && factored_turning;
     // Not `PEAK` either, and for the same reason.
     let aligned = measure_aligner(bottom, &mut syst, calibration);
     let healthy = healthy && eqf_healthy && aligned;

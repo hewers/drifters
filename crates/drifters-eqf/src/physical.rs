@@ -47,14 +47,31 @@
 //! ε₁,ρ = δp + p̂^ δφ             ε₄ = Ê δS + δφ
 //! ```
 //!
+//! # In a rotating frame
+//!
+//! The group's velocity there is `v' = v + ω×p`
+//! ([`GlobalFrame`](crate::lift::GlobalFrame)), and what anyone means by a
+//! velocity error is the one over the ground, `δv = δv' − ω^ δp`. So the
+//! velocity row becomes
+//!
+//! ```text
+//! δv = (ω^ p̂^ − v̂'^) ε₁,ω + ε₁,ν − ω^ ε₁,ρ
+//! ε₁,ν = δv + ω^ δp + v̂'^ δφ
+//! ```
+//!
+//! which is why every map here takes `earth_rate`. Pass zero for a flat
+//! frame.
+//!
 //! # Error convention
 //!
 //! [`error`] is **truth minus estimate**, with the two rotations as the
 //! rotation vectors of `R R̂ᵀ` and `Ŝᵀ S`. Attitude is therefore a rotation
 //! about the global axes — north, east and down in this workspace — which is
-//! the convention the ESKF's attitude error uses too.
+//! the convention the ESKF's attitude error uses too. It compares two [`State`]s
+//! as they stand, so in a rotating frame its velocity entry is `δv'`, which is
+//! the one to set against [`jacobian`] with a zero `earth_rate`.
 
-use drifters_core::math::{Mat3, Matrix, Quat};
+use drifters_core::math::{Mat3, Matrix, Quat, Vec3};
 use drifters_core::F;
 
 use crate::group::{State, Symmetry};
@@ -75,18 +92,21 @@ pub const LEVER: usize = 15;
 /// Row of the magnetometer-calibration block.
 pub const MAG: usize = 18;
 
-/// `∂(physical error) / ∂ε` at the observer state `x`.
+/// `∂(physical error) / ∂ε` at the observer state `x`, in a frame turning at
+/// `earth_rate` (zero for a flat one).
 ///
 /// See the [module documentation](self) for the relations and their order.
-pub fn jacobian(x: &Symmetry) -> StateMatrix {
+pub fn jacobian(x: &Symmetry, earth_rate: Vec3) -> StateMatrix {
     let mut j = StateMatrix::zeros();
     // φ(X̂, ξ°) has pose Ĉ, so the estimate's velocity and position are Ĉ's
     // own columns.
     let (v, p) = (x.c.velocity, x.c.position);
+    let w = earth_rate.skew();
 
     j.set_block(ATTITUDE, 0, &Mat3::identity());
-    j.set_block(VELOCITY, 0, &-v.skew());
+    j.set_block(VELOCITY, 0, &(w.matmul(&p.skew()) - v.skew()));
     j.set_block(VELOCITY, 3, &Mat3::identity());
+    j.set_block(VELOCITY, 6, &-w);
     j.set_block(POSITION, 0, &-p.skew());
     j.set_block(POSITION, 6, &Mat3::identity());
     j.set_block(GYRO_BIAS, 9, &-x.b().inverse().adjoint());
@@ -98,13 +118,14 @@ pub fn jacobian(x: &Symmetry) -> StateMatrix {
 }
 
 /// `∂ε / ∂(physical error)` at `x`: the inverse of [`jacobian`].
-pub fn jacobian_inverse(x: &Symmetry) -> StateMatrix {
+pub fn jacobian_inverse(x: &Symmetry, earth_rate: Vec3) -> StateMatrix {
     let mut m = StateMatrix::zeros();
     let (v, p) = (x.c.velocity, x.c.position);
 
     m.set_block(0, ATTITUDE, &Mat3::identity());
     m.set_block(3, ATTITUDE, &v.skew());
     m.set_block(3, VELOCITY, &Mat3::identity());
+    m.set_block(3, POSITION, &earth_rate.skew());
     m.set_block(6, ATTITUDE, &p.skew());
     m.set_block(6, POSITION, &Mat3::identity());
     m.set_block(9, GYRO_BIAS, &-x.b().adjoint());
@@ -145,8 +166,8 @@ pub fn error(truth: &State, estimate: &State) -> [F; DIM] {
 ///
 /// Two `21 × 21` temporaries. A diagnostic, not something to call per sample;
 /// [`variances`] is the lighter question and usually the one being asked.
-pub fn covariance(x: &Symmetry, sigma: &StateMatrix) -> StateMatrix {
-    let j = jacobian(x);
+pub fn covariance(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix) -> StateMatrix {
+    let j = jacobian(x, earth_rate);
     let mut j_sigma = StateMatrix::zeros();
     j.matmul_into(sigma, &mut j_sigma);
     let mut out = StateMatrix::zeros();
@@ -157,8 +178,8 @@ pub fn covariance(x: &Symmetry, sigma: &StateMatrix) -> StateMatrix {
 /// The diagonal of `J Σ Jᵀ`: the variance of each physical error.
 ///
 /// Row by row, so the product is never formed and the only temporary is `J`.
-pub fn variances(x: &Symmetry, sigma: &StateMatrix) -> [F; DIM] {
-    let j = jacobian(x);
+pub fn variances(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix) -> [F; DIM] {
+    let j = jacobian(x, earth_rate);
     let mut out = [0.0; DIM];
     for (variance, row) in out.iter_mut().zip(j.data.iter()) {
         let mut acc = 0.0;
@@ -187,8 +208,8 @@ pub fn variances(x: &Symmetry, sigma: &StateMatrix) -> [F; DIM] {
 /// `M diag(σ²) Mᵀ` with `M` the [`jacobian_inverse`]. Not diagonal, and not
 /// meant to be: an attitude error at a distance *is* a position error in `ε`,
 /// and a filter told otherwise believes it has information it was never given.
-pub fn covariance_from_std(x: &Symmetry, std: &[F; DIM]) -> StateMatrix {
-    let m = jacobian_inverse(x);
+pub fn covariance_from_std(x: &Symmetry, earth_rate: Vec3, std: &[F; DIM]) -> StateMatrix {
+    let m = jacobian_inverse(x, earth_rate);
     // M diag(σ²), by scaling M's columns.
     let mut scaled = m;
     for row in scaled.data.iter_mut() {
@@ -206,8 +227,8 @@ pub fn covariance_from_std(x: &Symmetry, std: &[F; DIM]) -> StateMatrix {
 ///
 /// What a caller wanting one quantity's uncertainty needs, at three rows of
 /// `J` rather than all twenty-one.
-pub fn block_covariance(x: &Symmetry, sigma: &StateMatrix, row: usize) -> Mat3 {
-    let j = jacobian(x);
+pub fn block_covariance(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix, row: usize) -> Mat3 {
+    let j = jacobian(x, earth_rate);
     let mut rows = Matrix::<3, DIM>::zeros();
     for (out, source) in rows.data.iter_mut().zip(j.data.iter().skip(row)) {
         *out = *source;
@@ -219,10 +240,13 @@ pub fn block_covariance(x: &Symmetry, sigma: &StateMatrix, row: usize) -> Mat3 {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use drifters_core::math::Vec3;
 
     use crate::group::{act_state, Algebra};
     use crate::lie::{Se23, Se3Tangent};
+    use crate::lift::GlobalFrame;
+
+    /// Far above the Earth's, so that a missing term cannot pass as round-off.
+    const SPIN: Vec3 = Vec3::new(0.012, -0.007, 0.021);
 
     fn rot(x: F, y: F, z: F) -> Mat3 {
         Quat::from_rotation_vector(Vec3::new(x, y, z)).to_dcm()
@@ -255,7 +279,7 @@ mod tests {
     fn the_jacobian_matches_a_numerical_one() {
         let x = Symmetry::from_state(&estimate());
         let here = act_state(&x, &State::default());
-        let analytic = jacobian(&x);
+        let analytic = jacobian(&x, Vec3::ZERO);
 
         // Large enough that the difference keeps its digits against a 420 m
         // position, small enough that the second-order term stays below them.
@@ -281,11 +305,13 @@ mod tests {
     #[test]
     fn the_inverse_is_the_inverse() {
         let x = Symmetry::from_state(&estimate());
-        let product = jacobian(&x).matmul(&jacobian_inverse(&x));
         let identity = StateMatrix::identity();
-        for i in 0..DIM {
-            for k in 0..DIM {
-                assert_relative_eq!(product[(i, k)], identity[(i, k)], epsilon = 1.0e-12);
+        for rate in [Vec3::ZERO, SPIN] {
+            let product = jacobian(&x, rate).matmul(&jacobian_inverse(&x, rate));
+            for i in 0..DIM {
+                for k in 0..DIM {
+                    assert_relative_eq!(product[(i, k)], identity[(i, k)], epsilon = 1.0e-12);
+                }
             }
         }
     }
@@ -293,7 +319,7 @@ mod tests {
     #[test]
     fn the_jacobian_is_the_identity_only_at_rest_at_the_anchor() {
         let at_rest = Symmetry::IDENTITY;
-        let j = jacobian(&at_rest);
+        let j = jacobian(&at_rest, Vec3::ZERO);
         // Up to the signs the bias and lever blocks carry by convention, and
         // the magnetometer's coupling to attitude, which is never absent.
         for i in 0..9 {
@@ -301,7 +327,7 @@ mod tests {
                 assert_eq!(j[(i, k)], if i == k { 1.0 } else { 0.0 });
             }
         }
-        let moved = jacobian(&Symmetry::from_state(&estimate()));
+        let moved = jacobian(&Symmetry::from_state(&estimate()), Vec3::ZERO);
         assert!(
             moved.block::<3, 3>(POSITION, 0).amax() > 100.0,
             "away from the anchor, attitude must leak into position"
@@ -328,30 +354,59 @@ mod tests {
             };
             *s = scale * (1.0 + 0.5 * (i % 3) as F);
         }
-        let sigma = covariance_from_std(&x, &std);
-        let back = covariance(&x, &sigma);
-        for i in 0..DIM {
-            for k in 0..DIM {
-                let want = if i == k { std[i] * std[i] } else { 0.0 };
-                let scale = std[i] * std[k];
-                assert!(
-                    (back[(i, k)] - want).abs() < 1.0e-9 * scale,
-                    "physical covariance ({i}, {k}) is {} against {want}",
-                    back[(i, k)]
+        for rate in [Vec3::ZERO, SPIN] {
+            let sigma = covariance_from_std(&x, rate, &std);
+            let back = covariance(&x, rate, &sigma);
+            for i in 0..DIM {
+                for k in 0..DIM {
+                    let want = if i == k { std[i] * std[i] } else { 0.0 };
+                    let scale = std[i] * std[k];
+                    assert!(
+                        (back[(i, k)] - want).abs() < 1.0e-9 * scale,
+                        "physical covariance ({i}, {k}) is {} against {want}",
+                        back[(i, k)]
+                    );
+                }
+            }
+            let diagonal = variances(&x, rate, &sigma);
+            for i in 0..DIM {
+                assert_relative_eq!(diagonal[i], std[i] * std[i], max_relative = 1.0e-9);
+            }
+            let position = block_covariance(&x, rate, &sigma, POSITION);
+            for i in 0..3 {
+                assert_relative_eq!(
+                    position[(i, i)],
+                    std[POSITION + i] * std[POSITION + i],
+                    max_relative = 1.0e-9
                 );
             }
         }
-        let diagonal = variances(&x, &sigma);
-        for i in 0..DIM {
-            assert_relative_eq!(diagonal[i], std[i] * std[i], max_relative = 1.0e-9);
-        }
-        let position = block_covariance(&x, &sigma, POSITION);
-        for i in 0..3 {
-            assert_relative_eq!(
-                position[(i, i)],
-                std[POSITION + i] * std[POSITION + i],
-                max_relative = 1.0e-9
+    }
+
+    /// The velocity row in a rotating frame, against a central difference of
+    /// the velocity over the ground. The other rows do not involve the rate,
+    /// and `the_jacobian_matches_a_numerical_one` holds them.
+    #[test]
+    fn the_velocity_row_is_the_velocity_over_the_ground() {
+        let frame = GlobalFrame::rotating(Vec3::new(0.0, 0.0, 9.81), SPIN);
+        let x = Symmetry::from_state(&estimate());
+        let analytic = jacobian(&x, SPIN);
+        let ground = |s: &State| frame.ground_velocity(s.pose.velocity, s.pose.position);
+
+        let h = 1.0e-6;
+        for k in 0..DIM {
+            let mut basis = [0.0; DIM];
+            basis[k] = h;
+            let step = Algebra::from_array(&basis);
+            let ahead = act_state(&Symmetry::exp(step).compose(&x), &State::default());
+            let behind = act_state(
+                &Symmetry::exp(step.scaled(-1.0)).compose(&x),
+                &State::default(),
             );
+            let numeric = (ground(&ahead) - ground(&behind)) * (0.5 / h);
+            for i in 0..3 {
+                assert_relative_eq!(analytic[(VELOCITY + i, k)], numeric[i], epsilon = 1.0e-6);
+            }
         }
     }
 
@@ -363,7 +418,7 @@ mod tests {
         for (i, s) in std.iter_mut().enumerate() {
             *s = if i < 3 { 0.02 } else { 1.0e-3 };
         }
-        let sigma = covariance_from_std(&x, &std);
+        let sigma = covariance_from_std(&x, Vec3::ZERO, &std);
         // 0.02 rad of attitude at |p̂| = 522 m is ten metres of ε-position.
         let position_variance = sigma[(6, 6)] + sigma[(7, 7)] + sigma[(8, 8)];
         assert!(

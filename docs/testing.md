@@ -326,8 +326,9 @@ cd cortex-m-harness && cargo run --release
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
 CI runs it on every push and fails if any estimator's peak exceeds its
 ceiling: 18 KiB for `PEAK`, the ESKF (14 KiB with `f32-covariance`, 11 KiB and
-9 KiB at 15 states), and 20 KiB for `PEAK_EQF`, the equivariant filter's engine with its dense covariance, and
-`PEAK_EQF_F32`, with the factored single-precision one.
+9 KiB at 15 states), and 20 KiB for `PEAK_EQF`, the equivariant filter's engine with its dense covariance,
+`PEAK_EQF_F32`, with the factored single-precision one, and `PEAK_EQF_EARTH` and
+`PEAK_EQF_EARTH_F32`, the same two with the Earth's rotation in the filter's group.
 
 | | peak stack, bytes |
 |---|---|
@@ -335,8 +336,9 @@ ceiling: 18 KiB for `PEAK`, the ESKF (14 KiB with `f32-covariance`, 11 KiB and
 | ESKF, 21-state, `f32-covariance` | 13 124 |
 | ESKF, 15-state (`reduced-state`) | 10 360 |
 | ESKF, 15-state, `f32-covariance` | 7 956 |
-| EqF engine, dense `f64` | **15 520** |
-| EqF engine, factored `f32` | **14 112** |
+| EqF engine, dense `f64` | **15 800** |
+| EqF engine, factored `f32` | **14 392** |
+| EqF engine, either form, Earth in the group | the same as without |
 
 Measured with Rust 1.100. The ESKF's peak was the held-state ZUPT, at 20 808
 and 20 824 bytes at 21 states, until that update stopped forming `P`. It is now
@@ -397,7 +399,10 @@ small rises come from the magnetometer's separate accounting in the engine. The
 with only `drifters-core` changed, every other crate held at the previous commit,
 when the calibration module was added to it. That is the optimiser inlining
 differently under whole-program LTO, and it stays below the peak, which is why the
-peak and not this column is what CI holds to a ceiling.
+peak and not this column is what CI holds to a ceiling. Carrying the Earth's rotation
+added 24 and 104 bytes to the two propagation figures and 280 to each fix step, for
+14 160, 15 800 and 14 480 dense, and 10 564, 14 392 and 13 096 factored. Those are the
+figures with the option on and with it off.
 
 Each of propagation, the Joseph update and the reset's covariance transport now
 runs in two buffers, with `Σ` itself the destination of the last product, and
@@ -466,6 +471,12 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 | EqF engine, dense `f64` | **4 480 560** | 112 014 |
 | EqF engine, factored `f32` | **866 480** | 21 662 |
 
+These were measured before the changes that followed them, and the two tables below
+share that baseline. Re-measured after [Layer 17](#layer-17--the-earth-inside-the-group),
+the ESKF at 21 states in `f64` reads 3 943 160, and the equivariant filter 4 505 880
+dense and 889 600 factored. With the Earth in the group it reads 4 719 600 and 910 680,
+4.7 % and 2.4 % more.
+
 The single-precision covariance removes **87 %** of the work at 21 states and
 83 % at 15, having cost nothing measurable in accuracy. Dropping the six
 scale-factor states removes 55 %. For the equivariant filter, factoring the
@@ -497,8 +508,8 @@ common M4 parts run:
 | ESKF, 21-state, `f32-covariance` | 2.9 ms | fits, if the real figure is within 1.7× of the floor |
 | ESKF, 15-state | 9.9 ms | cannot at 200 Hz; marginal at 100 Hz |
 | ESKF, 15-state, `f32-covariance` | 1.7 ms | fits with a factor of three to spare |
-| EqF engine, dense `f64` | 26.7 ms | cannot keep up, nor at 50 Hz |
-| EqF engine, factored `f32` | 5.2 ms | cannot at 200 Hz, by 3 %; fits 100 Hz with about half the interval to spare |
+| EqF engine, dense `f64` | 26.8 ms | cannot keep up, nor at 50 Hz |
+| EqF engine, factored `f32` | 5.3 ms | cannot at 200 Hz, by 6 %; fits 100 Hz with about half the interval to spare |
 
 So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
 configuration that runs, and for the equivariant filter the factored `f32`
@@ -1589,294 +1600,6 @@ closes.
 
 ### What this does not show
 
-- A rest is required. An alignment started in motion never levels.
-- Position-only alignment on a phone can be slow: one trace needed about 26
-  minutes, waiting for a clean rest followed by enough movement.
-- A gyro-bias prior set too small can yield a wrong gyrocompass heading with a
-  small sigma, because an east bias cannot be told from heading at rest.
-- Every phone trace is the same phone model.
-- No test runs on hardware. The bare-metal figures in
-  [Layer 9](#the-aligner) come from QEMU.
-
-## Layer 14 — arbitrary input through the engines
-
-Every layer above feeds the filters something a sensor could have produced. This
-one feeds them anything. The damage bad input does to a filter is the quiet kind:
-a state that has gone non-finite goes on being reported, and a covariance
-poisoned once stays poisoned for the rest of the run.
-
-```bash
-cargo test -p drifters-cli --test engine_robustness
-```
-
-```bash
-cd fuzz
-cargo +nightly fuzz run engine
-cargo +nightly fuzz run --features f32-covariance engine
-cargo +nightly fuzz run --features reduced-state engine
-```
-
-`crates/drifters-cli/tests/robustness/mod.rs` turns a byte string into a script
-of up to 256 calls: IMU samples, GNSS fixes, every aiding call, pseudoranges and
-measurements of the caller's own. Most arguments land near plausible values,
-because a script of pure noise is refused at the first check and tests nothing
-behind it. Any argument can instead be raw bits, or one of twenty values chosen
-to break arithmetic: NaN, the infinities, signed zero, subnormals, `f64::MAX`, and
-magnitudes like `1e155` and `1e-170`, whose squares overflow and vanish.
-
-Each script runs through seven subjects: the ESKF engine and its rewind layer,
-the equivariant filter's engine with dense `f64`, factored `f32` and factored
-`f64` covariance, and its rewind layer with dense and factored `f32`.
-
-### What is asserted
-
-After **every** call, whatever it was given:
-
-| property | what is checked |
-|---|---|
-| no panic | the call returned |
-| finite output | navigation state, IMU errors, antenna position, standard deviations, covariance and last NIS |
-| non-negative `D` | every covariance factor is finite and every `D` is at least zero; the dense form has no `D`, and round-off may leave a variance a hair below zero, so it is held to being finite |
-| rejection, not absorption | input that is invalid was reported, and the engine is bit for bit what it was |
-
-Finite output is asserted for all input and not only for finite input, because
-the last property makes those the same thing: non-finite input never gets in.
-The harder case is input that is finite and absurd. An engine may absorb that if
-it stays finite, or refuse it. A sample that would overflow the mechanization now
-returns `FilterError::Diverged`, keeps the last good state and covariance, and
-the next sample carries on from them.
-
-"Invalid" is decided by checks written out in the harness, not by calling
-`is_valid`. A property that asked the engine's own predicate could not notice the
-predicate was wrong. It is also one-way: invalid input must be refused, but
-refusing valid input is not a failure here, since a filter may reasonably decline
-a measurement it finds inconsistent. Whether it declines too much is what the
-accuracy layers measure.
-
-### Three ways it runs
-
-The fuzz target searches. CI gives it 60 seconds per configuration, which catches
-a target that stopped compiling and anything shallow. Depth comes from longer
-runs out of band.
-
-`engine_robustness` runs on stable in every `cargo test`, under each feature set
-CI builds, and is where a string the fuzzer finds gets pinned. It replays 24
-seeded scripts and a few degenerate ones, and then
-`every_argument_takes_every_special_value` puts each of the twenty values into
-each argument of each operation, alone and as a run of three. That last test
-exists because the seeded scripts were not enough: see below.
-
-### What it found
-
-Building this and running it turned up these, all now fixed and each pinned by a
-unit test beside the code:
-
-- **A sigma could be positive, finite and still useless.** `1e-170` squares to
-  zero, an infinitely confident measurement, and `1e155` squares to infinity.
-  The checks asked only for a positive finite sigma. `usable_sigma` now asks about
-  the variance as well.
-- **A finite IMU sample could put NaN in the state.** Large enough rates overflow
-  the mechanization, and the result was kept.
-- **A failed covariance update left a mixture.** The `U D Uᵀ` time update wrote
-  its result as it went, so a bad pivot partway through left half of one
-  covariance and half of another, which looked like a whole one. It now commits
-  only after every pivot has succeeded.
-- **Finite factors could multiply out to an infinite covariance.** Covariances are
-  now held to `MAX_VARIANCE`, and the equivariant filter's observer to a similar
-  limit.
-- **A NaN gate passed everything,** because `statistic > NaN` is false. A NaN
-  statistic passed any gate the same way.
-- **`single_differences` read the wrong observation.** After skipping an unusable
-  pseudorange it used its own count of usable lines to index the original list, so
-  every later satellite took the constellation, elevation and noise of a neighbour.
-  This one did not need hostile input: one bad observation in a real epoch was
-  enough.
-- **Rewind layers recorded aiding that could never apply,** spending a place in the
-  event ring on it.
-
-### Whether it can detect anything
-
-A property nobody has seen fail is not yet evidence. Each check below was disabled
-in a copy of the tree, and `engine_robustness` run against the result, without the
-fuzzer's help:
-
-| disabled | noticed by |
-|---|---|
-| `D` written negated, ESKF and factored EqF | `engine_robustness` |
-| the IMU check, in each engine and in the rewind layer | `engine_robustness` |
-| the GNSS check, in each engine and in the rewind layer | `engine_robustness` |
-| the argument check of each of the six ESKF aids, and of the EqF's magnetometer | `engine_robustness` |
-| the check before a rewind layer records an aid, both layers | `engine_robustness` |
-| refusing a step that left a non-finite state, both engines | `engine_robustness` |
-| `usable_sigma` asking about the sigma and not its square | `engine_robustness` |
-| refusing a non-finite statistic, ESKF | `engine_robustness` |
-| refusing a non-finite statistic, EqF | a unit test only: with GCU on, as here, the inflated noise fails its factorisation anyway |
-| a NaN gate passing nothing, ESKF | a unit test only: the engine refuses such a measurement before it gets that far |
-| a NaN gate passing nothing, EqF | a unit test only: its gates come from the options, which scripts do not vary |
-| `MAX_VARIANCE` on the time update and on a new covariance, ESKF | unit tests only: scripts start from the default options and never drive a variance that far |
-
-Twenty of the twenty-five are caught here. The other five guard things a script
-cannot reach, and each has a unit test that fails without it.
-
-The magnetometer check is why the sweep exists. The seeded scripts alone did not
-notice it was gone. The sweep does, on its first magnetometer call with a NaN in it.
-
-### How far it has been run
-
-Ten minutes per configuration, six workers each, on the commit that added this
-layer, continuing from the corpus of earlier and shorter runs:
-
-| configuration | executions | coverage points | corpus entries | crashes, timeouts, out-of-memory |
-|---|---|---|---|---|
-| default | 1 767 940 | 3 931 | 1 187 | 0 |
-| `f32-covariance` | 1 395 088 | 4 160 | 1 440 | 0 |
-| `reduced-state` | 1 491 774 | 4 007 | 1 495 | 0 |
-
-The corpus is not committed, so CI's minute per configuration starts from nothing
-and reaches less than this.
-
-### What this does not show
-
-- That accepted input was handled *well*. Finite is not right; the accuracy layers
-  are for that.
-- Anything about the target. The fuzzer runs on the host, on x86-64.
-- That no input can panic. These runs found none, which is weaker than
-  [Layer 10](#layer-10--the-data-path-links-no-panic-machinery), and Layer 10 is
-  what caught an indexing slip in the new limit checks that no script could have
-  reached.
-- The aligner, the smoother or the CLI's parsers. None of them is driven here.
-- Long-horizon behaviour. A script is at most 256 calls, enough to wrap the rewind
-  rings and reach the rejection limit, and nowhere near a drive.
-
-## Layer 15 — a sensor that does not point along its vehicle
-
-A non-holonomic constraint and a wheel speed describe the vehicle, and the filter's
-body frame is the sensor's. `crates/drifters-cli/tests/vehicle_mounting.rs` checks
-the rotation between them on a simulated automotive MEMS unit: full strapdown truth
-on a rotating Earth, turned 3°, pitched −2° and rolled 1.5° from a vehicle whose
-velocity lies along its own forward axis.
-
-Each of twelve runs has ten minutes of 1 Hz GNSS position and velocity while
-`MountingEstimator` watches, then a 60 s outage flown four times from the same state
-on the same samples, with non-holonomic and wheel-speed updates at 10 Hz:
-
-| the aids are told | horizontal error at the end, RMS |
-|---|---|
-| nothing (no aids) | 8.9 m |
-| the sensor is aligned | 4.6 m |
-| the estimated mounting | **1.1 m** |
-| the true mounting | 1.0 m |
-
-The forward axis comes out 0.076° RMS from the truth, which is 0.39 of the sigma
-reported for it. That sigma is deliberately pessimistic: it counts the filter's
-attitude sigma as an error shared by every sample, and the heading error in fact
-changes over ten minutes.
-
-Assumed aligned, the non-holonomic updates read about 0.8 m/s of slip against a
-0.1 m/s sigma and the gate refuses them, under 5 % getting through in every run, so
-that run has only its wheel speed. With the estimated mounting over 95 % are accepted.
-
-Two more tests pin what the documentation claims. A unit mounted sideways is found
-to better than 0.3°. And the estimator must not run alongside the constraints: with
-a non-holonomic update running against an aligned mounting, a 0.5° mount comes out
-0.491° wrong, against 0.011° with the aid off. The filter has been told the answer,
-and the estimator reads it back.
-
-### What this does not show
-
-- A real vehicle. The simulation has no tyre slip, no suspension movement and no
-  lever arm between the sensor and the rear axle, each of which puts real side
-  velocity into a turn or a bump. The estimator's turn-rate gate is there for them,
-  and has not been tested against them.
-- The equivariant filter. Its aids do not include these two, so it has no use for
-  the setting.
-
-## Layer 16 — a distorted magnetometer in flight
-
-The scalar heading update assumes small tilt and leaves the caller to get a heading
-out of the sensor. `crates/drifters-cli/tests/magnetometer.rs` tests the replacement
-in a simulated flight: full strapdown truth on a rotating Earth, 50 m/s, a full
-circle every two minutes banked up to 37°, and a consumer MEMS unit whose gyro bias
-wanders with a standard deviation of 150°/h, as the filter models it. The magnetometer
-reads at 10 Hz with 0.5 % noise, through a hard iron larger than the field and a soft
-iron that scales its axes by up to a quarter.
-
-Each of twelve runs has four minutes of 1 Hz GNSS, then a five-minute outage flown
-from the same state on the same samples. The errors below are RMS over the runs, at
-the end of the outage, with a claimed direction noise of 0.02 rad unless stated.
-
-| during the outage | heading | tilt | horizontal |
-|---|---|---|---|
-| no magnetometer | 4.23° | 3.11° | 5 992 m |
-| raw readings | 7.34° | 5.50° | 11 510 m |
-| scalar heading from the calibrated field | 51.1° | 62.5° | diverges in 3 runs of 12 |
-| the same, claiming five times the noise | 4.08° | 3.22° | 6 339 m |
-| **calibrated field, three axes** | **0.80°** | **0.47°** | **1 189 m** |
-
-The heading NEES of the three-axis run is 0.72 against an expected 1. The gate turns
-away 95.7 % of the raw readings, and the 4.3 % it lets through still leave that run
-worse than having no magnetometer.
-
-The scalar heading fails because it is worked out with the filter's own roll and
-pitch. Its error then contains their error, multiplied by the tangent of the dip, and
-the update has no way to know that. Claiming more noise stops the divergence and
-leaves it no better than no magnetometer at all.
-
-### A sensor turned in its mount
-
-An ellipsoid fit cannot see rotation. With the magnetometer turned about three degrees
-from the IMU:
-
-| calibration | heading | tilt | horizontal |
-|---|---|---|---|
-| none used (no magnetometer) | 4.23° | 3.11° | 5 992 m |
-| ellipsoid only | 35.7° | 21.1° | 50 457 m |
-| `AidedMagFit`, from the GNSS phase | **1.90°** | **1.06°** | **3 020 m** |
-
-The error is not one the filter can absorb. A fixed rotation in the body needs a
-different attitude at every heading, so as the vehicle circles the update keeps
-pushing, and every reading passes the gate. The fit in flight sees only two axes of
-the field well, and completes the third from them. Its heading NEES is 4.2, because
-0.02 rad does not cover what the fit leaves behind. A real system should claim more.
-
-### A disturbance the gate cannot see
-
-Something in the aircraft switches on 30 s into the outage: a body-fixed offset that
-grows over a minute to 11 % of the field, enough to turn its direction by up to 6.5°,
-and stays.
-
-| during the outage | heading | tilt | horizontal | readings used |
-|---|---|---|---|---|
-| no magnetometer | 4.23° | 3.11° | 5 992 m | |
-| every reading | 11.8° | 7.17° | 18 846 m | 100 % |
-| only those within 3 % of the calibrated strength | 6.81° | 4.66° | 14 366 m | 17.9 % |
-
-All of it passes the gate, because it arrives slowly enough for the filter to follow.
-A magnetometer that is wrong in this way is worse than none, and no update can tell.
-`MagFit::is_plausible` helps by refusing most of the readings, and does not cure it:
-what gets through is the part of the disturbance that does not change the strength.
-
-### Holding tilt back did not help
-
-The natural defence is to let the field correct heading only. Three forms were flown
-and none of them is in the tree: the whole direction with the tilt states held, one
-row along the direction a heading error moves the field with tilt held, and that row
-with tilt moved into the noise. The first two, against the plain update:
-
-| | clean: heading, tilt, horizontal | disturbed: heading, tilt, horizontal |
-|---|---|---|
-| plain update | 0.80°, 0.47°, 1 189 m | 11.8°, 7.17°, 18 846 m |
-| tilt states held | 1.82°, 1.20°, 2 696 m | 9.49°, 13.3°, 25 759 m |
-| heading row, tilt held | 1.67°, 1.72°, 4 170 m | 9.24°, 17.0°, 35 003 m |
-
-The third was inconsistent, with a heading NEES of 428 on a clean flight. Holding
-tilt costs accuracy in clean flight and does not protect tilt under a disturbance.
-The states are held, but the part of the residual they would have explained reaches
-the gyro biases through its correlation with tilt, and a held state keeps its
-covariance, so that path never closes. The update therefore corrects every state.
-
-### What this does not show
-
 - A real magnetometer, or a real vehicle's field. The simulated soft iron does not
   change with what the vehicle is doing, and the reference field is known exactly,
   where a real one comes from a model that can be a degree or more out.
@@ -1886,3 +1609,88 @@ covariance, so that path never closes. The update therefore corrects every state
 - That the claimed noise here suits a real installation. It has to cover whatever the
   calibration leaves behind, as the fit in flight's NEES of 4.2 shows, and the reference
   field's own error.
+
+## Layer 17 — the Earth inside the group
+
+[adr/0008](adr/0008-earth-model-by-sensor-grade.md) says a gyroscope that resolves the
+Earth's rate far past its own bias needs that rotation in the filter's group, because
+correcting the input throws away the heading the rate reveals.
+`EqfOptions::earth_in_group` is that model, derived in
+[eqf.md](eqf.md#earth-rotation-in-the-group). It is checked four ways.
+
+```bash
+cargo test --release -p drifters-cli --test earth_in_group -- --nocapture
+```
+
+**The linearisation.** `A_t⁰` is compared with a numerical Jacobian of the error
+dynamics in a turning frame. This found a real mistake in the first derivation: the
+block from attitude to the magnetometer's rotation carried the Earth's rate, and it
+must not.
+
+**Consistency, in a world turning fast enough to matter.** The NEES harness steps an
+exact truth through a world spinning at about 570 times the Earth's rate, with 20 runs
+of 120 s and an expected value of 21:
+
+| world | filter is told | NEES |
+|---|---|---|
+| still | nothing | 20.60 |
+| turning | how it turns | 20.42 |
+| turning | nothing | 657 130 |
+
+Told, each of the seven blocks reads between 2.59 and 3.28 against an expected 3. The
+factored `f32` form is held to the same band.
+
+**Finding north.** A still navigation-grade unit, 0.003 °/h, at 30° latitude, starting
+3° off in heading and told only that it is here and not moving. RMS heading error over
+12 seeds, and that error over the sigma the filter claims:
+
+| after | EqF, Earth in the group | EqF, input compensated | ESKF |
+|---|---|---|---|
+| 60 s | 0.270° (0.88) | 3.893° (1.52) | 0.300° (1.13) |
+| 120 s | 0.032° (0.60) | 4.635° (1.25) | 0.035° (0.67) |
+| 300 s | 0.031° (1.03) | 3.925° (1.78) | 0.031° (1.06) |
+| 600 s | 0.025° (0.98) | 3.999° (2.19) | 0.025° (1.00) |
+| 900 s | **0.026° (1.03)** | 4.029° (2.54) | 0.025° (1.10) |
+
+The gyro-bias prior limits this to 0.022°, since an east bias and a heading error are
+the same signal to a unit at rest. The factored `f32` form matches the dense one to
+four decimals, and a unit 190 m from its anchor reads the same 0.026°. The compensated
+column is the control: it never finds north, and grows more confident while it does
+not.
+
+**Real data.** KF-GINS, a tactical-grade IMU over 1 483 m. Its grade selects input
+compensation, so this asks only whether the model does harm where it is not needed:
+
+| Earth model | horizontal RMS | NIS |
+|---|---|---|
+| in the group | 0.0353 m | 1.76 |
+| input compensated | 0.0350 m | 1.55 |
+| flat | 0.943 m | 6 718 |
+
+### Whether it can detect anything
+
+- A filter not told how the world turns reads over a thousand, and the test requires
+  it.
+- With the velocity fix left over the ground, instead of being moved into the group's
+  velocity, the engine's test sees a NIS of 21.9 against a limit of 0.01. Its first
+  version passed that mutation: the velocity gate turned the wrong fix away, and the
+  NIS it read was the position fix's. It now runs with the gate open.
+- The heading tests do not catch that mutation. At 190 m the wrong velocity is about
+  0.014 m/s, and heading came out at 0.0256° with it against 0.0255° without. They
+  say north is found, and the engine's test says the fix is right.
+
+### What this does not show
+
+- A real navigation-grade IMU. The north-finding runs are simulated, and KF-GINS cannot
+  show the gain, because its gyroscope's own bias limits what it could find.
+- A long journey. The frame is the anchor's tangent plane, with one Earth rate and one
+  gravity vector. Gravity's change with position, about `g/R` per metre, is left out
+  because modelling it would give up group-affineness. At 1 km that is 150 mGal, thirty
+  times this unit's accelerometer stability. The model is for a unit at or near its
+  anchor.
+- That limit in simulation. The run away from the anchor has the anchor's gravity and
+  axes in its truth, so it tests the velocity bookkeeping and not the tangent plane.
+- Deflection of the vertical, which neither filter models.
+- Cross-core agreement in this mode. On emulated Cortex-M4 and M7 it is measured for
+  stack and checked for health and panics, but the agreement firmware runs the filter
+  with input compensation.

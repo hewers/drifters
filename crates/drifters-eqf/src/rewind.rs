@@ -76,8 +76,8 @@
 //!
 //! Three engines, the two rings and 72 bytes of bookkeeping. For
 //! `EqfRewindEngine<120, 32>`, the size the ESKF's is quoted at — a 200 Hz
-//! IMU and 300 ms of latency — that is 3 × 4 680 + 120 × 64 + 32 × 120 + 72 =
-//! **25 632 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
+//! IMU and 300 ms of latency — that is 3 × 4 704 + 120 × 64 + 32 × 120 + 72 =
+//! **25 704 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
 //! The engines are the larger part, for the reason [`EqfEngine`] is larger
 //! than the ESKF's: a dense covariance.
 
@@ -720,7 +720,7 @@ mod tests {
                 + 72,
             "three engines, the two rings, and 72 bytes of bookkeeping"
         );
-        assert_eq!(size_of::<Representative>(), 25_632);
+        assert_eq!(size_of::<Representative>(), 25_704);
     }
 
     /// The factored, single-precision engine through the same layer. The
@@ -763,9 +763,9 @@ mod tests {
         // 231 factors in f32 where the dense form holds 441 in f64: 924
         // bytes against 3 528, three times over in the wrapper.
         assert_eq!(size_of::<Ud<f32>>(), 924);
-        assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_232);
-        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_080);
-        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_832);
+        assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_256);
+        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_104);
+        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_904);
     }
 
     #[test]

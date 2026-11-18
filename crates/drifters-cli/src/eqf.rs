@@ -134,7 +134,7 @@ impl WarmStart {
 ///
 /// [adr/0008](https://github.com/hewers/drifters/blob/main/docs/adr/0008-earth-model-by-sensor-grade.md)
 /// decides it by the gyroscope's grade, so that is the default: a replay of a
-/// dataset gets the model its IMU calls for without being told. The other two
+/// dataset gets the model its IMU calls for without being told. The others
 /// are for asking what the choice is worth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EarthModel {
@@ -145,39 +145,69 @@ pub enum EarthModel {
     Flat,
     /// Input-side Earth-rate and Coriolis compensation. `--earth-rate`.
     Compensated,
+    /// Earth rotation inside the filter's group. `--earth-in-group`.
+    InGroup,
+}
+
+/// What the EqF does about the Earth, once [`EarthModel`] has settled it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EarthTreatment {
+    /// Nothing: flat and non-rotating, as the paper has it.
+    #[default]
+    Flat,
+    /// The input is corrected before the filter sees it.
+    Compensated,
+    /// The filter's frame turns with the Earth.
+    InGroup,
+}
+
+impl EarthTreatment {
+    /// Set `options` to it.
+    pub fn apply(self, options: EqfOptions) -> EqfOptions {
+        options
+            .with_earth_compensation(self == Self::Compensated)
+            .with_earth_in_group(self == Self::InGroup)
+    }
+
+    /// What a set of options asks for.
+    pub fn of(options: &EqfOptions) -> Self {
+        if options.earth_in_group {
+            Self::InGroup
+        } else if options.compensate_earth {
+            Self::Compensated
+        } else {
+            Self::Flat
+        }
+    }
 }
 
 impl EarthModel {
-    /// From the two command-line switches, which are exclusive.
-    pub fn from_switches(earth_rate: bool, flat_earth: bool) -> Result<Self, String> {
-        match (earth_rate, flat_earth) {
-            (true, true) => Err("--earth-rate and --flat-earth contradict each other".into()),
-            (true, false) => Ok(Self::Compensated),
-            (false, true) => Ok(Self::Flat),
-            (false, false) => Ok(Self::ByGrade),
+    /// From the three command-line switches, of which at most one may be set.
+    pub fn from_switches(
+        earth_rate: bool,
+        flat_earth: bool,
+        in_group: bool,
+    ) -> Result<Self, String> {
+        match (earth_rate, flat_earth, in_group) {
+            (false, false, false) => Ok(Self::ByGrade),
+            (true, false, false) => Ok(Self::Compensated),
+            (false, true, false) => Ok(Self::Flat),
+            (false, false, true) => Ok(Self::InGroup),
+            _ => Err("--earth-rate, --flat-earth and --earth-in-group exclude each other".into()),
         }
     }
 
-    /// Whether to compensate the input, for a gyroscope of this bias
-    /// stability, rad/s.
-    ///
-    /// By grade, a gyroscope good enough to find north from Earth rate has no
-    /// right answer here, and is refused rather than given one.
-    pub fn compensate(self, gyro_bias_stability: f64) -> Result<bool, String> {
+    /// What to do for a gyroscope of this bias stability, rad/s.
+    pub fn resolve(self, gyro_bias_stability: f64) -> EarthTreatment {
         match self {
-            Self::Flat => Ok(false),
-            Self::Compensated => Ok(true),
-            Self::ByGrade => flat_earth_verdict(gyro_bias_stability)
-                .compensates_input()
-                .ok_or_else(|| {
-                    format!(
-                        "this gyroscope sees Earth rate at {:.0}x its bias stability: \
-                         navigation grade, which needs Earth rotation inside the \
-                         symmetry group (adr/0008). Pass --earth-rate or --flat-earth \
-                         to run the EqF anyway.",
-                        earth_rate_ratio(gyro_bias_stability)
-                    )
-                }),
+            Self::Flat => EarthTreatment::Flat,
+            Self::Compensated => EarthTreatment::Compensated,
+            Self::InGroup => EarthTreatment::InGroup,
+            Self::ByGrade => match flat_earth_verdict(gyro_bias_stability) {
+                FlatEarthVerdict::Negligible => EarthTreatment::Flat,
+                FlatEarthVerdict::CompensateInput => EarthTreatment::Compensated,
+                FlatEarthVerdict::ModelInGroup => EarthTreatment::InGroup,
+            },
         }
     }
 }
@@ -198,13 +228,13 @@ impl EarthModel {
 ///   the bias prior. This IMU's vertical one is about −260 ppm, which at 1 g
 ///   is a 250 mGal bias against a configured bias prior of 15 mGal.
 ///
-/// `compensate` turns on input-side Earth-rate compensation, which on this
-/// tactical-grade IMU is worth a factor of twenty-seven; `alpha` is the GCU
-/// rate, `None` for off.
+/// `earth` is what to do about the Earth's rotation: on this tactical-grade
+/// IMU, compensating the input is worth a factor of twenty-seven over leaving
+/// it out. `alpha` is the GCU rate, `None` for off.
 pub fn kfgins_options(
     config: &kfgins::Config,
     gnss: &[GnssFix],
-    compensate: bool,
+    earth: EarthTreatment,
     alpha: Option<f64>,
 ) -> EqfOptions {
     let o = &config.options;
@@ -218,10 +248,11 @@ pub fn kfgins_options(
     // so the filter never becomes certain enough to stop listening.
     process_noise.lever = Vec3::splat(1e-10);
     // `EqfOptions` is `#[non_exhaustive]` (adr/0010): defaults, then fields.
-    let mut options = EqfOptions::default()
-        .with_anchor(anchor)
-        .with_lever_arm(Vec3::ZERO, Vec3::splat(1.0))
-        .with_earth_compensation(compensate);
+    let mut options = earth.apply(
+        EqfOptions::default()
+            .with_anchor(anchor)
+            .with_lever_arm(Vec3::ZERO, Vec3::splat(1.0)),
+    );
     options.initial_state = o.initial_state;
     options.initial_gyro_bias = o.initial_imu_error.gyro_bias;
     options.initial_accel_bias = o.initial_imu_error.accel_bias;
@@ -246,8 +277,8 @@ pub fn kfgins_options(
 /// speaking of, so converging to near zero is the correct answer rather than a
 /// null result.
 ///
-/// `compensate` is decided by [`EarthModel`] like every replay's; by grade it
-/// is off. A phone gyro drifts at about 20 °/h, so Earth rate is 0.75× its
+/// `earth` is decided by [`EarthModel`] like every replay's; by grade it is
+/// flat. A phone gyro drifts at about 20 °/h, so Earth rate is 0.75× its
 /// noise floor: the paper's flat-Earth assumption is the right one for this
 /// hardware, which keeps this a test of the filter as published.
 ///
@@ -258,15 +289,16 @@ pub fn gsdc_options(
     attitude: Euler,
     noise: &ImuNoise,
     accel_scale_std: Vec3,
-    compensate: bool,
+    earth: EarthTreatment,
     alpha: Option<f64>,
 ) -> EqfOptions {
     let mut process_noise = ProcessNoise::from_imu_noise(noise);
     process_noise.lever = Vec3::splat(1e-12);
-    let mut options = EqfOptions::default()
-        .with_initial_state(origin, drifters_core::frames::Ned::ZERO, attitude)
-        .with_lever_arm(Vec3::ZERO, Vec3::splat(0.1))
-        .with_earth_compensation(compensate);
+    let mut options = earth.apply(
+        EqfOptions::default()
+            .with_initial_state(origin, drifters_core::frames::Ned::ZERO, attitude)
+            .with_lever_arm(Vec3::ZERO, Vec3::splat(0.1)),
+    );
     options.initial_position_std = Vec3::splat(5.0);
     options.initial_velocity_std = Vec3::splat(2.0);
     // 5.1°, 5.1° and 31° — the variances the replay used before it moved
@@ -319,8 +351,8 @@ pub struct ModelError {
     pub max_range: f64,
     /// Tangent-plane error at that range, metres.
     pub curvature_error: f64,
-    /// Whether Earth-rate compensation was applied to the gyro input.
-    pub earth_rate_compensated: bool,
+    /// What was done about the Earth's rotation.
+    pub earth: EarthTreatment,
     /// Earth rate divided by this IMU's gyroscope bias stability.
     pub earth_rate_ratio: f64,
     /// Which Earth model that ratio calls for, per adr/0008.
@@ -343,7 +375,7 @@ impl ModelError {
         Self {
             max_range: report.max_range,
             curvature_error: anchor.curvature_error(report.max_range),
-            earth_rate_compensated: options.compensate_earth,
+            earth: EarthTreatment::of(options),
             earth_rate_ratio: earth_rate_ratio(bias_stability),
             verdict: flat_earth_verdict(bias_stability),
             gyrocompass: gyrocompass_accuracy(bias_stability, anchor.origin.lat),
@@ -354,11 +386,12 @@ impl ModelError {
     /// Print it after the replay's own summary.
     pub fn print(&self, report: &Report) {
         println!(
-            "\nEarth-rate input compensation: {}",
-            if self.earth_rate_compensated {
-                "on (a deviation from the paper)"
-            } else {
-                "off (as the paper specifies)"
+            "\nEarth rotation: {}",
+            match self.earth {
+                EarthTreatment::Flat => "not modelled (as the paper specifies)",
+                EarthTreatment::Compensated =>
+                    "compensated at the input (a deviation from the paper)",
+                EarthTreatment::InGroup => "inside the symmetry group (an extension of the paper)",
             }
         );
 
@@ -389,21 +422,85 @@ impl ModelError {
                 FlatEarthVerdict::Negligible => "flat Earth is defensible, model nothing",
                 FlatEarthVerdict::CompensateInput => "compensate the input (adr/0008)",
                 FlatEarthVerdict::ModelInGroup =>
-                    "needs Earth rotation in the group; input compensation is not enough",
+                    "keep Earth rotation in the group; input compensation is not enough",
             }
         );
-        if !self.earth_rate_compensated && self.verdict != FlatEarthVerdict::Negligible {
+        if self.earth == EarthTreatment::Flat && self.verdict != FlatEarthVerdict::Negligible {
             println!(
-                "  ... and it is not compensated here: expect an error the covariance\n\
+                "  ... and it is not modelled here: expect an error the covariance\n\
                  \x20 knows nothing of, and divergence if GCU is on (alpha > 0)."
             );
         }
-        if self.verdict == FlatEarthVerdict::CompensateInput && self.earth_rate_compensated {
+        if self.verdict != FlatEarthVerdict::Negligible && self.earth == EarthTreatment::Compensated
+        {
             println!(
                 "  cost: heading is no longer observable from Earth rate, forgoing\n\
                  \x20 {:.1} arcmin of static gyrocompassing.",
                 self.gyrocompass.to_degrees() * 60.0
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use drifters_core::math::DEG_PER_HOUR_TO_RAD_PER_SEC;
+
+    #[test]
+    fn the_earth_switches_exclude_each_other() {
+        let pick = EarthModel::from_switches;
+        assert_eq!(pick(false, false, false), Ok(EarthModel::ByGrade));
+        assert_eq!(pick(true, false, false), Ok(EarthModel::Compensated));
+        assert_eq!(pick(false, true, false), Ok(EarthModel::Flat));
+        assert_eq!(pick(false, false, true), Ok(EarthModel::InGroup));
+        assert!(pick(true, true, false).is_err());
+        assert!(pick(true, false, true).is_err());
+        assert!(pick(false, true, true).is_err());
+        assert!(pick(true, true, true).is_err());
+    }
+
+    #[test]
+    fn each_grade_of_gyroscope_gets_the_model_its_band_calls_for() {
+        let by_grade = |deg_per_hour: f64| {
+            EarthModel::ByGrade.resolve(deg_per_hour * DEG_PER_HOUR_TO_RAD_PER_SEC)
+        };
+        assert_eq!(by_grade(100.0), EarthTreatment::Flat);
+        assert_eq!(by_grade(0.027), EarthTreatment::Compensated);
+        assert_eq!(by_grade(0.003), EarthTreatment::InGroup);
+    }
+
+    #[test]
+    fn a_named_model_is_used_whatever_the_gyroscope() {
+        let navigation_grade = 0.003 * DEG_PER_HOUR_TO_RAD_PER_SEC;
+        assert_eq!(
+            EarthModel::Flat.resolve(navigation_grade),
+            EarthTreatment::Flat
+        );
+        assert_eq!(
+            EarthModel::Compensated.resolve(navigation_grade),
+            EarthTreatment::Compensated
+        );
+        assert_eq!(EarthModel::InGroup.resolve(1.0), EarthTreatment::InGroup);
+    }
+
+    #[test]
+    fn a_treatment_survives_being_set_on_options() {
+        for treatment in [
+            EarthTreatment::Flat,
+            EarthTreatment::Compensated,
+            EarthTreatment::InGroup,
+        ] {
+            // Over options already set to each of the others.
+            for before in [
+                EarthTreatment::Flat,
+                EarthTreatment::Compensated,
+                EarthTreatment::InGroup,
+            ] {
+                let options = treatment.apply(before.apply(EqfOptions::default()));
+                assert_eq!(EarthTreatment::of(&options), treatment);
+                assert_eq!(options.validate(), None);
+            }
         }
     }
 }

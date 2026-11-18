@@ -64,6 +64,14 @@ twenty-seven times worse. The replay picks that for this IMU by itself, from
 the gyro's grade, as [adr/0008](docs/adr/0008-earth-model-by-sensor-grade.md)
 decides.
 
+**Navigation grade.** A gyro this good can find north from the Earth's rate, and
+compensating the input throws that away. `EqfOptions::earth_in_group` puts the
+rotation in the filter's group instead. In simulation, a still 0.003 °/h unit
+starting 3° off finds north to **0.026°** in 15 minutes, level with the ESKF's
+0.025°, where the compensated filter stays about 4° off. The model holds at or near
+its anchor. For a unit that travels, use the ESKF. No navigation-grade IMU has been
+run through it yet.
+
 This section has said twice that the EqF diverges on this dataset, first
 blaming the Earth and then GCU. With compensation it was neither. The EqF has
 no scale-factor states, so the −260 ppm vertical accelerometer scale factor
@@ -245,7 +253,7 @@ Cortex-M4, because that core's FPU is single precision and the filter's `f64`
 runs in software: at least 22 ms at 168 MHz, so it cannot follow a 100 Hz IMU
 there. `--features f32-covariance` removes 87 % of that, to 486 thousand, with
 no measurable change in any result, and is the configuration to use on that
-part. The equivariant filter is 4.5 million dense, and 0.87 million with its
+part. The equivariant filter is 4.5 million dense, and 0.89 million with its
 covariance factored and held in `f32`, again with no measurable change.
 
 A Cortex-M7 with a double-precision FPU is a different problem, once built with
@@ -453,7 +461,7 @@ The docs carry the reasoning, including the parts that did not work.
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
 - [frames.md](docs/frames.md) — coordinate frames and conventions
-- [testing.md](docs/testing.md) — sixteen layers, and what each one can prove
+- [testing.md](docs/testing.md) — seventeen layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it

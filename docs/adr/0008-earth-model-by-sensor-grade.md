@@ -1,6 +1,6 @@
 # ADR 0008 — Earth modelling is a function of gyroscope grade
 
-**Status:** accepted
+**Status:** accepted; the top band revised 2026-11-18
 **Date:** 2026-08-11
 
 ## Context
@@ -78,14 +78,39 @@ It is a deviation from the published filter, so the library leaves
 `EqfOptions::compensate_earth` off by default, as the paper does, and
 `FlatEarthVerdict::compensates_input` gives the setting this ADR calls for. The
 CLI applies it: a replay decides by the gyroscope's bias stability from the
-dataset's own IMU model, and `--earth-rate` or `--flat-earth` overrides that.
-In the top band it refuses to choose and asks for one of the two.
+dataset's own IMU model, and `--earth-rate`, `--flat-earth` or
+`--earth-in-group` overrides that.
 
 **Ratio above about 1000 — navigation, strategic and survey, below 0.01 °/h.**
-Not supported, and input-side compensation must not be extended to cover it. The
-reason is in the next section. Supporting this band requires a symmetry group
-that accommodates a rotating frame natively, which is a re-derivation rather
-than an extension, and is out of scope for M10.
+Earth rotation inside the filter's group, `EqfOptions::earth_in_group`. Input-side
+compensation must not be extended to cover this band, for the reason in the next
+section. The CLI selects the model here by itself. The library leaves it off, like
+compensation, and `FlatEarthVerdict::compensates_input` returns `None` because
+neither value of that setting is right.
+
+**Revised 2026-11-18.** This band was unsupported until then, on the expectation
+that a rotating frame needed a new symmetry group. It does not. Written with the
+velocity `v' = v + ω × p`, the dynamics in an Earth-fixed tangent frame are
+
+```text
+Ṙ  = R(ω_m − b_ω)^ − ω^R
+ṗ  = v' − ω × p
+v̇' = R(a_m − b_a) + g − ω × v'
+```
+
+which is `Ṫ = T(W − B + N) + (G − N)T` with `G = (−ω, g, 0)^`, the paper's form with
+a rotation added to `G`. The system stays group-affine on the same group, and the
+Coriolis and centrifugal terms are both carried exactly.
+[eqf.md](../eqf.md#earth-rotation-in-the-group) has the lift, the linearisation and
+what changes in the measurements.
+
+In simulation, a still 0.003 °/h unit starting 3° off in heading finds north to
+0.026° RMS in 900 s with a heading error 1.03 times the sigma it claims, level with
+the ESKF's 0.025°. Compensating the input leaves it about 4° off. See
+[Layer 17](../testing.md#layer-17--the-earth-inside-the-group).
+
+**The model is for a unit at or near its anchor,** and the ESKF remains the choice
+for a navigation-grade unit that travels: see the last alternative below.
 
 For gravity, in every band: **normal gravity, held piecewise constant and
 re-evaluated outside the filter.** `Anchor::with_gravity_at` performs the
@@ -147,14 +172,15 @@ Neither the ESKF nor the EqF models it. Above tactical grade, better
 accelerometers will not improve either filter until a deflection model exists.
 This applies to the ESKF as much as to the EqF and is not an EqF limitation.
 
-**The EqF's two Earth terms have different difficulty.** Earth rotation is
-obstructed by frame choice, not by physics: in an inertial frame there is no
-Coriolis term and the paper's group-affine structure is recovered exactly. It is
-the rotating frame that does not fit the `SE₂(3)` embedding, because
-`Ṙ ⊃ −ω_ie^R` and `v̇ ⊃ −2ω_ie^v` draw on the same block of the algebra
-element. Position-dependent gravity is harder: it makes `(G − N)T` depend on the
-state, which forfeits group-affineness in every frame, and group-affineness is
-the property the EqF exists to exploit.
+**The EqF's two Earth terms have different difficulty.** Earth rotation was
+obstructed only by the choice of velocity. Over the ground, `Ṙ ⊃ −ω_ie^R` and
+`v̇ ⊃ −2ω_ie^v` draw on the same block of the algebra element and do not fit it.
+With `v' = v + ω × p` the velocity term becomes `−ω^v'`, and they do. Position-dependent
+gravity is harder: it makes `(G − N)T` depend on the state, which forfeits
+group-affineness in every frame, and group-affineness is the property the EqF exists
+to exploit. It is left out, which is what bounds the in-group model. Gravity changes by
+about `g/R` per metre, so 150 mGal at 1 km, thirty times the accelerometer stability
+of the unit simulated above. The tangent plane's curvature, `L²/2R`, adds to it.
 
 **Piecewise-constant gravity keeps the structure.** Holding `g` fixed within a
 segment preserves exactness within that segment, and the error is bounded and
@@ -169,21 +195,24 @@ navigation grade is structural rather than numerical: the correction occupies
 the channel the estimator needs. Additional terms improve the accuracy of the
 subtraction without removing the circularity.
 
-**Add `ω_ie` to the EqF's lift and linearisation directly.** This is the
-re-derivation, not an increment. The lift (6)–(9) and the linearised `A_t⁰` are
-derived for the flat-Earth system; adding Earth terms to one and not the others
-produces a filter that compiles, runs, and is wrong in a way the covariance does
-not report. If it is done, it is done from the group up.
+**Add `ω_ie` to the EqF's lift and linearisation directly.** Rejected as first
+stated, and done properly in the 2026-11-18 revision. The lift (6)–(9) and the
+linearised `A_t⁰` are derived for the flat-Earth system, and adding Earth terms to
+one and not the others produces a filter that compiles, runs, and is wrong in a way
+the covariance does not report. So the system was rewritten first, with the velocity
+above, and the lift, `A_t⁰`, the output equations and the map to physical errors were
+all derived from it. A numerical Jacobian and a NEES run in a turning world check them.
 
 **Adopt a two-frame group.** Barrau and Bonnabel's work on the geometry of
 navigation problems addresses rotating-frame navigation with an extended group
-construction, which matches the shape of this requirement. Not adopted: it has
-not been read closely enough to commit to, and this ADR does not assert that it
-solves the problem. It is the starting point if the navigation-grade band is
-taken on.
+construction, which matches the shape of this requirement. Not adopted: the change
+of velocity above reaches the same structure for a fixed tangent frame without a new
+group. It has still not been read closely enough to say whether it would lift the
+limit on distance from the anchor, and that is where to look if this is taken further.
 
-**Use the ESKF above tactical grade and stop there.** The current answer, and
-defensible as a permanent one. The ESKF models Earth rotation correctly and
-carries the gyrocompassing channel. The EqF's advantages, a fixed linearisation
-origin and self-calibrating extrinsics, do not outweigh losing true-north
-determination on hardware capable of it.
+**Use the ESKF above tactical grade and stop there.** The answer until 2026-11-18,
+and still the right one for a unit that travels. The ESKF models Earth rotation,
+transport rate and normal gravity along the whole trajectory. The EqF now keeps the
+gyrocompassing channel, so a unit at or near its anchor can choose either, and the
+EqF's advantages, a fixed linearisation origin and self-calibrating extrinsics, are
+no longer bought by losing true north.

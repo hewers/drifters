@@ -46,12 +46,12 @@ use core::fmt::Debug;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use drifters_core::estimator::MAX_VARIANCE;
-use drifters_core::math::{Cholesky, Mat3, Matrix, Vec3, Vector};
+use drifters_core::math::{Cholesky, Mat3, Matrix, Vector};
 use drifters_core::F;
 
 use crate::filter::{noise_mapping, noise_mapping_entries, ProcessNoise, NOISE};
 use crate::group::{Algebra, State, Symmetry};
-use crate::lift::Input;
+use crate::lift::{GlobalFrame, Input};
 use crate::linear::{state_matrix, state_matrix_entries, OutputMatrix, StateMatrix, DIM};
 
 mod private {
@@ -81,8 +81,8 @@ pub struct Propagation<'a> {
     pub estimate: &'a State,
     /// The input over the interval.
     pub input: &'a Input,
-    /// The constant gravity vector.
-    pub gravity: Vec3,
+    /// What the global frame contributes: gravity and any rotation.
+    pub frame: GlobalFrame,
     /// The interval, seconds. Negative for a reverse pass; process noise
     /// enters with its magnitude.
     pub dt: F,
@@ -148,14 +148,14 @@ impl Covariance for StateMatrix {
     }
 
     fn propagate(&mut self, step: &Propagation<'_>) {
-        let mut next = state_matrix(step.midpoint, step.input, step.gravity);
+        let mut next = state_matrix(step.midpoint, step.input, step.frame);
         dense_transition(self, &mut next, step.dt);
         // |dt|, not dt: see `EqFilter::propagate` on negative dt.
         dense_process_noise(
             &mut next,
             step.observer,
             step.estimate,
-            step.gravity,
+            step.frame,
             step.noise,
             step.dt.abs(),
         );
@@ -314,11 +314,11 @@ fn dense_process_noise(
     sigma: &mut StateMatrix,
     observer: &Symmetry,
     estimate: &State,
-    gravity: Vec3,
+    frame: GlobalFrame,
     q: &ProcessNoise,
     dt: F,
 ) {
-    let g = noise_mapping(observer, estimate, gravity);
+    let g = noise_mapping(observer, estimate, frame);
     let psd = q.to_array();
     for i in 0..DIM {
         for j in 0..DIM {
@@ -708,11 +708,11 @@ fn lane_dot<S: FactorScalar, const W: usize>(a: &[S; W], b: &[S; W]) -> S {
 fn scaled_state_matrix<S: FactorScalar>(
     half: &Symmetry,
     u: &Input,
-    gravity: Vec3,
+    frame: GlobalFrame,
     dt: F,
 ) -> [[S; DIM]; DIM] {
     let mut adt = [[S::ZERO; DIM]; DIM];
-    state_matrix_entries(half, u, gravity, |i, j, value| {
+    state_matrix_entries(half, u, frame, |i, j, value| {
         if let Some(slot) = adt.get_mut(i).and_then(|row| row.get_mut(j)) {
             *slot = S::narrow(value * dt);
         }
@@ -752,9 +752,9 @@ fn noise_columns<S: FactorScalar>(
     w: &mut [[S; PROPAGATE_WIDTH]; DIM],
     observer: &Symmetry,
     estimate: &State,
-    gravity: Vec3,
+    frame: GlobalFrame,
 ) {
-    noise_mapping_entries(observer, estimate, gravity, |row, column, value| {
+    noise_mapping_entries(observer, estimate, frame, |row, column, value| {
         if let Some(slot) = w.get_mut(row).and_then(|r| r.get_mut(DIM + column)) {
             *slot = S::narrow(value);
         }
@@ -795,14 +795,14 @@ impl<S: FactorScalar> Covariance for Ud<S> {
     }
 
     fn propagate(&mut self, step: &Propagation<'_>) {
-        let adt = scaled_state_matrix::<S>(step.midpoint, step.input, step.gravity, step.dt);
+        let adt = scaled_state_matrix::<S>(step.midpoint, step.input, step.frame, step.dt);
         // W = [Φ U, G], weighted by [D, q |dt|].
         let mut w = [[S::ZERO; PROPAGATE_WIDTH]; DIM];
         for (i, row) in w.iter_mut().enumerate() {
             let phi_row = transition_row(&adt, i);
             self.times_u(&phi_row, &mut row[..DIM]);
         }
-        noise_columns(&mut w, step.observer, step.estimate, step.gravity);
+        noise_columns(&mut w, step.observer, step.estimate, step.frame);
         let mut weight = [S::ZERO; PROPAGATE_WIDTH];
         weight[..DIM].copy_from_slice(&self.diagonal);
         let dt = step.dt.abs();
@@ -930,6 +930,7 @@ mod tests {
     use crate::lie::{Se23, Se3Tangent};
     use crate::linear::{position_output_matrix, transported_position};
     use drifters_core::math::Quat;
+    use drifters_core::math::Vec3;
 
     const GRAVITY: Vec3 = Vec3::new(0.0, 0.0, 9.81);
 
@@ -1027,7 +1028,7 @@ mod tests {
             observer: &x,
             estimate: &estimate,
             input: &input,
-            gravity: GRAVITY,
+            frame: GRAVITY.into(),
             dt: 0.01,
             noise: &q,
         };
@@ -1100,7 +1101,7 @@ mod tests {
             observer: &x,
             estimate: &estimate,
             input: &input,
-            gravity: GRAVITY,
+            frame: GRAVITY.into(),
             dt: 0.01,
             noise: &q,
         };
@@ -1162,7 +1163,7 @@ mod tests {
             observer: &x,
             estimate: &estimate,
             input: &input,
-            gravity: GRAVITY,
+            frame: GRAVITY.into(),
             dt: 0.01,
             noise: &q,
         });

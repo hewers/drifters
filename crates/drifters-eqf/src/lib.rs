@@ -21,9 +21,14 @@
 //! The paper assumes a **flat, non-rotating Earth** with a constant gravity
 //! vector in a global Cartesian frame. The ESKF is a full Earth-referenced INS
 //! with geodetic position, Earth rotation, transport rate and normal gravity.
-//! Adding Earth terms here would break the group-affine structure the whole
-//! equivariance argument rests on, so the paper's model is implemented as
-//! written and comparisons must account for the difference.
+//! The paper's model is what runs by default, and comparisons must account for
+//! the difference.
+//!
+//! Of those Earth terms the rotation can be added without giving anything up:
+//! a frame turning at a constant rate keeps the system group affine, which
+//! [`lift::GlobalFrame`] sets out and `EqfOptions::earth_in_group` turns on.
+//! Gravity that varies with position cannot, so the frame keeps one plane and
+//! one gravity vector either way.
 //!
 //! It also estimates a different set of states: GNSS lever arm and magnetometer
 //! rotation are estimated rather than configured, and IMU scale factors are not

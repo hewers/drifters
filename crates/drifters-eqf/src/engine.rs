@@ -59,7 +59,7 @@ use crate::covariance::Covariance;
 use crate::filter::{EqFilter, Verdict};
 use crate::group::{State, Symmetry};
 use crate::lie::{Se23, Se3Tangent};
-use crate::lift::Input;
+use crate::lift::{GlobalFrame, Input};
 use crate::linear::{
     direction_output_matrix, position_output_matrix, transported_direction, transported_position,
     transported_velocity, velocity_output_matrix, OutputMatrix, StateMatrix, DIM,
@@ -115,12 +115,18 @@ impl<C: Covariance> EqfEngine<C> {
             return Err(e);
         }
         let anchor = Anchor::new(options.anchor_or_initial());
+        let frame = if options.earth_in_group {
+            anchor.rotating_frame()
+        } else {
+            GlobalFrame::flat(anchor.gravity)
+        };
         let initial = options.initial_state;
+        let position = anchor.to_local(initial.position);
         let start = State {
             pose: Se23::new(
                 initial.attitude.dcm,
-                initial.velocity.to_vec3(),
-                anchor.to_local(initial.position),
+                frame.group_velocity(initial.velocity.to_vec3(), position),
+                position,
             ),
             bias: Se3Tangent::new(options.initial_gyro_bias, options.initial_accel_bias),
             lever: options.initial_lever_arm,
@@ -130,9 +136,12 @@ impl<C: Covariance> EqfEngine<C> {
         };
         // The sigmas are physical and the covariance is not; see
         // `crate::physical` for what handing over diag(σ²) here would do.
-        let sigma =
-            physical::covariance_from_std(&Symmetry::from_state(&start), &options.initial_std());
-        let mut filter = EqFilter::<C>::with_covariance(&start, &sigma, anchor.gravity)
+        let sigma = physical::covariance_from_std(
+            &Symmetry::from_state(&start),
+            frame.earth_rate,
+            &options.initial_std(),
+        );
+        let mut filter = EqFilter::<C>::with_covariance(&start, &sigma, frame)
             .ok_or(ConfigError::InitialCovarianceNotPositiveDefinite)?;
         filter.alpha = options.gcu_alpha;
         Ok(Self {
@@ -152,17 +161,21 @@ impl<C: Covariance> EqfEngine<C> {
 
     /// The current navigation solution, geodetic.
     ///
-    /// Position through the anchor, velocity and attitude in the anchor's NED
-    /// axes. The IMU error carries the two biases; the scale factors are zero
-    /// because this filter does not estimate them, not because they were
-    /// found to be.
+    /// Position through the anchor, velocity over the ground and attitude in
+    /// the anchor's NED axes. The IMU error carries the two biases; the scale
+    /// factors are zero because this filter does not estimate them, not
+    /// because they were found to be.
     pub fn nav_state(&self) -> NavState {
         let state = self.filter.nav_state();
+        let velocity = self
+            .filter
+            .frame
+            .ground_velocity(state.pose.velocity, state.pose.position);
         NavState {
             time: self.time,
             pva: Pva {
                 position: self.anchor.to_geodetic(state.pose.position),
-                velocity: Ned::from_vec3(state.pose.velocity),
+                velocity: Ned::from_vec3(velocity),
                 attitude: Attitude::from_quat(Quat::from_dcm(&state.pose.rotation)),
             },
             imu_error: ImuError {
@@ -175,6 +188,11 @@ impl<C: Covariance> EqfEngine<C> {
 
     /// The estimate in the filter's own terms: Cartesian, about the anchor,
     /// with the lever arm and the magnetometer calibration.
+    ///
+    /// With [`EqfOptions::earth_in_group`] on, the velocity here is the
+    /// [group velocity](GlobalFrame::group_velocity), which exceeds the
+    /// velocity over the ground by `ω × p`. [`EqfEngine::nav_state`] has the
+    /// latter.
     #[inline]
     pub fn state(&self) -> State {
         self.filter.nav_state()
@@ -228,7 +246,9 @@ impl<C: Covariance> EqfEngine<C> {
     pub fn std_deviations(&self) -> [F; DIM] {
         self.filter
             .sigma
-            .with_dense(|sigma| physical::variances(&self.filter.x, sigma))
+            .with_dense(|sigma| {
+                physical::variances(&self.filter.x, self.filter.frame.earth_rate, sigma)
+            })
             .map(root)
     }
 
@@ -449,11 +469,16 @@ impl<C: Covariance> EqfEngine<C> {
             return Ok(());
         };
 
-        let measured = self.anchor.to_local(fix.position);
+        let antenna = self.anchor.to_local(fix.position);
         let transported = transported_position(&self.filter.x);
-        let c = position_output_matrix(measured, transported);
-        let r = fix.position_std.squared().to_diag();
-        self.apply(&c, transported - measured, &r, self.options.position_gate)?;
+        let c = position_output_matrix(antenna, transported);
+        let position_noise = fix.position_std.squared().to_diag();
+        self.apply(
+            &c,
+            transported - antenna,
+            &position_noise,
+            self.options.position_gate,
+        )?;
 
         // A fix carrying velocity gives a second measurement. A zero sigma
         // would be an infinitely confident one, so an unset sigma means
@@ -464,11 +489,20 @@ impl<C: Covariance> EqfEngine<C> {
             // velocity needs the rate over the interval the epoch is in: the
             // one the filter integrates, less the bias it has estimated.
             let rate = self.input(imu).omega - self.filter.nav_state().bias.omega;
-            let measured = velocity.to_vec3();
+            // The filter's velocity is the group's, so the fix is taken there
+            // too. The antenna's own position does it exactly, the frame's
+            // turning of the lever arm included, and brings that position's
+            // noise along.
+            let frame = self.filter.frame;
+            let measured = frame.group_velocity(velocity.to_vec3(), antenna);
+            let mut r = fix.velocity_std.squared().to_diag();
+            if frame.rotates() {
+                let turn = frame.earth_rate.skew();
+                r += turn.matmul(&position_noise).matmul(&turn.transpose());
+            }
             let transported = transported_velocity(&self.filter.x, rate);
             // The global-frame rate: see `velocity_output_matrix`.
             let c = velocity_output_matrix(measured, transported, self.filter.x.a() * rate);
-            let r = fix.velocity_std.squared().to_diag();
             self.apply(&c, transported - measured, &r, self.options.velocity_gate)?;
         }
         Ok(())
@@ -864,12 +898,12 @@ mod tests {
     #[test]
     fn the_engine_has_its_documented_footprint() {
         use core::mem::size_of;
-        // The covariance is dense here, 3 528 bytes of the filter's 3 832.
+        // The covariance is dense here, 3 528 bytes of the filter's 3 856.
         // If a change to these is intended, update the "Resource budget"
         // table in docs/design.md with them.
-        assert_eq!(size_of::<EqFilter>(), 3_832);
+        assert_eq!(size_of::<EqFilter>(), 3_856);
         assert_eq!(size_of::<EqfOptions>(), 648);
-        assert_eq!(size_of::<EqfEngine>(), 4_680);
+        assert_eq!(size_of::<EqfEngine>(), 4_704);
     }
 
     // --- the interval, and what happens to a fix -------------------------
@@ -1568,6 +1602,104 @@ mod tests {
             dt,
             dtheta: Wgs84::omega_ie_n(p.lat) * dt,
             dvel: -Wgs84::gravity_n(p.lat, p.height) * dt,
+        }
+    }
+
+    /// A frame that turns with the Earth has nothing left to explain in a
+    /// still unit: the gyroscopes read exactly the frame's rate.
+    #[test]
+    fn a_frame_turning_with_the_earth_sees_a_still_unit_as_still() {
+        let mut e = EqfEngine::new(options().with_earth_in_group(true)).unwrap();
+        for i in 0..=10_000 {
+            e.add_imu(earth_fixed_sample(0.01, i as F * 0.01)).unwrap();
+        }
+        let state = e.state();
+        let turned = Quat::from_dcm(&state.pose.rotation)
+            .to_rotation_vector()
+            .norm();
+        assert!(turned < 1e-9, "turned {turned} rad");
+        assert!(state.pose.position.norm() < 1e-6);
+        assert!(e.nav_state().pva.velocity.to_vec3().norm() < 1e-7);
+    }
+
+    /// Away from the anchor the filter's velocity and the reported one differ
+    /// by `ω × p`, and a vehicle at rest must still be reported at rest, with
+    /// a fix saying so accepted as agreeing.
+    #[test]
+    fn velocity_is_reported_and_aided_over_the_ground() {
+        let mut o = options().with_earth_in_group(true);
+        o.anchor = Some(origin().shifted(Ned::new(-40_000.0, 25_000.0, 0.0)));
+        // Ungated, so that a fix taken in the wrong frame is applied and shows
+        // in its NIS, rather than being turned away and leaving the position
+        // fix's NIS to be read here.
+        o.velocity_gate = None;
+        let frame = Anchor::new(o.anchor_or_initial()).rotating_frame();
+        let mut e = EqfEngine::new(o).unwrap();
+
+        let held = e.state();
+        let expected = frame.group_velocity(Vec3::ZERO, held.pose.position);
+        assert!(expected.norm() > 2.0, "{expected:?}");
+        assert_relative_eq!((held.pose.velocity - expected).norm(), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            e.nav_state().pva.velocity.to_vec3().norm(),
+            0.0,
+            epsilon = 1e-9
+        );
+
+        let position = e.nav_state().pva.position;
+        let sample = ImuSample {
+            time: GpsTime::from_tow(1.0),
+            dt: 0.01,
+            dtheta: frame.earth_rate * 0.01,
+            dvel: -frame.gravity * 0.01,
+        };
+        e.add_imu(ImuSample {
+            time: GpsTime::from_tow(0.99),
+            ..sample
+        })
+        .unwrap();
+        let queued = e.add_gnss(GnssFix {
+            time: GpsTime::from_tow(1.0),
+            position,
+            position_std: Vec3::splat(0.5),
+            velocity: Some(Ned::ZERO),
+            velocity_std: Vec3::splat(0.05),
+        });
+        assert_eq!(queued, GnssQueued::Queued);
+        e.add_imu(sample).unwrap();
+        assert!(
+            e.last_nis().is_some_and(|nis| nis < 1e-2),
+            "{:?}",
+            e.last_nis()
+        );
+    }
+
+    #[test]
+    fn both_earth_models_at_once_are_refused() {
+        let both = options()
+            .with_earth_compensation(true)
+            .with_earth_in_group(true);
+        assert_eq!(
+            EqfEngine::new(both).unwrap_err(),
+            ConfigError::ConflictingEarthModels
+        );
+    }
+
+    /// The factored form must follow the same rotating frame as the dense one.
+    #[test]
+    fn both_covariance_forms_turn_the_same_way() {
+        use crate::covariance::Ud;
+        let o = options().with_earth_in_group(true);
+        let mut dense = EqfEngine::new(o).unwrap();
+        let mut factored = EqfEngine::<Ud<f64>>::with_covariance(o).unwrap();
+        for i in 0..=2_000 {
+            let s = earth_fixed_sample(0.01, i as F * 0.01);
+            dense.add_imu(s).unwrap();
+            factored.add_imu(s).unwrap();
+        }
+        let (a, b) = (dense.std_deviations(), factored.std_deviations());
+        for (x, y) in a.iter().zip(&b) {
+            assert_relative_eq!(*x, *y, max_relative = 1e-6);
         }
     }
 

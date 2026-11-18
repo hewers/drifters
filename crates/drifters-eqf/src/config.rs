@@ -31,10 +31,11 @@ use crate::linear::DIM;
 /// - **There are no scale factors.** This filter does not estimate them, so a
 ///   scale-factor error it is told to expect has to be carried as bias:
 ///   [`with_accel_scale_factor`](Self::with_accel_scale_factor).
-/// - **The frame is flat.** Position is Cartesian about an
-///   [`anchor`](Self::anchor), and Earth rotation is modelled only by
-///   correcting the input, and only if
-///   [`compensate_earth`](Self::compensate_earth) asks.
+/// - **The frame is a tangent plane.** Position is Cartesian about an
+///   [`anchor`](Self::anchor), and gravity is the anchor's. Earth rotation is
+///   left out unless asked for, which is done by correcting the input
+///   ([`compensate_earth`](Self::compensate_earth)) or by turning the frame
+///   ([`earth_in_group`](Self::earth_in_group)).
 /// - **Robustness is inflation first, a gate second.** See
 ///   [`gcu_alpha`](Self::gcu_alpha).
 ///
@@ -115,8 +116,28 @@ pub struct EqfOptions {
     /// with a NIS of 6 718, and a divergence as `t³` if
     /// [`gcu_alpha`](Self::gcu_alpha) is above zero.
     /// [`compensate_earth`](crate::local::compensate_earth) states what the
-    /// correction costs.
+    /// correction costs. It cannot be combined with
+    /// [`earth_in_group`](Self::earth_in_group).
     pub compensate_earth: bool,
+    /// Let the anchor's tangent frame turn with the Earth, inside the filter's
+    /// group.
+    ///
+    /// For a gyroscope that resolves the Earth's rate well past its own bias,
+    /// a ratio above about 1 000 in
+    /// [`flat_earth_verdict`](crate::local::flat_earth_verdict). The frame's
+    /// rate then reaches the covariance, so heading becomes observable from
+    /// the gyroscopes, which input correction cannot give. See
+    /// [`GlobalFrame`](crate::lift::GlobalFrame) for the model and
+    /// `docs/adr/0008` for what it leaves out: the frame is still one plane
+    /// with one gravity vector, so this suits a vehicle near its anchor and
+    /// not a long journey.
+    ///
+    /// [`nav_state`](crate::engine::EqfEngine::nav_state) and
+    /// [`pva_std`](crate::engine::EqfEngine::pva_std) still report velocity
+    /// over the ground. [`state`](crate::engine::EqfEngine::state) holds the
+    /// filter's own velocity, which is not that: see
+    /// [`GlobalFrame::group_velocity`](crate::lift::GlobalFrame::group_velocity).
+    pub earth_in_group: bool,
     /// GCU convergence rate `α ∈ [0, 1]` — the lower, the faster — or `None`
     /// for no inflation at all. See [`crate::gcu`].
     ///
@@ -182,6 +203,7 @@ impl Default for EqfOptions {
             initial_mag_std: Vec3::splat(0.1),
             process_noise: ProcessNoise::from_imu_noise(&ImuNoise::default()),
             compensate_earth: false,
+            earth_in_group: false,
             gcu_alpha: Some(0.0),
             position_gate: None,
             velocity_gate: Some(chi_squared::P999[3]),
@@ -217,9 +239,10 @@ impl EqfOptions {
     /// that part twice, which errs towards trusting the bias less.
     ///
     /// The bias is the sensor's, with the Earth's rotation taken out. With
-    /// [`compensate_earth`](Self::compensate_earth) off the filter will see
-    /// that rotation as a bias of up to 7.3e-5 rad/s still to be learned, which
-    /// is well inside the prior of the sensors that mode suits. Give the engine
+    /// neither [`compensate_earth`](Self::compensate_earth) nor
+    /// [`earth_in_group`](Self::earth_in_group) on, the filter will see that
+    /// rotation as a bias of up to 7.3e-5 rad/s still to be learned, which is
+    /// well inside the prior of the sensors that mode suits. Give the engine
     /// the sample at [`Alignment::time`] first, so that integration starts from
     /// the instant the state describes.
     pub fn with_alignment(mut self, alignment: &Alignment) -> Self {
@@ -260,6 +283,13 @@ impl EqfOptions {
     /// Turn input-side Earth compensation on or off.
     pub fn with_earth_compensation(mut self, on: bool) -> Self {
         self.compensate_earth = on;
+        self
+    }
+
+    /// Turn the filter's frame with the Earth, or stop it. See
+    /// [`earth_in_group`](Self::earth_in_group).
+    pub fn with_earth_in_group(mut self, on: bool) -> Self {
+        self.earth_in_group = on;
         self
     }
 
@@ -359,6 +389,9 @@ impl EqfOptions {
         if !self.initial_state.position.is_valid() {
             return Some(ConfigError::InvalidInitialPosition);
         }
+        if self.compensate_earth && self.earth_in_group {
+            return Some(ConfigError::ConflictingEarthModels);
+        }
         if self.anchor.is_some_and(|a| !a.is_valid()) {
             return Some(ConfigError::InvalidAnchor);
         }
@@ -441,6 +474,10 @@ pub enum ConfigError {
     /// one would shrink the covariance, making the deadlock it exists to break
     /// permanent.
     InvalidInflation,
+    /// [`EqfOptions::compensate_earth`] and [`EqfOptions::earth_in_group`]
+    /// were both set. Each accounts for the whole of the Earth's rotation, so
+    /// together they would remove it twice.
+    ConflictingEarthModels,
 }
 
 impl ConfigError {
@@ -460,6 +497,9 @@ impl ConfigError {
             }
             Self::InvalidGate => "a gate threshold must be finite and > 0",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
+            Self::ConflictingEarthModels => {
+                "Earth rotation can be compensated or kept in the group, not both"
+            }
         }
     }
 }
