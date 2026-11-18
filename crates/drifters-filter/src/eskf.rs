@@ -14,8 +14,8 @@ use drifters_core::types::{ImuNoise, ImuSample, Pva};
 use drifters_core::F;
 
 use crate::state::{
-    NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID, BA_ID, BGSTD_ID,
-    BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
+    NavNoiseMatrix, NoiseCovariance, NoiseMatrix, StateMatrix, StateVector, ARW_ID, BASTD_ID,
+    BA_ID, BGSTD_ID, BG_ID, N_NOISE, N_STATE, PHI_ID, P_ID, VRW_ID, V_ID,
 };
 #[cfg(not(feature = "reduced-state"))]
 use crate::state::{SASTD_ID, SA_ID, SGSTD_ID, SG_ID};
@@ -147,6 +147,20 @@ pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
         g.set_block(SG_ID, SGSTD_ID, &Mat3::identity());
         g.set_block(SA_ID, SASTD_ID, &Mat3::identity());
     }
+    g
+}
+
+/// The block of [`noise_mapping`] that drives the navigation states.
+///
+/// Velocity and angle random walk, sensed in the body frame and rotated into
+/// NED. The rest of the mapping is the identity from each parameter's channel
+/// to that parameter, which [`Ud::predict_partitioned`] assumes rather than
+/// reads, so the filter builds this 9×6 block per sample instead of the whole
+/// mapping. `the_navigation_block_is_the_mappings_corner` pins the two together.
+pub fn nav_noise_mapping(state: &Pva) -> NavNoiseMatrix {
+    let mut g = NavNoiseMatrix::zeros();
+    g.set_block(V_ID, VRW_ID, &state.attitude.dcm);
+    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm);
     g
 }
 
@@ -468,7 +482,14 @@ impl Eskf {
         if !phi.is_finite() {
             return false;
         }
-        let dx = phi.matmul(&self.dx);
+        // The error state is zero between a closed-loop feedback and the next
+        // update, which is nearly always, and `Φ · 0` needs no product. A `NaN`
+        // compares unequal to zero, so it still goes through and is caught.
+        let dx = if self.dx.data.iter().flatten().all(|x| *x == 0.0) {
+            self.dx
+        } else {
+            phi.matmul(&self.dx)
+        };
         if !dx.is_finite() {
             return false;
         }
@@ -482,7 +503,8 @@ impl Eskf {
         }
         self.dx = dx;
 
-        // Thornton, with the process noise integrated over the interval as
+        // Thornton, partitioned so that Gram-Schmidt covers the navigation
+        // states alone, with the process noise integrated over the interval as
         // `G (q dt) Gᵀ`.
         //
         // The dense form used a trapezoidal `½dt(ΦQΦᵀ + Q)`, and
@@ -495,14 +517,16 @@ impl Eskf {
         // 1.459 NIS to four figures, and the NEES campaign moves from 14.569
         // to 14.565, which is inside its own Monte Carlo noise. The difference
         // is second order in `dt`, and at 200 Hz that is nothing to keep.
-        let mapping = noise_mapping(state);
+        let mapping = nav_noise_mapping(state);
         let mut density = Self::noise_density(noise);
         for d in density.iter_mut() {
             *d *= dt;
         }
         // A degenerate transition or a variance past `MAX_VARIANCE` is the only
         // way this fails, and it leaves the covariance untouched.
-        let _ = self.covariance.predict(&phi, &mapping, &density);
+        let _ = self
+            .covariance
+            .predict_partitioned(&phi, &mapping, &density);
         true
     }
 
@@ -947,7 +971,145 @@ mod tests {
         }
     }
 
+    // --- the structure the partitioned time update relies on ---------------
+
+    #[test]
+    fn the_parameter_states_are_self_contained() {
+        // `Ud::predict_partitioned` assumes this and does not check it: every
+        // state from `N_NAV` up depends on nothing but itself, and is driven
+        // by its own noise channel and no other. A future state coupled to
+        // the rest — an odometer scale that reads the velocity, say — would
+        // have its coupling silently dropped there, so it has to fail here.
+        let state = test_state();
+        let f = transition_matrix(&state, &test_imu(), &ImuNoise::default());
+        for i in N_NAV..N_STATE {
+            for j in 0..N_STATE {
+                if i != j {
+                    assert_eq!(f[(i, j)], 0.0, "parameter {i} is coupled to state {j}");
+                }
+            }
+        }
+        let g = noise_mapping(&state);
+        for i in 0..N_STATE {
+            for c in 0..N_NOISE {
+                let allowed = if i < N_NAV {
+                    c < N_NAV_NOISE
+                } else {
+                    c == N_NAV_NOISE + (i - N_NAV)
+                };
+                if !allowed {
+                    assert_eq!(g[(i, c)], 0.0, "channel {c} drives state {i}");
+                }
+            }
+        }
+        // And at unit gain, which the partitioned update assumes rather than
+        // reads.
+        for k in 0..N_STATE - N_NAV {
+            assert_eq!(g[(N_NAV + k, N_NAV_NOISE + k)], 1.0, "parameter {k}'s gain");
+        }
+    }
+
+    #[test]
+    fn the_navigation_block_is_the_mappings_corner() {
+        // `nav_noise_mapping` is built separately so the filter need not form
+        // the whole `G` per sample; it has to be the same numbers.
+        let state = test_state();
+        let full = noise_mapping(&state);
+        let nav = nav_noise_mapping(&state);
+        for i in 0..N_NAV {
+            for c in 0..N_NAV_NOISE {
+                assert_eq!(nav[(i, c)], full[(i, c)], "entry ({i}, {c})");
+            }
+        }
+    }
+
+    #[test]
+    fn the_partitioned_time_update_matches_the_full_one_on_the_filters_model() {
+        // The same comparison as in `ud`, with the transition, mapping and
+        // densities the filter builds rather than random ones: a step from a
+        // correlated covariance, and five hundred steps run side by side.
+        let state = test_state();
+        let imu = test_imu();
+        let noise = ImuNoise::default();
+        let mut phi = transition_matrix(&state, &imu, &noise);
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                phi[(i, j)] *= imu.dt;
+            }
+            phi[(i, i)] += 1.0;
+        }
+        let g = noise_mapping(&state);
+        let mut density = Eskf::noise_density(&noise);
+        for d in density.iter_mut() {
+            *d *= imu.dt;
+        }
+
+        // Correlations first: a diagonal prior would leave most of `U` zero
+        // and test little.
+        let mut full = Eskf::new(&std_vector()).covariance;
+        for _ in 0..50 {
+            full.predict(&phi, &g, &density).unwrap();
+        }
+        let mut partitioned = full;
+        let relative = |a: &Ud, b: &Ud| {
+            let (a, b) = (a.to_covariance(), b.to_covariance());
+            let mut worst: F = 0.0;
+            for i in 0..N_STATE {
+                for j in 0..N_STATE {
+                    let scale = (a[(i, i)] * a[(j, j)]).sqrt().max(1e-30);
+                    worst = worst.max((a[(i, j)] - b[(i, j)]).abs() / scale);
+                }
+            }
+            worst
+        };
+        let tolerance = if cfg!(feature = "f32-covariance") {
+            1e-4
+        } else {
+            1e-11
+        };
+        full.predict(&phi, &g, &density).unwrap();
+        let nav = nav_noise_mapping(&state);
+        partitioned
+            .predict_partitioned(&phi, &nav, &density)
+            .unwrap();
+        let one = relative(&full, &partitioned);
+        assert!(one < tolerance, "one step apart by {one:.2e}");
+        for _ in 0..500 {
+            full.predict(&phi, &g, &density).unwrap();
+            partitioned
+                .predict_partitioned(&phi, &nav, &density)
+                .unwrap();
+        }
+        let many = relative(&full, &partitioned);
+        assert!(many < 10.0 * tolerance, "500 steps apart by {many:.2e}");
+    }
+
+    #[test]
+    fn a_zero_error_state_is_not_multiplied_but_a_poisoned_one_is_caught() {
+        // The shortcut past `Φ · dx` must not become a way round the finite
+        // check, and must not disturb an error state that is really there.
+        let (state, imu, noise) = (test_state(), test_imu(), ImuNoise::default());
+        let mut f = Eskf::new(&std_vector());
+        assert!(f.predict(&state, &imu, &noise));
+        assert!(f.dx.data.iter().flatten().all(|x| *x == 0.0));
+
+        let mut carrying = Eskf::new(&std_vector());
+        carrying.dx[(V_ID, 0)] = 1.0;
+        assert!(carrying.predict(&state, &imu, &noise));
+        assert!(
+            carrying.dx[(P_ID, 0)] != 0.0,
+            "velocity error must reach position"
+        );
+
+        let mut poisoned = Eskf::new(&std_vector());
+        poisoned.dx[(0, 0)] = F::NAN;
+        let before = poisoned.covariance.to_covariance();
+        assert!(!poisoned.predict(&state, &imu, &noise));
+        assert_eq!(poisoned.covariance.to_covariance(), before);
+    }
+
     use super::*;
+    use crate::state::{N_NAV, N_NAV_NOISE};
     use approx::assert_relative_eq;
     use drifters_core::frames::{Lla, Ned};
     use drifters_core::time::GpsTime;
