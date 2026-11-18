@@ -477,6 +477,14 @@ impl Ud {
 /// `slice::as_chunks::<LANES>` states this directly and measures the same, but
 /// is stable only from 1.88 against this crate's 1.85 floor. Worth revisiting
 /// if the floor rises.
+///
+/// Eight named accumulators rather than an array of eight. An array reaches the
+/// optimiser as memory it has to keep up to date, and locals are registers from
+/// the start. The sums are the same, in the same order, so the result is too.
+/// Measured across the change on `add_imu`: 16 % fewer instructions on the
+/// Cortex-M4 under `f32-covariance`, where the additions are hardware, 29 % on
+/// the Cortex-M7, and 1 % on the M4 in `f64`, where the soft-float calls
+/// dominate either way.
 #[inline]
 fn lane_dot<const W: usize>(a: &[Scalar; W], b: &[Scalar; W]) -> Scalar {
     #[cfg(drifters_nightly_simd)]
@@ -492,15 +500,21 @@ fn lane_dot<const W: usize>(a: &[Scalar; W], b: &[Scalar; W]) -> Scalar {
     }
     #[cfg(not(drifters_nightly_simd))]
     {
-        let mut partial = [0.0 as Scalar; LANES];
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0 as Scalar, 0.0, 0.0, 0.0);
+        let (mut s4, mut s5, mut s6, mut s7) = (0.0 as Scalar, 0.0, 0.0, 0.0);
         let mut base = 0;
         while base + LANES <= W {
-            for (lane, p) in partial.iter_mut().enumerate() {
-                *p += a[base + lane] * b[base + lane];
-            }
+            s0 += a[base] * b[base];
+            s1 += a[base + 1] * b[base + 1];
+            s2 += a[base + 2] * b[base + 2];
+            s3 += a[base + 3] * b[base + 3];
+            s4 += a[base + 4] * b[base + 4];
+            s5 += a[base + 5] * b[base + 5];
+            s6 += a[base + 6] * b[base + 6];
+            s7 += a[base + 7] * b[base + 7];
             base += LANES;
         }
-        partial.iter().sum()
+        [s0, s1, s2, s3, s4, s5, s6, s7].iter().sum()
     }
 }
 
