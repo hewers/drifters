@@ -33,8 +33,10 @@ the IMU interval, and gated updates. It implements `drifters_core`'s
 The covariance is dense `f64` by default. For a microcontroller whose FPU is
 single precision, `EqfEngine::<Ud<f32>>::with_covariance(options)` holds it
 factored as `U D Uᵀ` in `f32` instead: equal to the dense form to the third
-decimal on every dataset in this repository, and 0.84 million instructions per
-IMU sample on a Cortex-M4 against 4.29 million.
+decimal on every dataset in this repository, and 0.85 million instructions per
+IMU sample on a Cortex-M4 against 4.45 million. A Cortex-M7 built with
+`-C target-cpu=cortex-m7` has `f64` in hardware, and there the dense form takes
+fewer instructions, 262 thousand against 326 thousand.
 
 ```rust
 use drifters_core::prelude::*;

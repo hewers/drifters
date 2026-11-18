@@ -14,6 +14,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The Cortex-M4 instruction counts are re-measured**, and sit 1 % to 4 % above
+  what the documents quoted: 3.63 million for the default ESKF, 479 thousand with
+  `f32-covariance`, 4.45 million for the dense equivariant filter and 854
+  thousand for the factored one. That last figure puts the factored filter's
+  floor at 168 MHz at 5.1 ms, just over a 200 Hz IMU's interval, where it had read
+  5.0.
+- **`cortex-m-harness` reports which arithmetic it was built for**, and a build
+  with `-C target-cpu=cortex-m7` refuses to start on a core without a
+  double-precision FPU.
+
 - **The ESKF's peak stack on Cortex-M4 is 20 800 bytes, up from 19 128, and
   CI's ceiling for it is 22 KiB, up from 20.** Rust 1.100's clippy flags
   indexed loops over const-generic arrays. Satisfying it in
@@ -238,6 +248,17 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **The Cortex-M7, measured under QEMU.** With `-C target-cpu=cortex-m7` no
+  `f64` arithmetic stays in software, and an `add_imu` costs 295 thousand
+  instructions for the ESKF and 262 thousand for the dense equivariant filter,
+  12 and 17 times fewer than on a Cortex-M4. `f32-covariance` saves 1.9 % there,
+  and the factored `f32` filter costs 25 % more than the dense one. These are
+  instruction counts, not cycles. CI now runs this build, holds it to the stack
+  ceilings, and fails if soft-float arithmetic or panic machinery is linked.
+- **`cortex-m-hil`**, firmware that reads cycles from the DWT counter on a
+  NUCLEO-H743ZI2 and can run an LSM6DSO through each estimator in real time, with
+  a manually started workflow for a self-hosted runner. CI builds it and runs it
+  on QEMU against a simulated sensor. **It has not yet run on hardware.**
 - **A `defmt` feature** on `drifters-core`, `-filter`, `-eqf` and `-proto`:
   `defmt::Format` on every public type that implements `Debug`, 63 of them,
   derived beside each `Debug`. `Rewind`'s impl is written by hand, because it

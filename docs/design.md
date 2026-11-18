@@ -350,11 +350,11 @@ Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-y
 the 1.9 KB its update paths have gained since, which is not yet explained.
 
 On a small part the constraint was never stack. It was work: the dense form
-is 4.29 million instructions per `add_imu` on a Cortex-M4, soft-float
+is 4.45 million instructions per `add_imu` on a Cortex-M4, soft-float
 throughout on a core whose FPU is single precision, and at an instruction per
-cycle that is at least 25 ms a sample at 168 MHz. The factored form is 0.84
-million, a floor of 5.0 ms — inside a 100 Hz IMU's interval with half of it
-to spare, and a 200 Hz one's only at that floor — against 473 thousand for the
+cycle that is at least 26 ms a sample at 168 MHz. The factored form is 0.85
+million, a floor of 5.1 ms — inside a 100 Hz IMU's interval with about half of
+it to spare, and just over a 200 Hz one's — against 479 thousand for the
 ESKF with `f32-covariance`. See [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4

@@ -8,6 +8,9 @@
 //!     -kernel target/thumbv7em-none-eabihf/release/cortex-m-harness
 //! ```
 //!
+//! Built with `-C target-cpu=cortex-m7` it runs on `mps2-an500 -cpu cortex-m7`
+//! instead, with `f64` in hardware. See `README.md`.
+//!
 //! # What QEMU can and cannot tell us
 //!
 //! This matters more than it looks, because it is easy to publish a number QEMU
@@ -26,10 +29,12 @@
 //! be several times slower than from zero-wait RAM, and QEMU shows none of that.
 //!
 //! The trap specific to this project: **Cortex-M4F's FPU is single precision
-//! only.** `drifters` uses `f64` throughout — see `drifters_core::F` — so every
-//! floating-point operation here is software-emulated by `libgcc`/`compiler
-//! -builtins` routines. QEMU executes them correctly and tells you nothing
-//! about what they cost. Any timing claim needs real silicon.
+//! only.** `drifters` uses `f64` throughout — see `drifters_core::F` — so on
+//! that part every `f64` operation is software-emulated by `compiler-builtins`
+//! routines. A Cortex-M7 with a double-precision FPU runs them in hardware, but
+//! only when built for it: the target alone assumes single precision. QEMU
+//! executes either correctly and tells you nothing about what it costs. Any
+//! timing claim needs real silicon.
 //!
 //! So this harness reports **stack and size**, which are exact, and deliberately
 //! does not report cycles.
@@ -444,12 +449,42 @@ fn padding(suffix: &str) -> &'static str {
     }
 }
 
+/// What this build does with `f64`, for the report's first lines.
+#[cfg(hard_f64)]
+const TARGET: &str = "thumbv7em-none-eabihf, target-cpu=cortex-m7 (f64 in hardware)";
+#[cfg(not(hard_f64))]
+const TARGET: &str = "thumbv7em-none-eabihf (single-precision FPU, f64 in software)";
+
+/// Whether this core's FPU executes double-precision instructions.
+#[cfg(hard_f64)]
+fn fpu_has_double_precision() -> bool {
+    /// Media and VFP Feature Register 0. Bits 11:8 count double-precision
+    /// support, and are zero on a single-precision FPU.
+    const MVFR0: *const u32 = 0xE000_EF40 as *const u32;
+    // SAFETY: a read-only identification register, present on every ARMv7E-M
+    // core with an FPU, which this target requires.
+    let mvfr0 = unsafe { core::ptr::read_volatile(MVFR0) };
+    (mvfr0 >> 8) & 0xF != 0
+}
+
 #[entry]
 fn main() -> ! {
     let bottom = cortex_m_rt::heap_start() as usize;
 
     hprintln!("drifters bare-metal harness");
-    hprintln!("target: thumbv7em-none-eabihf (Cortex-M4F, f64 in software)");
+    hprintln!("target: {}", TARGET);
+
+    // Here rather than left to the first `f64` instruction, whose fault would
+    // explain nothing: the same build also boots on a single-precision core.
+    #[cfg(hard_f64)]
+    if !fpu_has_double_precision() {
+        hprintln!("built for a double-precision FPU, and this core does not have one");
+        debug::exit(debug::EXIT_FAILURE);
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
     hprintln!(
         "config: {}-state, scale factors {}",
         N_STATE,

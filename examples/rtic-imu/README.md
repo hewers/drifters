@@ -84,7 +84,7 @@ A rewind is a burst. A fix `L` samples late replays between `L` and
 
 While those replay, the IMU keeps producing. If one step takes `s` and the IMU
 period is `T`, a replay of `n` steps queues about `n · s / T` samples. Here
-`s` is about 3.8 ms (473 thousand instructions at the 8 ns each that
+`s` is about 3.8 ms (479 thousand instructions at the 8 ns each that
 `-icount shift=3` gives) and `T` is 10 ms, so a 27-step replay queues 10. The
 run peaks at 11. The queue holds 32.
 
@@ -92,8 +92,8 @@ Two consequences:
 
 - **The filter must have headroom, not just keep up.** After a burst, the
   backlog drains at `T − s` per period. At `s ≥ T` it never drains, and every
-  burst adds to it. With the default `f64` covariance a step is 3.5 million
-  instructions, 28 ms in this model. Built that way, the queue fills within
+  burst adds to it. With the default `f64` covariance a step is 3.6 million
+  instructions, 29 ms in this model. Built that way, the queue fills within
   the first second and stays full. 1 368 of the 2 000 samples are dropped,
   telemetry never runs because the filter never yields, and the run fails at
   0.49 m. That is why `f32-covariance` is enabled in `Cargo.toml`, and it is

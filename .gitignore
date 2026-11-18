@@ -10,6 +10,8 @@
 /fuzz/corpus
 /fuzz/artifacts
 /cortex-m-harness/target
+/cortex-m-harness/target-m7
+/cortex-m-hil/target
 /examples/*/target
 
 # Source papers: fetched locally, not redistributed. Neither is clearly

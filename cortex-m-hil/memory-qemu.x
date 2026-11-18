@@ -1,0 +1,6 @@
+/* QEMU's mps2-an500: ZBT SRAM as code at 0, data at 0x20000000. */
+MEMORY
+{
+  FLASH : ORIGIN = 0x00000000, LENGTH = 4M
+  RAM   : ORIGIN = 0x20000000, LENGTH = 4M
+}

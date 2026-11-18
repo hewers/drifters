@@ -1060,16 +1060,21 @@ harness code:
 |---|---|---|
 | `EqfEngine` | 4 680 bytes | **2 080 bytes** |
 | `EqfRewindEngine<120, 32>` | 25 632 bytes | 17 832 bytes |
-| peak stack, a late fix through the rewind layer included | 15 480 bytes | **14 008 bytes** |
-| instructions per `add_imu` | 4.29 million | **0.84 million** |
-| at an instruction per cycle, 168 MHz | 25.5 ms | **5.0 ms** |
+| peak stack, a late fix through the rewind layer included | 15 488 bytes | **14 016 bytes** |
+| instructions per `add_imu` | 4.45 million | **0.85 million** |
+| at an instruction per cycle, 168 MHz | 26.5 ms | **5.1 ms** |
 | panic machinery linked | none | none |
 
 Both stack figures are under 20 KiB, and CI holds both to it. An instruction per cycle is the best a Cortex-M4 does, so the last row is
 a floor: the dense form cannot keep pace with an IMU on this part at any
-usual rate, and the factored one keeps pace with 100 Hz with half the
-interval to spare and with 200 Hz only at that floor. It is a floor on time,
-not a measurement of it; timing needs a board.
+usual rate, and the factored one keeps pace with 100 Hz with about half the
+interval to spare and misses 200 Hz, its floor being 2 % over the 5 ms. It is a
+floor on time, not a measurement of it; timing needs a board.
+
+The ranking belongs to that core. On a Cortex-M7 built for its double-precision
+FPU the dense form is 262 thousand instructions and the factored `f32` form 326
+thousand, so the factored form is the dearer one, by 25 %. See
+[testing.md](testing.md#the-cortex-m7-with-f64-in-hardware).
 
 ### The factored form runs the same filter
 
@@ -1195,8 +1200,8 @@ footprint and measured firmware budget are untouched.
     and `EqfRewindEngine` are generic over how `Σ` is held: dense `f64` by
     default, or `Ud<f32>`, Thornton and Bierman in single precision, for a
     part whose FPU is single precision. Equal to the dense form to rounding in
-    `f64` and to the third decimal on every dataset in `f32`; 0.84 million
-    instructions per sample on a Cortex-M4 against the dense form's 4.29.
+    `f64` and to the third decimal on every dataset in `f32`; 0.85 million
+    instructions per sample on a Cortex-M4 against the dense form's 4.45.
     See [What it costs on a microcontroller](#what-it-costs-on-a-microcontroller).
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no

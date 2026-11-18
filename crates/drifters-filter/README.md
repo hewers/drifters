@@ -29,10 +29,12 @@ Features:
 
 - `reduced-state` — drops the scale factors for a 15-state filter.
 - `f32-covariance` — carries the covariance factors in single precision, which
-  on a Cortex-M4F is the difference between the FPU and soft-float: 473
-  thousand instructions per IMU sample against 3.5 million. On that core the
+  on a Cortex-M4F is the difference between the FPU and soft-float: 479
+  thousand instructions per IMU sample against 3.6 million. On that core the
   default build cannot keep up with a 100 Hz IMU, and this one is the
-  configuration to use.
+  configuration to use. A Cortex-M7 built with `-C target-cpu=cortex-m7` runs
+  `f64` on its double-precision FPU, and there this saves under 2 % of the
+  instructions.
 - `smoothing` — records what an RTS backward pass needs from the forward one.
 - `defmt` — `defmt::Format` on every public type that implements `Debug`, for
   logging on target.

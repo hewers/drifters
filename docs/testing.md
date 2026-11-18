@@ -314,7 +314,8 @@ for bit-exact golden vectors, so tests needing bit-exactness call
 ## Layer 9 — bare-metal stack budget
 
 `cortex-m-harness/` boots both estimators on an emulated Cortex-M4 and measures
-their peak stack use. Run it with:
+their peak stack use, and on an emulated Cortex-M7 as well
+([below](#the-cortex-m7-with-f64-in-hardware)). Run it with:
 
 ```bash
 cd cortex-m-harness && cargo run --release
@@ -431,9 +432,9 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 3538560 (88464 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4285440 (107136 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 835800 (20895 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 3634560 (90864 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4447560 (111189 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 853560 (21339 ticks; only under -icount shift=0)
 ```
 
 Without the flag all four lines are emulator wall-clock and mean nothing.
@@ -443,23 +444,23 @@ cycle count. What it measures exactly is how much *work* a change removes — an
 on a part whose FPU is single-precision, that is the whole soft-float question,
 since an `__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
 
-Per `add_imu` on `mps2-an386`, the mean of 200 steps:
+Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 
 | configuration | instructions | SysTick ticks |
 |---|---|---|
-| ESKF, 21-state, `f64` | **3 538 560** | 88 464 |
-| ESKF, 21-state, `f32-covariance` | **473 440** | 11 836 |
-| ESKF, 15-state (`reduced-state`) | **1 578 080** | 39 452 |
-| ESKF, 15-state, `f32-covariance` | **270 560** | 6 764 |
-| EqF engine, dense `f64` | **4 285 440** | 107 136 |
-| EqF engine, factored `f32` | **835 800** | 20 895 |
+| ESKF, 21-state, `f64` | **3 634 560** | 90 864 |
+| ESKF, 21-state, `f32-covariance` | **478 520** | 11 963 |
+| ESKF, 15-state (`reduced-state`) | **1 626 560** | 40 664 |
+| ESKF, 15-state, `f32-covariance` | **274 680** | 6 867 |
+| EqF engine, dense `f64` | **4 447 560** | 111 189 |
+| EqF engine, factored `f32` | **853 560** | 21 339 |
 
 The single-precision covariance removes **87 %** of the work at 21 states and
 83 % at 15, having cost nothing measurable in accuracy. Dropping the six
 scale-factor states removes 55 %. For the equivariant filter, factoring the
-covariance and holding it in `f32` removes **80 %**, also at no measurable
-cost in accuracy; it lands at 1.77 times the ESKF with `f32-covariance`,
-where the dense form is 1.21 times the ESKF in `f64`.
+covariance and holding it in `f32` removes **81 %**, also at no measurable
+cost in accuracy; it lands at 1.78 times the ESKF with `f32-covariance`,
+where the dense form is 1.22 times the ESKF in `f64`.
 
 The EqF's dense figure was 5 078 640 until its group exponential stopped
 forming the integrated `SE(3)` adjoint as `6 × 6` products: at 461 thousand
@@ -477,18 +478,18 @@ common M4 parts run:
 
 | configuration | at best | against a 200 Hz IMU's 5 ms |
 |---|---|---|
-| ESKF, 21-state, `f64` | 21.1 ms | cannot keep up, nor at 100 Hz |
-| ESKF, 21-state, `f32-covariance` | 2.8 ms | fits, if the real figure is within 1.8× of the floor |
-| ESKF, 15-state | 9.4 ms | cannot at 200 Hz; marginal at 100 Hz |
+| ESKF, 21-state, `f64` | 21.6 ms | cannot keep up, nor at 100 Hz |
+| ESKF, 21-state, `f32-covariance` | 2.8 ms | fits, if the real figure is within 1.7× of the floor |
+| ESKF, 15-state | 9.7 ms | cannot at 200 Hz; marginal at 100 Hz |
 | ESKF, 15-state, `f32-covariance` | 1.6 ms | fits with a factor of three to spare |
-| EqF engine, dense `f64` | 25.5 ms | cannot keep up, nor at 50 Hz |
-| EqF engine, factored `f32` | 5.0 ms | at the floor exactly; fits 100 Hz with half the interval to spare |
+| EqF engine, dense `f64` | 26.5 ms | cannot keep up, nor at 50 Hz |
+| EqF engine, factored `f32` | 5.1 ms | cannot at 200 Hz, by 2 %; fits 100 Hz with about half the interval to spare |
 
 So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
 configuration that runs, and for the equivariant filter the factored `f32`
 covariance is the same thing. The default builds of both need a part with a
-double-precision FPU — a Cortex-M7 with FPv5-D16, an application processor —
-or an IMU rate set by what the filter can sustain. This
+double-precision FPU — [a Cortex-M7 built for it](#the-cortex-m7-with-f64-in-hardware),
+an application processor — or an IMU rate set by what the filter can sustain. This
 is the first statement this repository makes about whether its filters keep up
 with a sensor, and it is a statement about which ones cannot.
 
@@ -561,7 +562,7 @@ returned early. The number was a measurement of the filter giving up.
 
 All of these are in the `f32-covariance` build, so none of them was aliased.
 
-The mechanization, re-measured the same way against the tree as it is: skipping
+The mechanization, re-measured the same way when that build read 11 836: skipping
 it takes `add_imu` from 11 836 ticks to 9 740 with `f32-covariance`, so it
 costs **2 096 ticks, 18 %** of that build. It was 3 209 of 13 238, 24 %, before
 `Local`.
@@ -634,6 +635,91 @@ survey:
   half. Paying that in either a second copy of the Jacobian — the most subtle
   code in the filter — or a lower-precision Φ recorded for the smoother is not
   worth 4 %.
+
+### The Cortex-M7, with `f64` in hardware
+
+`thumbv7em-none-eabihf` assumes a single-precision FPU, so a plain build for a
+Cortex-M7 emulates `f64` exactly as it does on a Cortex-M4.
+`-C target-cpu=cortex-m7` is what puts it on the double-precision FPU:
+
+```bash
+cd cortex-m-harness
+RUSTFLAGS="-C target-cpu=cortex-m7" \
+CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER="qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic -semihosting-config enable=on,target=native -icount shift=0 -kernel" \
+  cargo run --release
+```
+
+The binary shows the change directly. The Cortex-M4 build has 2 985 call sites
+into soft-float routines and no `f64` instruction. The Cortex-M7 build has 3 626
+`f64` instructions and 32 call sites, every one a conversion between `f64` and a
+64-bit integer, which the FPU has no instruction for. No `f64` arithmetic is left
+in software, and CI fails if `__aeabi_dadd`, `dsub`, `dmul` or `ddiv` is linked.
+
+Instructions per `add_imu`, the mean of 200 steps:
+
+| configuration | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
+|---|---|---|---|
+| ESKF, 21-state, `f64` | 3 634 560 | **295 440** | 142 520 |
+| ESKF, 21-state, `f32-covariance` | 478 520 | **289 920** | 134 120 |
+| ESKF, 15-state (`reduced-state`) | 1 626 560 | **133 000** | |
+| ESKF, 15-state, `f32-covariance` | 274 680 | **128 360** | |
+| EqF engine, dense `f64` | 4 447 560 | **261 760** | 106 640 |
+| EqF engine, factored `f32` | 853 560 | **326 480** | 145 080 |
+
+Hardware `f64` removes 92 % of the ESKF's instructions and 94 % of the dense
+equivariant filter's, and it changes which configuration to choose:
+
+- **`f32-covariance` stops mattering.** It saves 1.9 % at 21 states and 3.5 % at
+  15, where it saves 87 % and 83 % on the Cortex-M4. What it was saving there was
+  the soft-float, and here there is none.
+- **The factored `f32` equivariant filter costs more than the dense one**, by
+  25 %. On the Cortex-M4 it is 81 % cheaper. The dense form is the cheapest
+  21-state configuration measured, 11 % under the ESKF.
+- **`opt-level = 3` is now the larger lever.** It halves the instructions, 52 %
+  fewer for the ESKF and 59 % for the dense filter, and takes code from 109 KB
+  to 200 KB.
+
+Peak stack is 20 692 bytes for the ESKF (11 420 at 15 states), 14 492 for the
+dense equivariant filter and 13 124 for the factored one. Code is 29 % smaller
+than the Cortex-M4 build, 108 656 bytes against 153 356, because the call
+sequences are gone.
+
+**These are still instruction counts, and two things stop them being read as
+time.** The first is that a `vmul.f64` and a `vmul.f32` each count as one
+instruction, while the core takes longer over the double-precision form, most of
+all for division and square root. The counts say the `f32` builds do not do less
+*work*. They do not say the `f32` builds are not faster, and the cycle counter is
+what will settle that. The second is that the Cortex-M4 floor above does not
+carry over. A Cortex-M7 can issue two instructions in a cycle, so the most a count
+supports is half a cycle per instruction: 0.37 ms for the ESKF at 400 MHz, 0.33 ms
+for the dense filter and 0.41 ms for the factored one. All are far inside a 200 Hz
+IMU's 5 ms, so the floor rules nothing out, and it rules nothing in, since FPU
+latency, cache misses and flash wait states all push the other way.
+
+**Check the part.** Many Cortex-M7s have a single-precision FPU, among them the
+STM32F72x, F73x, F74x and F75x; the STM32F76x, F77x and H7, the i.MX RT1050 and
+RT1060 and the SAME70 have double precision. On a single-precision part this
+build faults at its first `f64` instruction, so the harness reads the core's
+feature register and refuses to start, and such a part belongs with the
+Cortex-M4 advice above.
+
+### Cycles on a board
+
+[`cortex-m-hil/`](../cortex-m-hil/README.md) is the firmware for the measurement
+QEMU cannot make: it runs the three estimators on a NUCLEO-H743ZI2 at 400 MHz,
+reads the DWT cycle counter around each step, and with an X-NUCLEO-IKS01A3 shield
+runs a live LSM6DSO through each of them in real time.
+[`hil.yml`](../.github/workflows/hil.yml) is the same run as a manually started
+job on a self-hosted runner.
+
+**It has not run on hardware, and this repository has no measured cycle count.**
+What is verified is the firmware's logic, on QEMU's Cortex-M7, in CI: it builds
+for the board, it runs each estimator, it refuses a core without a
+double-precision FPU, and it drives a register-level model of the sensor that
+gives no data unless configured as the driver should configure it. Seven
+deliberate faults in the driver, alignment and statistics were each caught when
+this was written. The clock tree, I²C, RTT and the DWT path remain unproven until
+the first run on a board.
 
 ### Why this layer exists
 

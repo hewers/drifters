@@ -11,6 +11,10 @@
 //!
 //! A build script emits link arguments through a different channel, which
 //! `RUSTFLAGS` does not override.
+//!
+//! It also tells the firmware whether it was built for a double-precision FPU,
+//! so that the report can say which arithmetic it measured and a build that
+//! needs one can refuse a core without it.
 
 use std::env;
 use std::fs;
@@ -25,4 +29,16 @@ fn main() {
     println!("cargo::rustc-link-arg-bins=-Tlink.x");
     println!("cargo::rerun-if-changed=memory.x");
     println!("cargo::rerun-if-changed=build.rs");
+
+    // The target alone gives a single-precision FPU, and `target-cpu=cortex-m7`
+    // adds double precision to it.
+    println!("cargo::rustc-check-cfg=cfg(hard_f64)");
+    println!("cargo::rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    let flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    if flags
+        .split('\x1f')
+        .any(|flag| flag.ends_with("target-cpu=cortex-m7"))
+    {
+        println!("cargo::rustc-cfg=hard_f64");
+    }
 }

@@ -63,7 +63,8 @@ jobs:
     strategy:
       matrix:
         target:
-          # Cortex-M4F / M7 — hardware single-precision float, f64 in software.
+          # Cortex-M4F, and any M7 built without `target-cpu=cortex-m7`:
+          # hardware single-precision float, f64 in software.
           - thumbv7em-none-eabihf
           # Cortex-M0+ — no FPU at all, the hardest portability case.
           - thumbv6m-none-eabi
@@ -334,6 +335,81 @@ jobs:
             fi
             echo "no panic machinery linked [${features:-default}]"
           done
+
+      # `target-cpu=cortex-m7` is what turns on the double-precision FPU; the
+      # target by itself assumes single precision. `RUSTFLAGS` is written out in
+      # full because this replaces the workflow's value, it does not add to it.
+      - name: on a Cortex-M7, f64 runs in hardware and the budgets still hold
+        working-directory: cortex-m-harness
+        env:
+          RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+          CARGO_TARGET_DIR: target-m7
+          CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: >-
+            qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic
+            -semihosting-config enable=on,target=native -kernel
+        run: |
+          set -o pipefail
+          cargo run --release | tee m7.txt
+          grep -q 'f64 in hardware' m7.txt
+          for limit in PEAK:22528 PEAK_EQF:20480 PEAK_EQF_F32:20480; do
+            label=${limit%:*}
+            value=$(grep -oP "^$label\s+\K[0-9]+" m7.txt)
+            echo "$label: $value bytes"
+            test "$value" -lt "${limit#*:}" || { echo "$label over budget"; exit 1; }
+          done
+          # The point of the build. If one of these is linked the flag has
+          # stopped reaching the code, and every M7 figure describes soft-float.
+          bin=target-m7/thumbv7em-none-eabihf/release/cortex-m-harness
+          if nm "$bin" | grep -E '__aeabi_d(add|sub|mul|div)$'; then
+            echo "double-precision arithmetic is still in software"
+            exit 1
+          fi
+      - name: on a Cortex-M7, the data path must link no panic machinery
+        working-directory: cortex-m-harness
+        env:
+          RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+          CARGO_TARGET_DIR: target-m7
+        run: |
+          for features in "" "--features f32-covariance" "--features reduced-state"; do
+            cargo build --release --bin panic_audit $features
+            if nm target-m7/thumbv7em-none-eabihf/release/panic_audit | grep -i 'core9panicking'; then
+              echo "the data path can reach a panic in [$features]; see docs/testing.md Layer 10"
+              exit 1
+            fi
+            echo "no panic machinery linked [${features:-default}]"
+          done
+
+  # The firmware `hil.yml` flashes onto a board. A runner with a board attached
+  # is not something every push can have, so this keeps the firmware building
+  # for that board, and runs its emulated form, with a register-level model of
+  # the sensor, on QEMU's Cortex-M7. It measures nothing: QEMU's cycle counter
+  # does not count.
+  hil_firmware:
+    name: hardware-in-the-loop firmware (QEMU)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cortex-m-hil
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: build for the board
+        working-directory: cortex-m-hil
+        run: |
+          cargo build --release
+          cargo build --release --features physical-imu
+      - name: run under QEMU, with the simulated sensor
+        working-directory: cortex-m-hil
+        env:
+          CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: >-
+            timeout 600 qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic
+            -semihosting-config enable=on,target=native -kernel
+        run: cargo run --release --no-default-features --features qemu,physical-imu
 
   # The worked RTIC example: an IMU interrupt feeding the engine, late GNSS
   # fixes applied by rewinding, telemetry out. It runs on QEMU's STM32F405

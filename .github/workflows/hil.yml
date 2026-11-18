@@ -1,0 +1,54 @@
+# Runs `cortex-m-hil` on a real board and reads cycles from its DWT counter.
+#
+# Started by hand and never by a push or a pull request. This repository is
+# public and the job runs on a self-hosted machine with hardware attached, so
+# it must not execute code that a stranger can propose. `workflow_dispatch` can
+# only be triggered by someone with write access.
+#
+# The runner needs the labels below, a NUCLEO-H743ZI2 on USB, and Rust with the
+# `thumbv7em-none-eabihf` target and `probe-rs` on PATH. See
+# `cortex-m-hil/README.md`.
+name: hardware in the loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      physical_imu:
+        description: Also run the estimators on an X-NUCLEO-IKS01A3 shield, held still
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One board, so one run at a time.
+concurrency:
+  group: hil-nucleo-h743zi
+
+jobs:
+  measure:
+    name: cycles on NUCLEO-H743ZI2
+    runs-on: [self-hosted, nucleo-h743zi]
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+      FEATURES: ${{ inputs.physical_imu && '--features physical-imu' || '' }}
+      # The timeout goes on the runner and not on `cargo run`. Killing cargo
+      # would leave probe-rs alive, holding the pipe to `tee` open.
+      CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER: timeout 600 probe-rs run --chip STM32H743ZITx
+    steps:
+      - uses: actions/checkout@v4
+      - name: flash and run
+        working-directory: cortex-m-hil
+        run: |
+          set -o pipefail
+          # The firmware ends the run through semihosting, so the job fails if
+          # it reports a failure, faults, or is still running at the timeout.
+          cargo run --release $FEATURES 2>&1 | tee hil-report.txt
+      - name: keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-report
+          path: cortex-m-hil/hil-report.txt
+          if-no-files-found: error

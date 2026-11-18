@@ -233,19 +233,28 @@ expression — it showed up in closed loop as a lever arm ten times more confide
 than it was correct.
 
 **Not done:** timing on real silicon, and this has never run on a physical IMU.
-Everything is dataset replay plus emulation. See
-[docs/milestones.md](docs/milestones.md) for the full roadmap and what each
-milestone actually proved.
+Everything is dataset replay plus emulation. [`cortex-m-hil`](cortex-m-hil) is
+the firmware for both, built and checked under emulation, and it has not yet
+been on a board. See [docs/milestones.md](docs/milestones.md) for the full
+roadmap and what each milestone actually proved.
 
 What emulation does say about timing is a floor, and it is not a comfortable
-one. An IMU sample costs 3.5 million instructions in the default build on a
+one. An IMU sample costs 3.6 million instructions in the default build on a
 Cortex-M4, because that core's FPU is single precision and the filter's `f64`
-runs in software: at least 21 ms at 168 MHz, so it cannot follow a 100 Hz IMU
-there. `--features f32-covariance` removes 87 % of that, to 473 thousand, with
+runs in software: at least 22 ms at 168 MHz, so it cannot follow a 100 Hz IMU
+there. `--features f32-covariance` removes 87 % of that, to 479 thousand, with
 no measurable change in any result, and is the configuration to use on that
-part. The equivariant filter is 4.3 million dense, and 0.84 million with its
-covariance factored and held in `f32`, again with no measurable change. For
-a long time this repository quoted 21 398 for the default build, 165 times too
+part. The equivariant filter is 4.4 million dense, and 0.85 million with its
+covariance factored and held in `f32`, again with no measurable change.
+
+A Cortex-M7 with a double-precision FPU is a different problem, once built with
+`-C target-cpu=cortex-m7`. The same sample is 295 thousand instructions for the
+ESKF and 262 thousand for the dense equivariant filter. `f32-covariance` then
+saves under 2 %, and the factored `f32` filter costs 25 % more than the dense
+one. Those are instruction counts, and double-precision instructions take that
+core longer, so which build is fastest there still needs a board.
+
+For a long time this repository quoted 21 398 for the default build, 165 times too
 few, from a counter in the wrong unit that had also wrapped;
 [docs/testing.md](docs/testing.md#instructions-retired) has the numbers and how
 they were got wrong.
@@ -265,6 +274,7 @@ drifters-cli       std — replay, estimator comparison, NEES and tuning
 examples/rtic-imu  firmware — IMU interrupt to engine to telemetry under RTIC,
                    run on QEMU's STM32F405 in CI
 cortex-m-harness   firmware — stack, size and panic measurements under QEMU
+cortex-m-hil       firmware — DWT cycle counts and a live IMU on a NUCLEO-H743ZI2
 ```
 
 ## Quick start
@@ -326,6 +336,12 @@ drifters-filter = { version = "0.1", features = ["f32-covariance", "defmt"] }
 `f32-covariance` puts the covariance arithmetic on the single-precision FPU, and
 `defmt` gives every public type a `defmt::Format` for logging. Neither feature
 allocates.
+
+On a Cortex-M7 with a double-precision FPU, such as an STM32H7, build with
+`RUSTFLAGS="-C target-cpu=cortex-m7"` to run `f64` in hardware. The target alone
+assumes single precision and leaves it in software. Many Cortex-M7 parts do have
+only single precision, and on those this flag makes the firmware fault, so check
+the datasheet.
 
 The equivariant filter is driven the same way, and code that does not care
 which it has can take either:

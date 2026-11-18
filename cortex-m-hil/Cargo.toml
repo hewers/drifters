@@ -1,0 +1,49 @@
+[package]
+name = "cortex-m-hil"
+description = "Cycle counts for drifters on a Cortex-M7 board, read from the DWT through a debug probe"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Excluded from the main workspace, like `cortex-m-harness`: it is firmware,
+# with its own target and linker configuration.
+[workspace]
+
+[dependencies]
+drifters-core = { path = "../crates/drifters-core" }
+drifters-filter = { path = "../crates/drifters-filter" }
+drifters-eqf = { path = "../crates/drifters-eqf" }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+# The exit status on both targets, which `probe-rs run` and QEMU both honour,
+# and the text output under QEMU. `probe-rs run` does not forward semihosting
+# console writes, so on the board the text goes over RTT.
+cortex-m-semihosting = "0.5"
+libm = "0.2"
+
+stm32h7xx-hal = { version = "0.16", features = ["stm32h743v", "rt"], optional = true }
+rtt-target = { version = "0.6", optional = true }
+
+[features]
+default = ["nucleo-h743zi"]
+## NUCLEO-H743ZI2: cycles from the DWT, text over RTT.
+nucleo-h743zi = ["dep:stm32h7xx-hal", "dep:rtt-target"]
+## QEMU's `mps2-an500`. It has no cycle counter, so this checks that the
+## firmware runs and judges itself, and measures nothing.
+qemu = []
+## Also run an LSM6DSO through every estimator: the real sensor on the board,
+## a register-level simulation of it under QEMU.
+physical-imu = []
+## Passed through to the filter, as in `cortex-m-harness`.
+reduced-state = ["drifters-filter/reduced-state"]
+f32-covariance = ["drifters-filter/f32-covariance"]
+
+[profile.release]
+# As `cortex-m-harness` builds, so the two sets of numbers compare. Override
+# with CARGO_PROFILE_RELEASE_OPT_LEVEL=3 for the fast build.
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true
+overflow-checks = false

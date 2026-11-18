@@ -243,7 +243,8 @@ Filter consistency came out **conservative**: mean NIS 1.459 against an expected
 
 ## M8 — Embedded hardening
 
-- [x] Bare-metal build and run on Cortex-M4F / M7 (`cortex-m-harness`, QEMU)
+- [x] Bare-metal build and run on Cortex-M4F / M7 (`cortex-m-harness`, QEMU),
+      the M7 with `f64` on its double-precision FPU
 - [x] Stack-usage measurement, and the reduction it showed was needed
 - [x] In-place covariance propagation
 - [x] Data path links no panic machinery, checked in CI
@@ -332,12 +333,12 @@ single-precision is most of the soft-float question. Per `add_imu` on
 
 | configuration | instructions |
 |---|---|
-| ESKF, 21-state, `f64` | 3 538 560 |
-| ESKF, 21-state, `f32-covariance` | **473 440** |
-| ESKF, 15-state (`reduced-state`) | 1 578 080 |
-| ESKF, 15-state, `f32-covariance` | **270 560** |
-| EqF engine, dense `f64` | 4 285 440 |
-| EqF engine, factored `f32` | **835 800** |
+| ESKF, 21-state, `f64` | 3 634 560 |
+| ESKF, 21-state, `f32-covariance` | **478 520** |
+| ESKF, 15-state (`reduced-state`) | 1 626 560 |
+| ESKF, 15-state, `f32-covariance` | **274 680** |
+| EqF engine, dense `f64` | 4 447 560 |
+| EqF engine, factored `f32` | **853 560** |
 
 **This table replaced one that was wrong.** It read 21 398, 11 868 and 5 911,
 labelled instructions. They were SysTick ticks, forty instructions each, and
@@ -367,13 +368,25 @@ predate the correction are in ticks, and the ones taken in the `f64` or
       wrong answer first, of which there are now four.
 - [x] **Which configurations can keep up at all.** A floor, from the count
       alone: a Cortex-M4 retires about one instruction per cycle at best, so at
-      168 MHz a 21-state `f64` `add_imu` takes at least 21 ms and the
-      equivariant filter's at least 30 ms. Neither can follow a 100 Hz IMU on
+      168 MHz a 21-state `f64` `add_imu` takes at least 22 ms and the
+      equivariant filter's at least 26 ms. Neither can follow a 100 Hz IMU on
       that part, let alone a 200 Hz one. With `f32-covariance` the floor is
       2.8 ms at 21 states and 1.6 ms at 15, which fits inside 5 ms if the real
       figure is close to it. Whether it is close is the first item below.
 
+- [x] **What a double-precision FPU changes.** Built with
+      `-C target-cpu=cortex-m7` and run on `mps2-an500`, no `f64` arithmetic
+      stays in software and an `add_imu` is 295 440 instructions for the ESKF,
+      261 760 for the dense equivariant filter and 326 480 for the factored
+      `f32` one. `f32-covariance` saves 1.9 %. Instruction counts again, and
+      double-precision instructions take longer, so the choice between them
+      waits on the item below. See [testing.md](testing.md#the-cortex-m7-with-f64-in-hardware).
+
 ### Still needs a board
+
+[`cortex-m-hil`](../cortex-m-hil/README.md) is the firmware for the first and
+third of these and for a run on a physical IMU, with a manually started CI job.
+It is checked under QEMU and has not yet run on hardware.
 
 - [ ] Cycle-count benchmarks for `predict` and `update` on real Cortex-M4F/M7
 - [ ] Flash wait-state and cache effects at realistic clock speeds

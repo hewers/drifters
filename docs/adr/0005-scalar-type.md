@@ -5,10 +5,12 @@
 ## Context
 
 `drifters_core::F` is an alias for `f64`, used by every state, measurement and
-matrix in the stack. Cortex-M4F and M7 have single-precision FPUs, so `f64`
-arithmetic on those parts is emulated in software by `compiler-builtins`. That
-is the largest performance question the project has: whether a narrower scalar
-is available anywhere it would matter.
+matrix in the stack. The Cortex-M4F and many Cortex-M7 parts have
+single-precision FPUs, so `f64` arithmetic on them is emulated in software by
+`compiler-builtins`. That is the largest performance question the project has:
+whether a narrower scalar is available anywhere it would matter. This record
+first said every Cortex-M7 was such a part. Those with a double-precision FPU
+are not, once built for it; see the last consequence below.
 
 It needs measurement rather than intuition. "Position needs `f64`" is easy to
 assert and easy to get wrong in either direction.
@@ -105,3 +107,12 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
   emulate `f32` too, and gain only the smaller footprint.
 - The 15-state reduced configuration remains the cheapest large saving, because
   it removes work and memory without touching numerics.
+- **On a Cortex-M7 with a double-precision FPU, built with
+  `-C target-cpu=cortex-m7`, `f32-covariance` buys almost no instructions:**
+  295 thousand per `add_imu` against 290 thousand, 1.9 %, where the Cortex-M4F
+  saves 87 %. The equivariant filter's factored `f32` form costs 25 % *more* than
+  its dense `f64` one there. The decision stands, since the feature costs no
+  accuracy and halves the covariance, but its reason is specific to parts whose
+  `f64` is in software. Whether `f32` still wins in cycles on the Cortex-M7, where
+  double-precision instructions take longer, needs a board. See
+  [testing.md](../testing.md#the-cortex-m7-with-f64-in-hardware).

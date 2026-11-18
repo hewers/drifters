@@ -1,0 +1,10 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+# `target-cpu` is what puts `f64` on the Cortex-M7's FPU. The `RUSTFLAGS`
+# environment variable replaces this key rather than adding to it, so
+# `build.rs` refuses to build without the flag instead of quietly producing
+# soft-float firmware and timing that.
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "target-cpu=cortex-m7"]
+runner = "probe-rs run --chip STM32H743ZITx"

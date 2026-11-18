@@ -78,13 +78,13 @@
 //! refresh; over all phases the mean is `L + (W − 1) / 2`.
 //!
 //! No timing exists for a target, but the count does. An `add_imu` on
-//! Cortex-M4 retires 3.5 million instructions in the default build and
-//! 473 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
-//! the 300 ms case between 212 and 421 million instructions by default and
-//! between 28 and 56 million with `f32-covariance`, arriving at once. That is
+//! Cortex-M4 retires 3.6 million instructions in the default build and
+//! 479 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
+//! the 300 ms case between 218 and 433 million instructions by default and
+//! between 29 and 57 million with `f32-covariance`, arriving at once. That is
 //! the number to hold against the gap between two IMU samples, and it does
 //! not fit in one: at an instruction per cycle, which is the best that core
-//! does, the smaller range is 34 to 67 sample periods of work at 168 MHz and
+//! does, the smaller range is 34 to 68 sample periods of work at 168 MHz and
 //! 200 Hz. A replay is not spread over several calls, so on such a part the
 //! samples that arrive during one have to be queued by the caller.
 //!
