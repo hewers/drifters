@@ -348,6 +348,7 @@ fn write_figure(path: &str, svg: &str) -> std::io::Result<()> {
 ///   --nhc <lat[,vert]>     non-holonomic constraints, m/s
 ///   --per-kind-rejections  count gate rejections separately for each aid
 ///   --zaru <sigma>         zero-angular-rate updates while CAN speed reads zero, rad/s
+///   --wheel-scale          estimate the CAN speed's scale factor against the fixes
 ///   --outage <start,len>   withhold fixes, seconds after the filter starts
 ///   --settle <s>           unscored seconds after the start (default 10)
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
@@ -398,6 +399,10 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             },
             per_kind_rejections: args.iter().any(|a| a == "--per-kind-rejections"),
             zaru_sigma: flag(args, "--zaru").map(str::parse).transpose()?,
+            wheel_scale: args
+                .iter()
+                .any(|a| a == "--wheel-scale")
+                .then(drifters_filter::WheelScaleConfig::default),
             outage: pair("--outage")?,
             settle: flag(args, "--settle")
                 .map(str::parse)
@@ -471,6 +476,22 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         rms(&heading).to_degrees(),
         percentile(&heading, 0.95).to_degrees()
     );
+    let scales: Vec<f64> = report
+        .segments
+        .iter()
+        .filter_map(|s| s.wheel_scale)
+        .filter(|(_, used)| *used > 0)
+        .map(|(scale, _)| scale)
+        .collect();
+    if !scales.is_empty() {
+        println!(
+            "wheel-speed scale: median {:.4}, range {:.4} to {:.4}, over {} segments",
+            percentile(&scales, 0.5),
+            percentile(&scales, 0.0),
+            percentile(&scales, 1.0),
+            scales.len()
+        );
+    }
     let nis: Vec<f64> = report
         .segments
         .iter()

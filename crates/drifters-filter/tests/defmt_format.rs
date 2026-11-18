@@ -16,6 +16,7 @@ use drifters_core::types::{Attitude, GnssFix, ImuError, ImuNoise, ImuSample, Nav
 use drifters_filter::rewind::Aid;
 use drifters_filter::{
     ConfigError, GinsEngine, GinsOptions, RewindEngine, StationarityConfig, StationarityDetector,
+    WheelScaleConfig, WheelSpeedScale,
 };
 
 fn implements_format<T: defmt::Format>() {}
@@ -50,6 +51,8 @@ fn the_types_firmware_logs_implement_format() {
     implements_format::<GinsOptions>();
     implements_format::<StationarityConfig>();
     implements_format::<StationarityDetector<100>>();
+    implements_format::<WheelScaleConfig>();
+    implements_format::<WheelSpeedScale>();
     implements_format::<GinsEngine>();
     implements_format::<RewindEngine<32, 8>>();
 }

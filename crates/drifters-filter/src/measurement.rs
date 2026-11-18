@@ -41,6 +41,7 @@ use drifters_core::frames::Ned;
 use drifters_core::math::Real;
 use drifters_core::math::{wrap_pi, Mat3, Matrix, Vec3};
 use drifters_core::mounting::VehicleMounting;
+use drifters_core::time::GpsTime;
 use drifters_core::types::{ImuSample, Pva};
 use drifters_core::F;
 
@@ -328,8 +329,9 @@ pub fn nonholonomic_mounted(
 ///
 /// A real odometer has a scale-factor error (tyre wear, pressure, load) that
 /// this model does not estimate — the 21-state vector has no odometer scale
-/// state. Absorb it into `sigma`, or add a 22nd state if the odometer is
-/// load-bearing over long outages.
+/// state. [`WheelSpeedScale`] estimates it against GNSS ground speed: divide
+/// it out before calling this, and widen `sigma` by what is still unknown
+/// about it.
 ///
 /// This form takes the sensor's axes to be the vehicle's. See
 /// [`wheel_speed_mounted`].
@@ -695,6 +697,364 @@ impl<const N: usize> StationarityDetector<N> {
 #[inline]
 pub fn height_reference_looks_plausible(pva: &Pva, height: F) -> bool {
     Real::abs(height - pva.position.height) < 200.0
+}
+
+/// Settings for [`WheelSpeedScale`].
+///
+/// `#[non_exhaustive]` (`docs/adr/0010`): start from [`Default`] and assign
+/// the fields to change.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub struct WheelScaleConfig {
+    /// One-sigma prior on the scale factor, as a fraction: 0.02 is ±2 %.
+    ///
+    /// Also the ceiling the uncertainty grows back to without observations, so
+    /// a long GNSS outage cannot leave it claiming more than it started with.
+    pub initial_std: F,
+    /// How fast the scale factor may wander, one sigma per √second: tyre
+    /// pressure and temperature change it over minutes.
+    pub drift: F,
+    /// Below this GNSS speed nothing is compared, m/s. A wheel-speed sensor's
+    /// quantisation and the GNSS speed's own noise are too large a fraction of
+    /// a slow reading to say anything about a percent of scale.
+    pub min_speed: F,
+    /// One-sigma disagreement between the wheel speed and the true speed that
+    /// is not scale, m/s: quantisation, and the timing between the two.
+    pub wheel_std: F,
+}
+
+impl Default for WheelScaleConfig {
+    fn default() -> Self {
+        Self {
+            initial_std: 0.02,
+            drift: 3.0e-5,
+            min_speed: 5.0,
+            wheel_std: 0.1,
+        }
+    }
+}
+
+/// Estimates a wheel-speed sensor's scale factor against GNSS ground speed.
+///
+/// Car wheel-speed sensors read a percent or two off: they count wheel
+/// revolutions and assume a tyre radius, which wear, pressure and load all
+/// change. At 28 m/s one percent is 0.28 m/s, about the sigma a filter has to
+/// give the wheel speed to survive it, and over a thirty-second outage it is
+/// 8 m of along-track error on its own.
+///
+/// The model is `wheel = scale × speed`, with the speed from GNSS, and this is
+/// a one-state Kalman filter on `scale`. It compares against GNSS rather than
+/// against the navigation filter's own velocity on purpose: that velocity is
+/// pulled toward the wheel speed by the very updates this corrects, and a scale
+/// estimated from it would confirm whatever scale it already had. GNSS ground
+/// speed has no such loop. It is horizontal, so on a 5 % grade it reads 0.1 %
+/// below the speed along the road, which is below the resolution this
+/// estimates to.
+///
+/// A separate estimator rather than a 22nd state in the filter, because the
+/// filter's state is sized at compile time and every factor, snapshot and
+/// wire message would pay for it, including on vehicles with no odometer.
+/// Caller-owned, like [`StationarityDetector`]: feed it a GNSS speed and the
+/// wheel speed at the same instant, then [`correct`](Self::correct) each wheel
+/// speed and widen its sigma with [`sigma_for`](Self::sigma_for) before
+/// [`GinsEngine::apply_wheel_speed`](crate::GinsEngine::apply_wheel_speed).
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct WheelSpeedScale {
+    config: WheelScaleConfig,
+    scale: F,
+    variance: F,
+    last: Option<GpsTime>,
+    observations: u32,
+}
+
+impl WheelSpeedScale {
+    /// A scale of one, as uncertain as `config` says.
+    pub fn new(config: WheelScaleConfig) -> Self {
+        Self {
+            config,
+            scale: 1.0,
+            variance: config.initial_std * config.initial_std,
+            last: None,
+            observations: 0,
+        }
+    }
+
+    /// Compare a wheel speed with a GNSS ground speed taken at the same
+    /// instant, both m/s. Returns whether it was used.
+    ///
+    /// Refused below [`WheelScaleConfig::min_speed`], when either speed or the
+    /// settings are not finite, and when the disagreement fails a chi-squared
+    /// gate at 99.9 %: a wheel slipping or a GNSS speed glitch is not a scale
+    /// factor. A refusal leaves the scale as it was.
+    pub fn observe(&mut self, time: GpsTime, wheel: F, gnss_speed: F, gnss_speed_std: F) -> bool {
+        // The scale wanders between looks; its uncertainty grows with the
+        // time since the last one, up to the prior and no further.
+        let ceiling = self.config.initial_std * self.config.initial_std;
+        if let Some(last) = self.last {
+            let dt = time.seconds_since(last);
+            if dt > 0.0 {
+                let grown = self.variance + self.config.drift * self.config.drift * dt;
+                self.variance = if grown < ceiling { grown } else { ceiling };
+            }
+        }
+        self.last = Some(time);
+
+        if !(gnss_speed_std > 0.0 && gnss_speed >= self.config.min_speed && wheel > 0.0) {
+            return false;
+        }
+        let innovation = wheel - self.scale * gnss_speed;
+        let noise = self.config.wheel_std * self.config.wheel_std
+            + self.scale * self.scale * gnss_speed_std * gnss_speed_std;
+        let s = gnss_speed * gnss_speed * self.variance + noise;
+        // Written so that anything not finite fails it, whichever input or
+        // setting it came from: the scale divides every later wheel speed, so
+        // one NaN admitted here would never leave.
+        let passes = s > 0.0
+            && s.is_finite()
+            && innovation * innovation <= crate::eskf::chi_squared::P999[1] * s;
+        if !passes {
+            return false;
+        }
+        let gain = self.variance * gnss_speed / s;
+        self.scale += gain * innovation;
+        self.variance *= noise / s;
+        self.observations = self.observations.saturating_add(1);
+        true
+    }
+
+    /// The scale factor: what the sensor reads per unit of true speed.
+    #[inline]
+    pub fn scale(&self) -> F {
+        self.scale
+    }
+
+    /// One-sigma uncertainty of the scale factor.
+    #[inline]
+    pub fn std(&self) -> F {
+        Real::sqrt(self.variance)
+    }
+
+    /// How many comparisons have been used.
+    #[inline]
+    pub fn observations(&self) -> u32 {
+        self.observations
+    }
+
+    /// The wheel speed with the scale divided out.
+    #[inline]
+    pub fn correct(&self, wheel: F) -> F {
+        wheel / self.scale
+    }
+
+    /// `sigma` widened by what is still unknown about the scale, at this
+    /// wheel speed: `√(σ² + (v σₛ / s)²)`, `v` being the corrected speed.
+    pub fn sigma_for(&self, wheel: F, sigma: F) -> F {
+        let unknown = self.correct(wheel) * self.std() / self.scale;
+        Real::sqrt(sigma * sigma + unknown * unknown)
+    }
+}
+
+#[cfg(test)]
+mod wheel_scale_tests {
+    use super::*;
+
+    /// A deterministic generator, so a failure is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn gaussian(&mut self) -> F {
+            // Sum of twelve uniforms, less six: mean zero, variance one.
+            let mut acc = 0.0;
+            for _ in 0..12 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                acc += (self.0 >> 11) as F / (1u64 << 53) as F;
+            }
+            acc - 6.0
+        }
+    }
+
+    fn drive(estimator: &mut WheelSpeedScale, scale: F, seconds: usize, rng: &mut Rng) {
+        for k in 0..seconds * 10 {
+            let t = GpsTime::from_tow(100.0 + k as F * 0.1);
+            let speed = 20.0 + 8.0 * Real::sin(k as F * 0.01);
+            let wheel = scale * speed + 0.05 * rng.gaussian();
+            let gnss = speed + 0.1 * rng.gaussian();
+            estimator.observe(t, wheel, gnss, 0.1);
+        }
+    }
+
+    #[test]
+    fn a_wheel_reading_one_percent_low_is_found() {
+        let mut rng = Rng(7);
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        drive(&mut e, 0.99, 30, &mut rng);
+        assert!((e.scale() - 0.99).abs() < 1.0e-3, "scale {}", e.scale());
+        assert!(e.std() < 1.0e-3, "std {}", e.std());
+        // The claim is honest: the error sits inside a few sigma of it.
+        assert!((e.scale() - 0.99).abs() < 4.0 * e.std());
+        assert_eq!(e.observations(), 300);
+        let corrected = e.correct(0.99 * 25.0);
+        assert!((corrected - 25.0).abs() < 0.03, "{corrected}");
+    }
+
+    #[test]
+    fn nothing_slow_or_reversing_is_compared() {
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        let t = GpsTime::from_tow(1.0);
+        assert!(!e.observe(t, 3.0, 3.0, 0.1), "below the minimum speed");
+        assert!(!e.observe(t, 20.0, 20.0, 0.0), "a fix claiming no noise");
+        assert!(!e.observe(t, -20.0, 20.0, 0.1), "reversing");
+        assert!(!e.observe(t, 0.0, 20.0, 0.1), "a stopped wheel");
+        assert_eq!(e.observations(), 0);
+        assert_eq!(e.scale(), 1.0);
+        // The minimum itself is compared.
+        assert!(e.observe(t, 5.0, 5.0, 0.1));
+    }
+
+    #[test]
+    fn a_wide_prior_does_not_let_a_reversing_wheel_through_the_gate() {
+        // At ±100 % the gate would pass this; the scale it produced would be
+        // negative, and would flip the sign of every later wheel speed.
+        let mut e = WheelSpeedScale::new(WheelScaleConfig {
+            initial_std: 1.0,
+            ..WheelScaleConfig::default()
+        });
+        let t = GpsTime::from_tow(1.0);
+        assert!(!e.observe(t, -20.0, 20.0, 0.1));
+        assert!(!e.observe(t, 0.0, 20.0, 0.1));
+        assert_eq!((e.scale(), e.observations()), (1.0, 0));
+    }
+
+    #[test]
+    fn the_gate_is_the_99_9th_percentile_of_one_degree_of_freedom() {
+        let config = WheelScaleConfig::default();
+        let (noise, s) = (0.01 + 0.01, 400.0 * 4.0e-4 + 0.02);
+        assert!(noise < s);
+        let edge = (crate::eskf::chi_squared::P999[1] * s).sqrt();
+        let t = GpsTime::from_tow(1.0);
+        let mut inside = WheelSpeedScale::new(config);
+        assert!(inside.observe(t, 20.0 + 0.999 * edge, 20.0, 0.1));
+        let mut outside = WheelSpeedScale::new(config);
+        assert!(!outside.observe(t, 20.0 + 1.001 * edge, 20.0, 0.1));
+    }
+
+    #[test]
+    fn a_clock_stepping_back_does_not_shrink_the_uncertainty() {
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        assert!(e.observe(GpsTime::from_tow(100.0), 20.0, 20.0, 0.1));
+        let settled = e.std();
+        e.observe(GpsTime::from_tow(10.0), 2.0, 2.0, 0.1);
+        assert_eq!(e.std(), settled);
+    }
+
+    #[test]
+    fn nothing_that_is_not_finite_reaches_the_scale() {
+        let t = GpsTime::from_tow(1.0);
+        for (wheel, gnss, std) in [
+            (F::NAN, 20.0, 0.1),
+            (F::INFINITY, 20.0, 0.1),
+            (20.0, F::NAN, 0.1),
+            (20.0, F::INFINITY, 0.1),
+            (20.0, 20.0, F::NAN),
+            (20.0, 20.0, F::INFINITY),
+        ] {
+            let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+            assert!(!e.observe(t, wheel, gnss, std), "{wheel} {gnss} {std}");
+            assert_eq!((e.scale(), e.observations()), (1.0, 0));
+        }
+        let broken: [fn(&mut WheelScaleConfig); 5] = [
+            |c| c.initial_std = F::NAN,
+            |c| c.initial_std = F::INFINITY,
+            |c| c.wheel_std = F::NAN,
+            |c| c.wheel_std = F::INFINITY,
+            |c| c.min_speed = F::NAN,
+        ];
+        for (i, breakage) in broken.iter().enumerate() {
+            let mut config = WheelScaleConfig::default();
+            breakage(&mut config);
+            let mut e = WheelSpeedScale::new(config);
+            assert!(!e.observe(t, 20.0, 20.0, 0.1), "setting {i}");
+            assert_eq!((e.scale(), e.observations()), (1.0, 0), "setting {i}");
+        }
+    }
+
+    #[test]
+    fn a_comparison_with_no_uncertainty_at_all_is_refused() {
+        // No prior, no wheel noise, and a GNSS sigma whose square underflows:
+        // the innovation variance is exactly zero, and a zero innovation
+        // would pass the gate and divide by it.
+        let mut e = WheelSpeedScale::new(WheelScaleConfig {
+            initial_std: 0.0,
+            wheel_std: 0.0,
+            ..WheelScaleConfig::default()
+        });
+        assert!(!e.observe(GpsTime::from_tow(1.0), 20.0, 20.0, 1.0e-200));
+        assert_eq!((e.scale(), e.observations()), (1.0, 0));
+    }
+
+    #[test]
+    fn a_glitch_is_gated_rather_than_believed() {
+        let mut rng = Rng(11);
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        drive(&mut e, 0.99, 20, &mut rng);
+        let (before, used) = (e.scale(), e.observations());
+        // A wheel spinning on ice reads a third high.
+        assert!(!e.observe(GpsTime::from_tow(500.0), 26.6, 20.0, 0.1));
+        assert_eq!((e.scale(), e.observations()), (before, used));
+    }
+
+    #[test]
+    fn the_uncertainty_grows_back_without_observations_but_not_past_the_prior() {
+        let mut rng = Rng(13);
+        let config = WheelScaleConfig::default();
+        let mut e = WheelSpeedScale::new(config);
+        drive(&mut e, 1.01, 20, &mut rng);
+        let settled = e.std();
+        // An hour later, a reading too slow to compare: only the drift acts.
+        let hour = 100.0 + 3_600.0;
+        e.observe(GpsTime::from_tow(hour), 2.0, 2.0, 0.1);
+        let expected = (settled * settled + config.drift * config.drift * 3_580.1).sqrt();
+        assert!((e.std() - expected).abs() < 1e-9, "{} {expected}", e.std());
+        // A week of it would be 2.3 %, past the 2 % prior, so it stops there.
+        e.observe(GpsTime::from_tow(hour + 604_800.0), 2.0, 2.0, 0.1);
+        assert!((e.std() - config.initial_std).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_observation_narrows_the_scale_as_a_kalman_update_does() {
+        let e0 = WheelSpeedScale::new(WheelScaleConfig::default());
+        let mut e = e0;
+        assert!(e.observe(GpsTime::from_tow(1.0), 19.9, 20.0, 0.2));
+        // R = 0.1² + 0.2², S = 20² · 0.02² + R.
+        let (r, s) = (0.05, 400.0 * 4.0e-4 + 0.05);
+        let gain = 4.0e-4 * 20.0 / s;
+        assert!((e.scale() - (1.0 + gain * (19.9 - 20.0))).abs() < 1e-12);
+        assert!((e.std() * e.std() - 4.0e-4 * r / s).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_sigma_widens_with_what_is_unknown() {
+        let fresh = WheelSpeedScale::new(WheelScaleConfig::default());
+        // ±2 % at 25 m/s is 0.5 m/s, which dominates a 0.1 m/s sensor sigma.
+        let widened = fresh.sigma_for(25.0, 0.1);
+        assert!(
+            (widened - (0.1_f64 * 0.1 + 0.5 * 0.5).sqrt()).abs() < 1e-12,
+            "{widened}"
+        );
+    }
+
+    #[test]
+    fn the_sigma_is_of_the_corrected_speed() {
+        let mut e = WheelSpeedScale::new(WheelScaleConfig::default());
+        e.scale = 0.5;
+        // 10 m/s read is 20 m/s true; σₛ/s doubles the fraction, so 0.8 m/s.
+        assert!((e.sigma_for(10.0, 0.0) - 0.8).abs() < 1e-12);
+        assert_eq!(e.correct(10.0), 20.0);
+    }
 }
 
 #[cfg(test)]

@@ -62,7 +62,7 @@ use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_core::F;
-use drifters_filter::{GinsEngine, GinsOptions, GnssQueued};
+use drifters_filter::{GinsEngine, GinsOptions, GnssQueued, WheelScaleConfig, WheelSpeedScale};
 
 use crate::kfgins::DataError;
 use crate::npy;
@@ -427,6 +427,11 @@ pub struct ReplayOptions {
     /// bias walks the heading and nothing else observes it; see
     /// [`drifters_filter::measurement::zero_angular_rate`].
     pub zaru_sigma: Option<F>,
+    /// Estimate the wheel-speed scale factor against the fixes' ground speed,
+    /// and take it out of the wheel speed before applying it. Fixes withheld
+    /// by [`Self::outage`] are not compared, so an outage runs on the scale
+    /// learned before it.
+    pub wheel_scale: Option<WheelScaleConfig>,
     /// Withhold fixes for `(start, length)` seconds after the filter starts.
     pub outage: Option<(F, F)>,
     /// Seconds after the filter starts that are not scored.
@@ -441,6 +446,7 @@ impl Default for ReplayOptions {
             nhc_sigma: None,
             per_kind_rejections: false,
             zaru_sigma: None,
+            wheel_scale: None,
             outage: None,
             settle: 10.0,
         }
@@ -468,6 +474,8 @@ pub struct SegmentReport {
     pub nis: Running,
     /// Fixes the gate rejected.
     pub rejected: u64,
+    /// The wheel-speed scale at the end, and how many comparisons made it.
+    pub wheel_scale: Option<(F, u32)>,
 }
 
 fn interpolate(series: &[(F, F)], t: F) -> Option<F> {
@@ -542,6 +550,7 @@ pub fn replay(
     // The start fix is the initial state, not a measurement of it.
     let mut next = start + 1;
     let mut last_aid = F::NEG_INFINITY;
+    let mut wheel_scale = options.wheel_scale.map(WheelSpeedScale::new);
     let mut outage_max: F = 0.0;
     let mut outage_end = None;
 
@@ -571,6 +580,13 @@ pub fn replay(
                     scored = true;
                 }
             }
+            if let (Some(estimator), Some(v), Some(wheel)) = (
+                wheel_scale.as_mut(),
+                fix.velocity,
+                interpolate(&segment.speed, tf),
+            ) {
+                estimator.observe(fix.time, wheel, v.horizontal_norm(), fix.velocity_std.x);
+            }
             // The reader sorted the fixes and each is due inside the next
             // interval, so this queues; anything else was never offered.
             offered |= matches!(
@@ -593,7 +609,12 @@ pub fn replay(
         if t - last_aid >= 0.1 {
             last_aid = t;
             if let (Some(sigma), Some(v)) = (options.wheel_sigma, interpolate(&segment.speed, t)) {
-                engine.apply_wheel_speed(v, sigma)?;
+                match wheel_scale.as_ref() {
+                    Some(scale) => {
+                        engine.apply_wheel_speed(scale.correct(v), scale.sigma_for(v, sigma))?
+                    }
+                    None => engine.apply_wheel_speed(v, sigma)?,
+                };
             }
             if let Some(sigma) = options.nhc_sigma {
                 engine.apply_nonholonomic(sigma, 3.0)?;
@@ -631,6 +652,7 @@ pub fn replay(
         }
     }
     report.outage = outage_end.map(|end| (end, outage_max));
+    report.wheel_scale = wheel_scale.map(|e| (e.scale(), e.observations()));
     Ok(report)
 }
 
