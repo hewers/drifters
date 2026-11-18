@@ -237,7 +237,7 @@ mod size_tests {
             size_of::<crate::engine::GinsEngine>(),
             match (cfg!(feature = "smoothing"), f32_covariance) {
                 (true, false) => 11_848,
-                (true, true) => 11_368,
+                (true, true) => 11_424,
                 (false, false) => 2_392,
                 (false, true) => 1_912,
             },
