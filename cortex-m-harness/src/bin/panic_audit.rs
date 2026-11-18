@@ -25,7 +25,7 @@ use drifters_core::mounting::{MountingEstimator, VehicleMounting};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine, Ud};
-use drifters_filter::{GinsEngine, GinsOptions, RewindEngine};
+use drifters_filter::{GinsEngine, GinsOptions, RewindEngine, WheelScaleConfig, WheelSpeedScale};
 
 /// Abort without formatting. `panic-semihosting` would drag in `core::fmt`,
 /// which is exactly what this binary is trying to exclude.
@@ -99,6 +99,8 @@ fn main() -> ! {
     // So does calibrating a magnetometer, in both of its forms.
     let mut ellipsoid = EllipsoidFit::default();
     let mut aided_fit = AidedMagFit::default();
+    // As does the wheel-speed scale, on the fixes and the odometer.
+    let mut wheel_scale = WheelSpeedScale::new(WheelScaleConfig::default());
 
     // The initial alignment runs before any of the above has a state to start
     // from, on the same interrupt.
@@ -165,7 +167,8 @@ fn main() -> ! {
         let _ = engine.apply_zero_rate(Vec3::splat(0.01));
         let _ = engine.apply_height(20.0, 0.5);
         let _ = engine.apply_nonholonomic((0.1, 0.1), 0.5);
-        let _ = engine.apply_wheel_speed(0.0, 0.1);
+        let _ = wheel_scale.observe(GpsTime::from_tow(t), 20.0, 20.0, 0.2);
+        let _ = engine.apply_wheel_speed(wheel_scale.correct(0.0), wheel_scale.sigma_for(0.0, 0.1));
         let _ = mounting.update(&engine.nav_state(), &engine.pva_std(), sample.gyro());
         if let Some(found) = mounting.estimate() {
             let _ = engine.set_vehicle_mounting(found.mounting);

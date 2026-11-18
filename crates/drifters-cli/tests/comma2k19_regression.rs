@@ -24,11 +24,14 @@
 use std::path::{Path, PathBuf};
 
 use drifters_cli::{run_comma, CommaOptions};
+use drifters_filter::WheelScaleConfig;
 
 /// Observed 0.426 m against the fixes' 0.432 m.
 const MAX_HORIZONTAL_RMS_M: f64 = 0.6;
 /// Observed 3.97 m with wheel speed and NHC, against 40.9 m on the IMU alone.
 const MAX_AIDED_OUTAGE_M: f64 = 10.0;
+/// The same outage with the wheel speed's scale estimated beforehand.
+const MAX_SCALED_OUTAGE_M: f64 = 1.5;
 
 fn segment() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -64,22 +67,37 @@ fn the_example_segment_lands_on_the_fixes_and_bridges_an_outage() {
     let (fix, eskf) = (rms(&s.fix_horizontal), rms(&s.filter_horizontal));
     eprintln!("horizontal RMS: fixes {fix:.3} m, ESKF {eskf:.3} m");
 
-    let outage = |aided: bool| -> f64 {
+    let outage = |aided: bool, scaled: bool| -> (f64, Option<(f64, u32)>) {
         let mut options = fitted();
         options.replay.outage = Some((20.0, 30.0));
         if aided {
             options.replay.wheel_sigma = Some(0.3);
             options.replay.nhc_sigma = Some((0.1, 0.5));
         }
+        if scaled {
+            options.replay.wheel_scale = Some(WheelScaleConfig::default());
+        }
         let report = run_comma(&dir, &options).expect("the segment replays");
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);
-        report.segments[0]
-            .outage
-            .expect("the outage fits in the segment")
-            .0
+        let s = &report.segments[0];
+        (
+            s.outage.expect("the outage fits in the segment").0,
+            s.wheel_scale,
+        )
     };
-    let (alone, aided) = (outage(false), outage(true));
-    eprintln!("30 s outage: IMU alone {alone:.2} m, with wheel speed and NHC {aided:.2} m");
+    let ((alone, _), (aided, _)) = (outage(false, false), outage(true, false));
+    let (scaled, scale) = outage(true, true);
+    eprintln!(
+        "30 s outage: IMU alone {alone:.2} m, with wheel speed and NHC {aided:.2} m, \
+         with the wheel scale estimated {scaled:.2} m ({scale:?})"
+    );
+    let (scale, used) = scale.expect("estimated");
+    assert!(used > 50, "only {used} comparisons");
+    assert!(
+        (0.985..0.995).contains(&scale),
+        "wheel-speed scale {scale:.4}"
+    );
+    assert!(scaled < MAX_SCALED_OUTAGE_M, "scaled outage {scaled:.2} m");
     assert!(eskf < MAX_HORIZONTAL_RMS_M, "ESKF RMS {eskf:.3} m");
     assert!(
         eskf < 1.2 * fix,

@@ -83,6 +83,8 @@ pub mod ud;
 pub use config::{ConfigError, GinsOptions};
 pub use engine::{GinsEngine, GnssQueued};
 pub use eskf::{Eskf, FilterError};
-pub use measurement::{Measurement, StationarityConfig, StationarityDetector};
+pub use measurement::{
+    Measurement, StationarityConfig, StationarityDetector, WheelScaleConfig, WheelSpeedScale,
+};
 pub use mechanization::mechanize;
 pub use rewind::{FixOutcome, RewindEngine};
