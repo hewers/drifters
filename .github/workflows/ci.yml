@@ -175,6 +175,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p drifters-core -p drifters-filter -p drifters-eqf
+      # The host-side libraries hold the same floor. Neither needs anything
+      # newer, and they sat at 1.88 for a while with no reason anyone could
+      # name, so the floor is checked here rather than asserted.
+      - run: cargo build -p drifters-gnss
+      - run: cargo build -p drifters-interop --features nav-types-interop
       # Including under the features that change the filter, since a feature
       # can reach for something newer without the default build noticing.
       - run: >
@@ -268,19 +273,21 @@ jobs:
           cargo run --release | tee report.txt
           peak=$(grep -oP '^PEAK\s+\K[0-9]+' report.txt)
           echo "peak stack: $peak bytes"
-          # Ceiling, not a target. 20 KiB leaves headroom over the measured
-          # 18.7 KiB, a late fix through the rewind layer included, while
+          # Ceiling, not a target. 22 KiB leaves headroom over the measured
+          # 20 800 B, a late fix through the rewind layer included, while
           # still failing if a change reintroduces the
-          # expression-chained form that cost 35.3 KiB.
+          # expression-chained form that cost 35.3 KiB. It was 20 KiB until
+          # `Matrix::identity` became an iterator to satisfy clippy, which
+          # cost 1 672 B on the ZUPT path; that trade was made deliberately.
           #
           # This job could not build for three weeks — `cargo run` went
           # ambiguous when a second binary was added — and in that window the
           # peak grew 63 % unnoticed. A job that fails to build is a job that
           # measures nothing, so the build is now a separate step above.
-          test "$peak" -lt 20480 || { echo "stack budget exceeded"; exit 1; }
-          # The equivariant filter's engine, under the same ceiling. Its own
-          # label, because it is the same in every feature configuration and
-          # the two below hold the ESKF to tighter ones. Measured at 15 480 B,
+          test "$peak" -lt 22528 || { echo "stack budget exceeded"; exit 1; }
+          # The equivariant filter's engine, under the 20 KiB the ESKF used to
+          # be held to. Its own label, because it is the same in every feature
+          # configuration. Measured at 15 480 B,
           # down from 28 852 B before its covariance arithmetic was done in
           # place. A late fix through its rewind layer measures the same.
           eqf=$(grep -oP '^PEAK_EQF\s+\K[0-9]+' report.txt)
@@ -300,7 +307,7 @@ jobs:
           peak=$(grep -oP '^PEAK\s+\K[0-9]+' reduced.txt)
           echo "reduced peak stack: $peak bytes"
           # The whole point of this configuration is fitting where 21 states do
-          # not. Measured at 10 688 B, a late fix included.
+          # not. Measured at 11 528 B, a late fix included.
           test "$peak" -lt 12288 || { echo "reduced-state budget exceeded"; exit 1; }
       - name: the single-precision covariance must also fit
         working-directory: cortex-m-harness
@@ -310,8 +317,9 @@ jobs:
           peak=$(grep -oP '^PEAK\s+\K[0-9]+' f32.txt)
           echo "f32-covariance peak stack: $peak bytes"
           # Halving the covariance cannot make the stack grow, and on the
-          # predict path it shrinks it by 23 %. Measured at 18 200 B.
-          test "$peak" -lt 20480 || { echo "f32-covariance budget exceeded"; exit 1; }
+          # predict path it shrinks it by 23 %. Measured at 20 808 B: the
+          # peak is the ZUPT update, where it saves nothing.
+          test "$peak" -lt 22528 || { echo "f32-covariance budget exceeded"; exit 1; }
       - name: the data path must link no panic machinery
         working-directory: cortex-m-harness
         run: |

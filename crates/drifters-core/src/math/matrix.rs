@@ -261,13 +261,8 @@ impl<const N: usize> Matrix<N, N> {
     #[inline]
     pub fn identity() -> Self {
         let mut out = Self::zeros();
-        // Indexed on purpose. The `iter_mut().enumerate()` form clippy asks
-        // for costs 1.7 KiB of peak stack in the 21-state filter on
-        // Cortex-M4 (20 800 B against 19 128 B, Rust 1.100), which breaks
-        // the `cortex_m` CI budget. Measure before changing it.
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..N {
-            out.data[i][i] = 1.0;
+        for (i, row) in out.data.iter_mut().enumerate() {
+            row[i] = 1.0;
         }
         out
     }

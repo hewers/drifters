@@ -14,6 +14,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The ESKF's peak stack on Cortex-M4 is 20 800 bytes, up from 19 128, and
+  CI's ceiling for it is 22 KiB, up from 20.** Rust 1.100's clippy flags
+  indexed loops over const-generic arrays. Satisfying it in
+  `Matrix::identity` made the ZUPT update 1 680 bytes deeper; that was
+  accepted rather than kept behind an `allow`. `f32-covariance` peaks at
+  20 808 (from 18 208), and the 15-state build at 11 528 (from 10 696), still
+  under its 12 KiB. The EqF is unchanged.
+- **`drifters-gnss` and `drifters-interop` support Rust 1.85**, down from
+  1.88. Nothing in either needed more, and CI now builds both at 1.85.
+
 - **A GNSS epoch's tolerance is a hundredth of the IMU interval, not a fixed
   100 µs.** Breaking: `EPOCH_TOLERANCE` is gone, replaced by
   `EPOCH_TOLERANCE_FRACTION` and `epoch_tolerance(dt)`. `place(epoch, imu)`

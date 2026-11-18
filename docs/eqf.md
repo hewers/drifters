@@ -1065,8 +1065,7 @@ harness code:
 | at an instruction per cycle, 168 MHz | 25.5 ms | **5.0 ms** |
 | panic machinery linked | none | none |
 
-Both stack figures are under the ESKF's 20 KiB ceiling, and CI holds both to
-it. An instruction per cycle is the best a Cortex-M4 does, so the last row is
+Both stack figures are under 20 KiB, and CI holds both to it. An instruction per cycle is the best a Cortex-M4 does, so the last row is
 a floor: the dense form cannot keep pace with an IMU on this part at any
 usual rate, and the factored one keeps pace with 100 Hz with half the
 interval to spare and with 200 Hz only at that floor. It is a floor on time,

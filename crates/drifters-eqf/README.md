@@ -47,7 +47,7 @@ let solution = engine.nav_state();      // geodetic
 let lever_arm = engine.lever_arm();     // estimated, not configured
 ```
 
-Measured on Cortex-M4: 13.2 KiB peak stack, no panic machinery linked, and
+Measured on Cortex-M4: 15.1 KiB peak stack, no panic machinery linked, and
 5.1 million instructions per IMU sample. The last is the constraint. The
 covariance is dense `f64` and that core's FPU is single precision, so on a
 Cortex-M4F this engine cannot keep pace with an IMU at any usual rate; it

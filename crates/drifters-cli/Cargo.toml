@@ -3,7 +3,8 @@ name = "drifters-cli"
 description = "Replay and evaluation harness for the drifters navigation filters, compatible with the KF-GINS dataset formats"
 version.workspace = true
 edition.workspace = true
-# Above the workspace floor: depends on `drifters-proto`.
+# Above the workspace floor: uses `is_multiple_of` (stable since 1.87). Held
+# at 1.88, the release the `msrv` CI job builds the whole workspace with.
 rust-version = "1.88"
 license.workspace = true
 repository.workspace = true

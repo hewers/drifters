@@ -309,8 +309,8 @@ late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, and it costs what it was expected to:
 no engine-sized temporary, and a frame of its own of **152 bytes** over the
 ESKF's deepest path, the held-state ZUPT (160 with `f32-covariance`). That takes the ESKF's peak to
-19 120 bytes, 18 200 with `f32-covariance` and 10 688 at 15 states. The EqF's
-late fix measures 15 480 dense and 14 008 factored, no deeper than its own fix
+20 800 bytes, 20 808 with `f32-covariance` and 11 528 at 15 states. The EqF's
+late fix measures 15 488 dense and 14 016 factored, no deeper than its own fix
 step in either. All are inside
 their CI ceilings, and all are now part of the peak CI checks.
 
@@ -343,7 +343,7 @@ ESKF:
 | `apply_magnetometer` | 14 392 | 12 920 |
 | **peak** | **15 480** | **14 008** |
 
-Under the ESKF's own 19 120, and both under the same 20 KiB ceiling in CI. A
+Under the ESKF's own 20 800, and both under a 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
 step. The dense form was 28 852 as first measured; [testing.md](testing.md),
 Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained)
@@ -423,9 +423,13 @@ the harness:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 16 092 | 18 968 | **19 120** |
-| 21-state, `f32-covariance` | 12 428 | 18 048 | **18 200** |
-| 15-state (`reduced-state`) | 9 604 | 10 536 | **10 688** |
+| 21-state, `f64` | 16 096 | 20 648 | **20 800** |
+| 21-state, `f32-covariance` | 12 440 | 20 656 | **20 808** |
+| 15-state (`reduced-state`) | 9 624 | 11 376 | **11 528** |
+
+Re-measured with Rust 1.100, after `Matrix::identity` became an iterator to
+satisfy clippy. That cost 1 680, 2 608 and 840 bytes on `apply_zupt`, which
+CI's 22 KiB ESKF ceiling now accommodates. The trade was made deliberately.
 
 The peak is now a late fix through the rewind layer, which replays the ZUPT
 path with the rewind's own frame beneath it; see [above](#the-rewind-layer).

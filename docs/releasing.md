@@ -69,8 +69,11 @@ Two floors, deliberately.
   depend on nothing but `libm`, and a firmware project on a pinned older
   toolchain is exactly the user this library is for. CI builds them at 1.85 on
   every push, including under the features that change the filter.
-- **1.88** for `drifters-proto` and everything downstream of it, forced by
-  `micropb` (1.88) and `heapless` (1.87).
+  `drifters-gnss` and `drifters-interop` hold the same floor and CI builds
+  them at it too, though their users are on the host.
+- **1.88** for `drifters-proto`, forced by `micropb` (1.88) and `heapless`
+  (1.87). The unpublished `drifters-cli` sits here as well; it needs 1.87 for
+  `is_multiple_of`.
 
 Raising the first is a breaking change for the users who care most about it and
 should be treated as one. Raising the second follows whatever those two

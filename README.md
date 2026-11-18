@@ -28,8 +28,8 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
 | | per-axis bias below 1 mm |
-| **Footprint** | **10.4 KiB** peak stack (15-state), 18.7 KiB (21-state), on Cortex-M4, late fixes included |
-| | 13.2 KiB for the equivariant filter's engine, under the same 20 KiB ceiling |
+| **Footprint** | **11.3 KiB** peak stack (15-state), 20.3 KiB (21-state), on Cortex-M4, late fixes included |
+| | 15.1 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
@@ -390,9 +390,9 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 
 **1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf` — the crates
 that go on the target, which depend on nothing but `libm`, and on `defmt` and
-`serde` only when asked. **1.88** for
-`drifters-proto` and the crates downstream of it, forced by `micropb` and
-`heapless`. CI builds the first three at 1.85 on every push.
+`serde` only when asked — and for the host-side `drifters-gnss` and
+`drifters-interop`. **1.88** for `drifters-proto`, forced by `micropb` and
+`heapless`. CI builds every 1.85 crate at 1.85 on every push.
 
 ## Documentation
 
