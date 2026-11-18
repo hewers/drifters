@@ -359,12 +359,12 @@ than the run-to-run noise.
 Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, and it costs what it was expected to:
-no engine-sized temporary, and a frame of its own of **152 bytes** over the
-ESKF's deepest path, the held-state ZUPT. That takes the ESKF's peak to
-20 808 bytes, 20 824 with `f32-covariance` and 11 536 at 15 states. The EqF's
-late fix measures 15 448 dense and 14 064 factored, no deeper than its own fix
-step in either. All are inside
-their CI ceilings, and all are now part of the peak CI checks.
+no engine-sized temporary, and a frame of its own of **152 bytes**. A late fix
+reaches the depth of the time update it replays and goes no further: 17 088
+bytes, 13 124 with `f32-covariance` and 10 360 at 15 states. The EqF's late fix
+measures 15 448 dense and 14 064 factored, no deeper than its own fix step in
+either. All are inside their CI ceilings, and all are part of the peak CI
+checks.
 
 It was unmeasured for a while, with a sentence here saying that it *should*
 add only a small frame. That was correct this time. It is still how the
@@ -395,7 +395,7 @@ ESKF:
 | `apply_magnetometer` | 14 456 | 13 072 |
 | **peak** | **15 448** | **14 064** |
 
-Under the ESKF's own 20 808, and both under a 20 KiB ceiling in CI. A
+Under the ESKF's own 17 088, and both under a 20 KiB ceiling in CI. A
 late fix through `EqfRewindEngine` measures the same as each form's own fix
 step. The dense form was 28 852 as first measured; [testing.md](testing.md),
 Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained)
@@ -444,10 +444,9 @@ Three changes brought it to 16 480:
    `block_form_matches_the_reference_product` pins it against the explicit
    `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
 2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
-   into a caller-supplied buffer, so `predict` and the Joseph update hold four
+   into a caller-supplied buffer, so `predict` and the Joseph update held four
    and three live 21×21 matrices respectively instead of a dozen. Both paths
-   were later replaced for the ordinary case — see the factored covariance
-   below — but Joseph remains for held states and still needs this.
+   were later replaced by the factored covariance below.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
    copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
    on the hot path alone was worth 2.2 KiB.
@@ -475,32 +474,26 @@ the harness:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 17 088 | 20 656 | **20 808** |
-| 21-state, `f32-covariance` | 13 124 | 20 672 | **20 824** |
-| 15-state (`reduced-state`) | 10 360 | 11 384 | **11 536** |
+| 21-state, `f64` | 17 088 | 7 568 | **17 088** |
+| 21-state, `f32-covariance` | 13 124 | 6 380 | **13 124** |
+| 15-state (`reduced-state`) | 10 360 | 5 272 | **10 360** |
+| 15-state, `f32-covariance` | 7 956 | 4 572 | **7 956** |
 
-Re-measured with Rust 1.100, after `Matrix::identity` became an iterator to
-satisfy clippy. That cost 1 680, 2 608 and 840 bytes on `apply_zupt`, which
-CI's 22 KiB ESKF ceiling now accommodates. The trade was made deliberately.
-
-The peak is now a late fix through the rewind layer, which replays the ZUPT
-path with the rewind's own frame beneath it; see [above](#the-rewind-layer).
-
-(They had moved since they were first tabulated, down by a few hundred bytes
-on `add_imu` and up by 72 on the peak, without this table following. CI
-measures them on every run, and that is the number to trust over this one.)
+CI measures these on every run, and that is the number to trust over this
+table.
 
 `f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
-the largest single object on that frame and it halves. It barely moves
-`apply_zupt`, because the held-state path works densely in `f64` regardless.
+the largest single object on that frame and it halves.
 
-The peak is now the **held-state update**, not `predict`. That path materialises
-`P` from the factors, applies the Joseph form to it and factors it back, so it
-carries three `StateMatrix` temporaries where the ordinary update carries none.
-A factored held-state update would remove it; Bierman's covariance update
-assumes an optimal gain and a held state is precisely a non-optimal one, so it
-cannot express this. CI re-measures the peak on every run against a 20 KiB
-ceiling, at both precisions.
+The peak is the **time update**. It was the held-state update, at 20 808 bytes
+with `apply_zupt` at 20 656, while that path materialised `P` from the factors,
+applied the Joseph form and factored it back. Bierman's recursion assumes an
+optimal gain and a held state is a non-optimal one, but the difference between
+the two covariances is a sum of rank-one terms in quantities the recursion has
+already computed, so the update now adds them to the factors;
+[state-model.md](state-model.md) has the derivation. That took 13 088 bytes off
+`apply_zupt` and 3 720 off the peak, and 7 700 off the peak of the `f32` build,
+which could not benefit while this path worked in `f64`.
 
 That is the difference between needing a 32 KiB task stack and fitting in
 16 KiB, which is what makes it the most useful lever available on a small part —
@@ -622,9 +615,9 @@ at the ingest boundary rather than allowed to poison the state.
   Neither recursion takes a square root. This replaced a Joseph-form update
   and was both smaller and faster than it, which is unusual for a numerical
   improvement and is why the timings are recorded in `ud`'s tests.
-- **Joseph form is retained** for the held-state path, where a measurement must
-  not be allowed to touch every state, and Bierman's scalar-sequential form
-  does not express that constraint.
+- **Held states stay factored.** The Schmidt update adds one rank-one term per
+  measurement row after Bierman's, and is pinned to the Joseph form written out
+  densely, which remains only in the tests.
 - **Whitening before Bierman.** The scalar-sequential update requires
   independent rows, so a measurement with a dense `R` is premultiplied by its
   inverse Cholesky factor first. Applying correlated rows without it is wrong,

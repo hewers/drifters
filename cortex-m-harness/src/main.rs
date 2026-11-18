@@ -812,7 +812,7 @@ fn main() -> ! {
     hprintln!("add_imu with GNSS fix          {}", gnss_step);
 
     // A late fix through the rewind layer: the replay is nested inside the
-    // call, and passes the held-state ZUPT that is this engine's deepest path.
+    // call, and passes through a held-state ZUPT on its way.
     let rewind_step = late_fix_step(
         bottom,
         engine,

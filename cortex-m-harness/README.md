@@ -27,7 +27,8 @@ inside it, and a fix fifteen samples late through the rewind layer, whose
 replay runs nested inside the call. `PEAK` is
 the ESKF's peak stack, `PEAK_EQF` the equivariant filter's with its dense
 covariance and `PEAK_EQF_F32` with the factored single-precision one; CI holds
-the ESKF under 22 KiB and both EqF figures under 20 KiB. `PEAK_ALIGN` is the
+the ESKF under 18 KiB (14 KiB with `f32-covariance`, 11 and 9 KiB at 15 states)
+and both EqF figures under 20 KiB. `PEAK_ALIGN` is the
 initial alignment's deepest call, over a velocity, a position-only and a
 gyrocompass alignment that must each reach the right answer; CI holds it under
 8 KiB. `src/bin/panic_audit.rs` is a second binary that links only the

@@ -779,9 +779,11 @@ Each step is gated on a measurement rather than on the previous one compiling.
       | 15-state (`reduced-state`) | 10 064 | 10 464 | **10 464** |
 
       `f32` takes 22 % off `add_imu` because Thornton's working array halves.
-      The remaining excess over M8's 16 432 is the held-state path's dense
-      round trip, which a factored held-state update would remove and Bierman
-      cannot express. Campaign results are bit-identical throughout.
+      The remaining excess over M8's 16 432 was the held-state path's dense
+      round trip, which Bierman alone cannot express. Campaign results are
+      bit-identical throughout. A rank-one update of the factors after Bierman
+      later removed that round trip; [design.md](design.md#the-15-state-configuration)
+      has the figures.
 
 - [x] **Single-precision covariance**, `--features f32-covariance`, which the
       factored form is what made available: `cond(U√D) = √cond(P)`, so the 13.6

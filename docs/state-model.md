@@ -204,10 +204,22 @@ premultiplied by the inverse Cholesky factor of `R` first, which whitens it;
 `z' = L⁻¹z`, `H' = L⁻¹H`, `R' = I`. Skipping that step does not merely lose
 accuracy, it applies the wrong update.
 
-Joseph form is retained for the **held-state** path, where a measurement must be
-prevented from touching some states. That constraint is expressed by zeroing
-rows and columns of a gain, which the scalar-sequential form has no place to
-put.
+A **held state** is one a measurement must not correct, which makes the gain
+deliberately non-optimal, and Bierman's recursion assumes the optimal one. The
+Joseph covariance for any gain `K` is the optimal one plus a square in the
+distance from it:
+
+```
+P⁺(K) = P⁺(K*) + (K − K*)·S·(K − K*)ᵀ
+```
+
+Zeroing the held rows makes `K − K*` the held rows of `K*` alone, and the
+sequential innovations are uncorrelated, so `K*·S·K*ᵀ = Σ αᵢ·gᵢ·gᵢᵀ` over the
+per-row gains `gᵢ` and innovation variances `αᵢ` the recursion already computed.
+The filter runs Bierman, then adds `αᵢ·(held part of gᵢ)(held part of gᵢ)ᵀ` to
+the factors for each row with the Agee–Turner rank-one update. That is exactly
+the Joseph result, and `P` is never formed. The state correction is the optimal
+one with its held entries zeroed.
 
 ### GNSS position
 

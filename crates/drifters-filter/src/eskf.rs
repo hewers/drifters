@@ -202,9 +202,9 @@ pub(crate) mod tests_support {
 ///
 /// Zeroing a state's row of the Kalman gain stops a measurement from correcting
 /// it, while still letting that state's uncertainty contribute to the
-/// innovation covariance. This is the Schmidt-Kalman "consider" treatment, and
-/// Joseph form remains valid because it holds for *any* gain, not only the
-/// optimal one — so the covariance stays symmetric and positive definite.
+/// innovation covariance. This is the Schmidt-Kalman "consider" treatment. The
+/// covariance it leaves is the Joseph form's for that gain, reached by updating
+/// the factors and never by forming `P`; see [`Eskf::update_gated_holding`].
 ///
 /// The motivating case is in `docs/state-model.md`: stationary, accelerometer
 /// bias and tilt are mutually unobservable, and letting a zero-velocity update
@@ -510,12 +510,12 @@ impl Eskf {
         true
     }
 
-    /// Apply a measurement update in Joseph form.
+    /// Apply a measurement update to the covariance factors.
     ///
     /// `innovation` is `z − h(x)`, `h` its Jacobian, `r` the measurement noise
-    /// covariance. Joseph form costs one extra `21 × 21` product over the short
-    /// `P ← (I − KH)P` form but keeps `P` symmetric and positive definite under
-    /// round-off, which matters over the millions of updates a long run makes.
+    /// covariance. The result is the Joseph form's, by Bierman's recursion, so
+    /// `P` stays symmetric and positive definite under round-off without being
+    /// formed.
     pub fn update<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -552,7 +552,8 @@ impl Eskf {
     ///
     /// See [`HeldStates`]. The held states still shape the innovation
     /// covariance — their uncertainty is *considered* — they are simply not
-    /// corrected.
+    /// corrected. The update works on the factors alone and costs one extra
+    /// rank-one sweep per measurement row.
     pub fn update_gated_holding<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
@@ -595,19 +596,32 @@ impl Eskf {
         if !self.covariance.is_healthy() {
             return Err(FilterError::Diverged);
         }
-        // Nothing but the dispatch lives in this frame. Both paths carry large
-        // stack temporaries and LLVM allocates a function's slots on entry, so
-        // a body here would be paid by whichever path was not taken — worth
-        // 6 KiB on the held-state path, which is the one already paying most.
-        if held.is_empty() {
-            self.update_factored(innovation, h, r, gate)
-        } else {
-            self.update_holding_dense(innovation, h, r, gate, held)
-        }
+        self.update_factored(innovation, h, r, gate, held)
     }
 
-    /// The Bierman update: the ordinary path, for a measurement that holds
-    /// nothing.
+    /// The Bierman update, with the Schmidt treatment of any held states.
+    ///
+    /// # Holding states in factored form
+    ///
+    /// For any gain `K`, the Joseph covariance is the optimal one plus a
+    /// square in the gain's distance from optimal:
+    ///
+    /// ```text
+    /// P⁺(K) = P⁺(K*) + (K − K*) S (K − K*)ᵀ
+    /// ```
+    ///
+    /// Holding states zeroes their rows of the gain, so `K − K*` is `−D`, the
+    /// held rows of `K*` alone. Bierman's sweep already yields `P⁺(K*)`, and
+    /// its per-row gains `gᵢ` and innovation variances `αᵢ` satisfy
+    /// `K* S K*ᵀ = Σ αᵢ gᵢ gᵢᵀ`, because the sequential innovations are
+    /// uncorrelated. So
+    ///
+    /// ```text
+    /// P⁺ = P⁺(K*) + Σᵢ αᵢ (held part of gᵢ)(held part of gᵢ)ᵀ
+    /// ```
+    ///
+    /// one positive rank-one update of the factors per row, and exactly the
+    /// joint Joseph result, without `P` ever being formed.
     #[inline(never)]
     fn update_factored<const M: usize>(
         &mut self,
@@ -615,6 +629,7 @@ impl Eskf {
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
         gate: Option<F>,
+        held: HeldStates,
     ) -> Result<bool, FilterError> {
         // Bierman is scalar-sequential and assumes each row's noise is
         // independent of the others', so a dense `R` is whitened first: both
@@ -636,7 +651,8 @@ impl Eskf {
         let mut statistic = 0.0;
 
         let mut gains = [StateVector::zeros(); M];
-        for (row, slot) in gains.iter_mut().enumerate() {
+        let mut variances = [0.0; M];
+        for (row, (slot, variance)) in gains.iter_mut().zip(variances.iter_mut()).enumerate() {
             let mut hr = StateVector::zeros();
             for j in 0..N_STATE {
                 hr[(j, 0)] = w.jacobian[(row, j)];
@@ -654,8 +670,8 @@ impl Eskf {
                 running[(j, 0)] += gain[(j, 0)] * residual;
             }
             *slot = gain;
+            *variance = alpha;
         }
-        let correction = running;
 
         if !statistic.is_finite() {
             return Err(FilterError::SingularInnovation);
@@ -665,100 +681,42 @@ impl Eskf {
             return Ok(false);
         }
 
-        // The correction the measurement implies, against the error state the
-        // filter already holds. With feedback that is zero, but the dense form
-        // subtracted it and so does this.
-        let mut prior_effect = StateVector::zeros();
+        // `K*(ν − H·dx)`: the same recursion as above, on the residual against
+        // the error state the filter already holds. With feedback that state
+        // is zero and this is `running` again.
+        let mut correction = StateVector::zeros();
         for (row, gain) in gains.iter().enumerate() {
-            let mut projected = 0.0;
+            let mut residual = w.innovation[(row, 0)];
             for j in 0..N_STATE {
-                projected += w.jacobian[(row, j)] * self.dx[(j, 0)];
+                residual -= w.jacobian[(row, j)] * (self.dx[(j, 0)] + correction[(j, 0)]);
             }
             for j in 0..N_STATE {
-                prior_effect[(j, 0)] += gain[(j, 0)] * projected;
+                correction[(j, 0)] += gain[(j, 0)] * residual;
             }
         }
+
+        if !held.is_empty() {
+            for j in 0..N_STATE {
+                if held.contains(j) {
+                    correction[(j, 0)] = 0.0;
+                }
+            }
+            for (gain, variance) in gains.iter_mut().zip(variances.iter()) {
+                for j in 0..N_STATE {
+                    if !held.contains(j) {
+                        gain[(j, 0)] = 0.0;
+                    }
+                }
+                trial.add_rank_one(*variance, gain);
+            }
+        }
+
         let mut dx = self.dx;
         dx += &correction;
-        dx -= &prior_effect;
         if !dx.is_finite() || !trial.is_usable() {
             return Err(FilterError::Diverged);
         }
         self.covariance = trial;
-        self.dx = dx;
-        Ok(true)
-    }
-
-    /// The dense Joseph update, for a measurement that holds states.
-    ///
-    /// Zeroing a gain row keeps a state at its prior while `S` still accounts
-    /// for its uncertainty, and the Joseph form stays consistent for *any*
-    /// gain, optimal or not. Bierman's covariance update assumes the optimal
-    /// one, so it cannot express this — a held state would leave the factors
-    /// describing a filter that was not run. Refactoring afterwards costs an
-    /// `O(n³/3)` sweep, which a zero-velocity update can afford and a
-    /// per-sample propagation could not.
-    #[inline(never)]
-    fn update_holding_dense<const M: usize>(
-        &mut self,
-        innovation: &Matrix<M, 1>,
-        h: &Matrix<M, N_STATE>,
-        r: &Matrix<M, M>,
-        gate: Option<F>,
-        held: HeldStates,
-    ) -> Result<bool, FilterError> {
-        let mut covariance = self.covariance.to_covariance();
-        let hp = h.matmul(&covariance);
-        let s = hp.mul_transpose(h) + *r;
-        let chol = Cholesky::new(&s).ok_or(FilterError::SingularInnovation)?;
-
-        let statistic = nis(&chol, innovation);
-        if !statistic.is_finite() {
-            return Err(FilterError::SingularInnovation);
-        }
-        self.last_nis = statistic;
-        if fails_gate(statistic, gate) {
-            return Ok(false);
-        }
-
-        let mut k = chol.solve(&hp).transpose();
-        for (i, row) in k.data.iter_mut().enumerate() {
-            if held.contains(i) {
-                *row = [0.0; M];
-            }
-        }
-
-        // Held back until the covariance has been accepted too.
-        let residual = *innovation - h.matmul(&self.dx);
-        let mut dx = self.dx;
-        dx += k.matmul(&residual);
-        if !dx.is_finite() {
-            return Err(FilterError::Diverged);
-        }
-
-        // Three `StateMatrix` temporaries were live here at once, which on the
-        // 21-state filter is 10 584 bytes of stack before counting `covariance`
-        // itself. `scratch` is dead after the Joseph product, so `K R Kᵀ` is
-        // computed into it afterwards rather than into a fourth buffer — the
-        // ordering is the only thing that changed.
-        let mut scratch = StateMatrix::zeros();
-        k.matmul_into(h, &mut scratch);
-        let mut i_kh = StateMatrix::identity();
-        i_kh -= &scratch;
-
-        i_kh.matmul_into(&covariance, &mut scratch);
-        scratch.mul_transpose_into(&i_kh, &mut covariance);
-
-        k.matmul(r).mul_transpose_into(&k, &mut scratch);
-        covariance += &scratch;
-        covariance.symmetrize();
-
-        // Factoring in place: `covariance` is dead afterwards either way, and
-        // the copying form would put another 3 528 bytes on a frame that is
-        // already the deepest in the filter.
-        if !self.set_covariance_in_place(&mut covariance) {
-            return Err(FilterError::Diverged);
-        }
         self.dx = dx;
         Ok(true)
     }
@@ -1328,9 +1286,185 @@ mod tests {
         assert_eq!(f.covariance(), p);
     }
 
+    /// A positive-definite covariance with correlations and a spread of
+    /// scales, from a fixed sequence.
+    fn correlated_covariance(seed: u64) -> StateMatrix {
+        let mut state = seed;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (state >> 11) as F / (1u64 << 53) as F * 2.0 - 1.0
+        };
+        let mut a = StateMatrix::zeros();
+        for i in 0..N_STATE {
+            let scale = (1.0e3 as F).powf(i as F / N_STATE as F);
+            for j in 0..N_STATE {
+                a[(i, j)] = next() * scale;
+            }
+        }
+        let mut p = a.mul_transpose(&a);
+        for i in 0..N_STATE {
+            p[(i, i)] += 1.0e-3;
+        }
+        p
+    }
+
+    /// The Joseph update with the held rows of the gain zeroed: the definition
+    /// the factored path has to reproduce, written out densely.
+    fn joseph_holding<const M: usize>(
+        p: &StateMatrix,
+        dx: &StateVector,
+        innovation: &Matrix<M, 1>,
+        h: &Matrix<M, N_STATE>,
+        r: &Matrix<M, M>,
+        held: HeldStates,
+    ) -> (StateMatrix, StateVector, F) {
+        let hp = h.matmul(p);
+        let s = hp.mul_transpose(h) + *r;
+        let chol = Cholesky::new(&s).unwrap();
+        let statistic = nis(&chol, innovation);
+        let mut k = chol.solve(&hp).transpose();
+        for (i, row) in k.data.iter_mut().enumerate() {
+            if held.contains(i) {
+                *row = [0.0; M];
+            }
+        }
+        let mut i_kh = StateMatrix::identity();
+        i_kh -= &k.matmul(h);
+        let mut out = i_kh.matmul(p).mul_transpose(&i_kh);
+        out += &k.matmul(r).mul_transpose(&k);
+        let mut next = *dx;
+        next += k.matmul(&(*innovation - h.matmul(dx)));
+        (out, next, statistic)
+    }
+
+    /// Run the factored update and require it to equal [`joseph_holding`].
+    fn assert_matches_joseph<const M: usize>(seed: u64, held: HeldStates, tolerance: F) {
+        let mut state = seed ^ 0x9e37_79b9;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (state >> 11) as F / (1u64 << 53) as F * 2.0 - 1.0
+        };
+        let p = correlated_covariance(seed);
+        let mut h = Matrix::<M, N_STATE>::zeros();
+        let mut innovation = Matrix::<M, 1>::zeros();
+        let mut r = Matrix::<M, M>::zeros();
+        for i in 0..M {
+            innovation[(i, 0)] = next();
+            for j in 0..N_STATE {
+                h[(i, j)] = next();
+            }
+            for j in 0..M {
+                // Correlated rows: the whitening has to be right as well.
+                r[(i, j)] = if i == j { 2.0 } else { 0.5 };
+            }
+        }
+        let mut dx = StateVector::zeros();
+        for j in 0..N_STATE {
+            dx[(j, 0)] = 0.1 * next();
+        }
+
+        let (expected_p, expected_dx, expected_nis) =
+            joseph_holding(&p, &dx, &innovation, &h, &r, held);
+
+        let mut f = Eskf::new(&std_vector());
+        assert!(f.set_covariance(&p));
+        f.dx = dx;
+        assert_eq!(
+            f.update_gated_holding(&innovation, &h, &r, None, held),
+            Ok(true)
+        );
+
+        let got = f.covariance();
+        for i in 0..N_STATE {
+            for j in 0..N_STATE {
+                let scale = (expected_p[(i, i)] * expected_p[(j, j)]).sqrt();
+                assert!(
+                    (got[(i, j)] - expected_p[(i, j)]).abs() <= tolerance * scale,
+                    "P[{i}][{j}]: {} against {}",
+                    got[(i, j)],
+                    expected_p[(i, j)]
+                );
+            }
+            assert_relative_eq!(
+                f.dx[(i, 0)],
+                expected_dx[(i, 0)],
+                epsilon = 1.0e-9,
+                max_relative = tolerance.max(1.0e-9)
+            );
+            if held.contains(i) {
+                assert_eq!(f.dx[(i, 0)], dx[(i, 0)], "a held state moved");
+            }
+        }
+        assert_relative_eq!(
+            f.last_nis().unwrap(),
+            expected_nis,
+            max_relative = tolerance.max(1.0e-9)
+        );
+    }
+
+    #[cfg(not(feature = "f32-covariance"))]
+    const JOSEPH_TOLERANCE: F = 1.0e-9;
+    #[cfg(feature = "f32-covariance")]
+    const JOSEPH_TOLERANCE: F = 2.0e-3;
+
+    #[test]
+    fn the_factored_held_update_is_the_joseph_update() {
+        let sets = [
+            HeldStates::ATTITUDE,
+            HeldStates::ACCEL_BIAS,
+            HeldStates::ATTITUDE.union(HeldStates::GYRO_BIAS),
+            HeldStates(0b1),
+            HeldStates(1 << (N_STATE - 1)),
+        ];
+        for (seed, held) in sets.into_iter().enumerate() {
+            let seed = seed as u64 + 11;
+            assert_matches_joseph::<1>(seed, held, JOSEPH_TOLERANCE);
+            assert_matches_joseph::<2>(seed, held, JOSEPH_TOLERANCE);
+            assert_matches_joseph::<3>(seed, held, JOSEPH_TOLERANCE);
+            assert_matches_joseph::<6>(seed, held, JOSEPH_TOLERANCE);
+        }
+    }
+
+    #[test]
+    fn holding_nothing_is_the_optimal_update_from_any_error_state() {
+        // The rows after the first have to see the correction from the rows
+        // before them, on top of an error state that is not zero.
+        for seed in 40..44 {
+            assert_matches_joseph::<1>(seed, HeldStates::NONE, JOSEPH_TOLERANCE);
+            assert_matches_joseph::<3>(seed, HeldStates::NONE, JOSEPH_TOLERANCE);
+            assert_matches_joseph::<6>(seed, HeldStates::NONE, JOSEPH_TOLERANCE);
+        }
+    }
+
+    #[test]
+    fn a_held_state_keeps_its_variance_when_nothing_correlates_with_it() {
+        // Held and uncorrelated with what is measured: the update must leave
+        // its row of the covariance exactly as it found it.
+        let mut f = Eskf::new(&std_vector());
+        let before = f.covariance();
+        let r = Mat3::identity().scaled(0.01);
+        f.update_gated_holding(
+            &Matrix::<3, 1>::from_column([0.1, -0.2, 0.3]),
+            &position_h(),
+            &r,
+            None,
+            HeldStates::ATTITUDE,
+        )
+        .unwrap();
+        let after = f.covariance();
+        for i in 0..3 {
+            let s = PHI_ID + i;
+            assert_relative_eq!(after[(s, s)], before[(s, s)], max_relative = 1.0e-6);
+        }
+    }
+
     #[test]
     fn an_innovation_too_large_to_score_changes_nothing() {
-        // Finite, but its square is not, on the factored path and the dense.
+        // Finite, but its square is not, with states held and without.
         let huge = Matrix::<3, 1>::from_column([1.0e200, 0.0, 0.0]);
         for held in [HeldStates::NONE, HeldStates::ATTITUDE] {
             let mut f = filter_holding_a_correction();

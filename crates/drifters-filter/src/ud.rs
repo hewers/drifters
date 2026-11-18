@@ -164,10 +164,9 @@ impl Ud {
     /// [`Self::from_covariance`], factoring in the caller's buffer.
     ///
     /// The sweep is destructive, so the copying variant above has to make one.
-    /// On a 21-state filter that copy is 3 528 bytes of stack, which matters on
-    /// the held-state update path where several `StateMatrix` temporaries are
-    /// already live at once. `p` is left holding the sweep's leftovers and must
-    /// be treated as consumed.
+    /// On a 21-state filter that copy is 3 528 bytes of stack, which matters to
+    /// a caller already holding a `StateMatrix` of its own. `p` is left holding
+    /// the sweep's leftovers and must be treated as consumed.
     pub fn from_covariance_in_place(work: &mut StateMatrix) -> Option<Self> {
         // Upper-triangular Cholesky-like sweep, from the bottom right up, which
         // is the factorisation this form wants rather than the lower `L Lᵀ`.
@@ -380,6 +379,48 @@ impl Ud {
             k[(i, 0)] = (g / alpha) as F;
         }
         Some((k, alpha as F))
+    }
+
+    /// The Agee–Turner update: the factors of `U D Uᵀ + c a aᵀ`, for `c ≥ 0`.
+    ///
+    /// Every term added to `D` is non-negative, so unlike a downdate this
+    /// cannot lose positive-definiteness. A `c` that is not positive, or not
+    /// finite, leaves the factors alone.
+    ///
+    /// The sweep runs from the last column to the first, and a column whose
+    /// entry of `a` has reached zero changes nothing, so a vector that is zero
+    /// past some index costs only the columns up to it.
+    pub fn add_rank_one(&mut self, c: F, a: &StateVector) {
+        if !c.is_finite() || c <= 0.0 {
+            return;
+        }
+        let mut c = c as Scalar;
+        let mut a: [Scalar; N_STATE] = core::array::from_fn(|i| a[(i, 0)] as Scalar);
+        for j in (0..N_STATE).rev() {
+            // `get`, because an index here links a bounds check the optimiser
+            // cannot remove, and with it the panic machinery.
+            let aj = a.get(j).copied().unwrap_or(0.0);
+            if aj == 0.0 {
+                continue;
+            }
+            let Some(diagonal) = self.diagonal.get_mut(j) else {
+                continue;
+            };
+            let previous = *diagonal;
+            let updated = previous + c * aj * aj;
+            // Only underflow gets here with zero. A value that is not finite
+            // goes on into `D`, where `is_usable` refuses the result.
+            if updated == 0.0 {
+                continue;
+            }
+            let beta = c * aj / updated;
+            c *= previous / updated;
+            *diagonal = updated;
+            for (entry, ai) in self.column_of_mut(j).iter_mut().zip(a.iter_mut()) {
+                *ai -= aj * *entry;
+                *entry += beta * *ai;
+            }
+        }
     }
 
     /// Thornton's time update, by modified weighted Gram-Schmidt.
@@ -1091,6 +1132,63 @@ mod tests {
                 assert!(*d >= 0.0, "step {step}: D[{i}] = {d}");
             }
         }
+    }
+
+    #[test]
+    fn a_rank_one_update_matches_the_dense_sum() {
+        let mut rng = Rng(4242);
+        for (seed, spread) in [(3, 1.0), (5, 1.0e3), (8, 1.0e6)] {
+            let p = covariance(seed, spread);
+            let mut a = StateVector::zeros();
+            for i in 0..N_STATE {
+                a[(i, 0)] = rng.signed() * spread.sqrt();
+            }
+            let c = 0.37;
+            let mut expected = p;
+            for i in 0..N_STATE {
+                for j in 0..N_STATE {
+                    expected[(i, j)] += c * a[(i, 0)] * a[(j, 0)];
+                }
+            }
+            let mut ud = Ud::from_covariance(&p).unwrap();
+            ud.add_rank_one(c, &a);
+            assert!(ud.is_usable());
+            let worst = worst_relative(&ud.to_covariance(), &expected);
+            assert!(worst < 1.0e-11 * SLACK, "spread {spread}: {worst}");
+        }
+    }
+
+    #[test]
+    fn a_rank_one_update_reaches_a_state_with_no_variance() {
+        // The positive update has to work from D = 0, which is where a held
+        // state's pivot can land after a very tight measurement.
+        let mut variances = [1.0; N_STATE];
+        variances[N_STATE - 1] = 0.0;
+        let mut ud = Ud::from_variances(&variances);
+        let mut a = StateVector::zeros();
+        a[(N_STATE - 1, 0)] = 2.0;
+        a[(0, 0)] = 1.0;
+        ud.add_rank_one(0.5, &a);
+        let p = ud.to_covariance();
+        assert!((p[(N_STATE - 1, N_STATE - 1)] - 2.0).abs() < 1.0e-6 * SLACK);
+        assert!((p[(0, N_STATE - 1)] - 1.0).abs() < 1.0e-6 * SLACK);
+        assert!((p[(0, 0)] - 1.5).abs() < 1.0e-6 * SLACK);
+    }
+
+    #[test]
+    fn a_rank_one_update_with_nothing_to_add_changes_nothing() {
+        let p = covariance(13, 10.0);
+        let before = Ud::from_covariance(&p).unwrap();
+        let mut a = StateVector::zeros();
+        a[(2, 0)] = 1.0;
+        for c in [0.0, -1.0, F::NAN, F::INFINITY] {
+            let mut ud = before;
+            ud.add_rank_one(c, &a);
+            assert_eq!(ud.to_covariance(), before.to_covariance());
+        }
+        let mut ud = before;
+        ud.add_rank_one(1.0, &StateVector::zeros());
+        assert_eq!(ud.to_covariance(), before.to_covariance());
     }
 
     #[test]

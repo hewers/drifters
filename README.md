@@ -421,8 +421,8 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 - **Factored covariance** — `P` is stored as `U D Uᵀ` and updated by the Bierman
   and Thornton recursions, so it is never formed and never assembled by
   subtracting two nearly-equal matrices. Positive-definiteness is a property of
-  the representation rather than something to test for and repair. Joseph form
-  remains for the held-state path, where a row must not touch every state.
+  the representation rather than something to test for and repair. Held states
+  stay in the factors too, by one rank-one update per measurement row.
 - **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
   file. That is what lets the same code run inside an interrupt handler.
 - **NED navigation frame, FRD body frame** — the navigation-literature

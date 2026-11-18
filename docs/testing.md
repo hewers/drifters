@@ -325,22 +325,22 @@ cd cortex-m-harness && cargo run --release
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
 CI runs it on every push and fails if any estimator's peak exceeds its
-ceiling: 22 KiB for `PEAK`, the ESKF (12 KiB at 15 states), and 20 KiB for
-`PEAK_EQF`, the equivariant filter's engine with its dense covariance, and
+ceiling: 18 KiB for `PEAK`, the ESKF (14 KiB with `f32-covariance`, 11 KiB and
+9 KiB at 15 states), and 20 KiB for `PEAK_EQF`, the equivariant filter's engine with its dense covariance, and
 `PEAK_EQF_F32`, with the factored single-precision one.
 
 | | peak stack, bytes |
 |---|---|
-| ESKF, 21-state | 20 808 |
-| ESKF, 21-state, `f32-covariance` | 20 824 |
-| ESKF, 15-state (`reduced-state`) | 11 536 |
+| ESKF, 21-state | 17 088 |
+| ESKF, 21-state, `f32-covariance` | 13 124 |
+| ESKF, 15-state (`reduced-state`) | 10 360 |
+| ESKF, 15-state, `f32-covariance` | 7 956 |
 | EqF engine, dense `f64` | **15 448** |
 | EqF engine, factored `f32` | **14 064** |
 
-Measured with Rust 1.100. The ESKF figures rose by 1.7 KiB, 2.6 KiB and
-0.8 KiB when `Matrix::identity` was written as an iterator rather than an
-indexed loop to satisfy clippy. The extra stack lands on the ZUPT update, and
-the ESKF's ceiling went from 20 KiB to 22 KiB to make room.
+Measured with Rust 1.100. The ESKF's peak was the held-state ZUPT, at 20 808
+and 20 824 bytes at 21 states, until that update stopped forming `P`. It is now
+the time update, and the ZUPT itself fell from 20 656 bytes to 7 568.
 
 The two engines are measured by the same generic code, written against
 [`Estimator`](../crates/drifters-core/src/estimator.rs) and
@@ -349,11 +349,9 @@ The two engines are measured by the same generic code, written against
 through the rewind layer. A difference between their numbers is therefore a
 difference between them and not between two harnesses.
 
-The late fix is the ESKF's peak in every configuration. It replays the
-held-state ZUPT, the engine's deepest path, with the rewind's own frame
-beneath it: 152 bytes more at 21 states and at 15, and 160 with
-`f32-covariance`. Before it was measured the
-ESKF's peaks were 18 968, 18 048 and 10 536, and the rewind path was a claim.
+A late fix reaches the same depth as `add_imu` in every configuration, because
+the time update it replays is what sets the ESKF's peak. It was the peak on its
+own while the held-state ZUPT was the deepest path, 152 bytes above it.
 
 ### How the measurement works
 
@@ -923,6 +921,11 @@ because the audit binary called three of the engine's entry points and
 non-holonomic was not among them. It surfaced when the rewind layer went in: a
 replay can repeat any aid, so linking one links them all. The audit proves the
 absence of panics in what it links, and nothing about what it does not.
+
+**`panic_bounds_check`, from `Ud::add_rank_one`.** The first version indexed
+`a[j]` and `diagonal[j]` in a loop running backwards over `0..N_STATE`, which the
+optimiser did not prove in range. Every test passed, and this audit was the only
+thing to object. Both are `get` now.
 
 **`panic_fmt`, from `f64::clamp`.** The aligner's rest detector limits how far
 its gate may widen, and first wrote that limit with `clamp`, which panics when

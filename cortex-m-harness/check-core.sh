@@ -47,12 +47,12 @@ rm -f "$reports/$core"-*
 # Peak stack ceilings. They are ceilings, not targets, and each leaves headroom
 # over what was measured, a late fix through the rewind layer included.
 #
-# - 22 KiB for 21 states, measured at 20 824 B at most. It still fails if a
-#   change reintroduces the expression-chained form that cost 35.3 KiB. It was
-#   20 KiB until `Matrix::identity` became an iterator to satisfy clippy, which
-#   cost 1 672 B on the ZUPT path; that trade was made deliberately.
-# - 12 KiB for 15 states, measured at 11 552 B at most: fitting where 21 states
-#   do not is the whole point of that configuration.
+# - 18 KiB for 21 states, measured at 17 088 B, and 14 KiB with
+#   `f32-covariance`, measured at 13 124 B. Each was 22 KiB until holding a
+#   state stopped forming `P`, and the deepest path became the time update.
+# - 11 KiB for 15 states, measured at 10 360 B, and 9 KiB with
+#   `f32-covariance`, measured at 7 956 B: fitting where 21 states do not is the
+#   whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
 #   every configuration. Measured at 15 448 B dense and 14 064 B factored.
 # - 8 KiB for the initial alignment, which runs before an engine exists and so
@@ -62,10 +62,10 @@ rm -f "$reports/$core"-*
 # window unnoticed. A job that fails to build measures nothing, which is why CI
 # builds in a step of its own before this runs.
 configurations=(
-  "default - 22528"
-  "f32 f32-covariance 22528"
-  "reduced reduced-state 12288"
-  "reduced-f32 reduced-state,f32-covariance 12288"
+  "default - 18432"
+  "f32 f32-covariance 14336"
+  "reduced reduced-state 11264"
+  "reduced-f32 reduced-state,f32-covariance 9216"
 )
 eqf_ceiling=20480
 align_ceiling=8192

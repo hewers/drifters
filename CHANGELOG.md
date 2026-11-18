@@ -14,6 +14,13 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **Holding a state no longer forms the covariance, and the ESKF's peak stack
+  falls by 10 % to 37 %.** A held-state update was a dense Joseph round trip. It
+  is now Bierman's update plus one rank-one update of the factors per measurement
+  row, which gives the same result. On a Cortex-M4 the peak goes from 20 808 bytes
+  to 17 088, from 20 824 to 13 124 with `f32-covariance`, and at 15 states from
+  11 536 to 10 360 and from 11 552 to 7 956. `apply_zupt` goes from 20 656 to 7 568.
+  The CI ceilings tighten to 18, 14, 11 and 9 KiB to hold the gain.
 - **`add_imu` can now return `FilterError::Diverged`, and invalid input is refused
   rather than absorbed, in both engines.** A finite sample that would overflow the
   mechanization leaves the state and covariance as they were, and the next sample
@@ -164,6 +171,12 @@ breaking wire change becomes `v2` rather than a crate version bump.
   forms are kept under `#[cfg(test)]` and compared element for element.
 
 ### Fixed
+
+- **`Eskf::update` got a measurement of two or more rows wrong when `dx` was not
+  zero.** The correction applied the prior error state through per-row gains that
+  do not sum to the joint gain. The engines were not affected, because they feed
+  `dx` back after every accepted update and it is zero when the next one starts.
+  Code driving `Eskf` directly, with corrections left in `dx`, was.
 
 - **`single_differences` matched satellites to the wrong observations.** After
   skipping an unusable pseudorange it indexed the original list with its count of
