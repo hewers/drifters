@@ -286,24 +286,26 @@ The practical consequence is a real limit on ZUPT-only aiding. With both states
 free, the pair drifts apart along the unobservable direction while their sum
 stays correct; past a few tens of seconds the tilt error grows large enough that
 its gravity mis-projection dominates, and the solution degrades even though
-every individual update was applied correctly. Measured with the defaults in
-`GinsOptions` and a 0.02 m/s² bias, a stationary run with ZUPT every second is
-excellent for ~30 s (12 mm of drift against 9 m unaided) and unusable by ~60 s.
+every individual update was applied correctly. Measured with attitude free
+(`zupt_holds_attitude = false`) and a 0.02 m/s² bias, a stationary run with ZUPT
+every second is excellent for ~30 s (12 mm of drift against 9 m unaided) and
+unusable by ~60 s (14 m).
 
-Freezing *either* state makes the run stable, which is what identifies the cause
-as observability rather than a sign error — `stationary_zupt_cannot_separate_
-accel_bias_from_tilt` in `engine.rs` pins exactly that. With a perfect IMU the
-filter is exact indefinitely.
+Freezing *either* state makes the run stable, which identifies the cause as
+observability rather than a sign error.
+`stationary_zupt_cannot_separate_accelerometer_bias_from_tilt` in `engine.rs` pins
+the divergence. With a perfect IMU the filter is exact indefinitely.
 
-What actually fixes it is more information, not more tuning:
+What fixes it is more information or a constraint, not more tuning:
 
 - **Motion.** Acceleration and turning break the ambiguity directly.
 - **A height aid,** which anchors the vertical channel that the tilt states feed.
 - **Periodic GNSS.** Position updates observe the tilt through the `[f^n×]φ`
   coupling in a way velocity alone cannot.
-- **Constraining the unobservable direction** — holding tilt fixed during long
-  stationary periods, or estimating only the observable combination. Tracked as
-  an M6 follow-up in `docs/milestones.md`.
+- **Constraining the unobservable direction.** `GinsOptions::zupt_holds_attitude`,
+  on by default, holds attitude during a ZUPT and sends the whole correction to the
+  accelerometer bias. The same run then drifts 3 mm over 120 s, and
+  `holding_attitude_keeps_a_long_stationary_run_stable` pins the result.
 
 The chi-squared gate does *not* rescue this, and makes it worse if left alone:
 once the estimate has drifted, every ZUPT looks like an outlier and is rejected,

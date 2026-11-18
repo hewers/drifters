@@ -128,14 +128,14 @@ pub struct Settings {
     /// multiplied by the geometry into hundreds of metres, and the solve
     /// cannot tell: its residuals are small *because* it has no redundancy.
     ///
-    /// Two ways of asking the solve about itself were tried and neither
-    /// worked. Scaling the reported uncertainty by the residual scatter
-    /// changed the four-trace score by 0.3 %, in the wrong direction, because
-    /// the surviving satellites agree with each other on the wrong answer. A
-    /// dilution-of-precision threshold — aimed straight at the geometry —
-    /// made it monotonically worse at every setting from 2 to 15, because
-    /// most weak-geometry epochs are perfectly good and discarding them costs
-    /// more than the few bad ones do.
+    /// Asking the solve about itself does not help, in either of two ways.
+    /// Scaling the reported uncertainty by the residual scatter changes the
+    /// four-trace score by 0.3 %, in the wrong direction, because the surviving
+    /// satellites agree with each other on the wrong answer. A
+    /// dilution-of-precision threshold — aimed straight at the geometry — makes
+    /// it monotonically worse at every setting from 2 to 15, because most
+    /// weak-geometry epochs are perfectly good and discarding them costs more
+    /// than the few bad ones do.
     ///
     /// What works is a second, independent solution. The Doppler is already
     /// being computed as the fallback, and the disagreement separates

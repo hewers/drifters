@@ -19,7 +19,8 @@ Two estimators share one interface:
   six states on self-calibration, recovering the GNSS antenna lever arm from a
   zero start. The ESKF must be told it.
 
-Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
+Both are `no_std`, allocation-free and sans-IO, and both are measured bare-metal
+under QEMU.
 
 ## Test-enforced Performance
 
@@ -28,12 +29,12 @@ Both are `no_std`, allocation-free, sans-IO, and measured on bare metal.
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
 | | per-axis bias below 1 mm |
-| **Footprint** | **11.3 KiB** peak stack (15-state), 20.3 KiB (21-state), on Cortex-M4, late fixes included |
-| | 15.1 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
+| **Footprint** | **10.1 KiB** peak stack (15-state), 16.7 KiB (21-state), on Cortex-M4, late fixes included |
+| | 15.4 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 647, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 752 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -59,8 +60,8 @@ NIS of 6 718: bounded, and very confident about the wrong thing.
 
 Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
 takes it to **3.5 cm** with a NIS of 1.55, against the ESKF's 3.3 cm and 1.46:
-within 6 % of an Earth-referenced filter, where uncompensated it was
-twenty-seven times worse. The replay picks that for this IMU by itself, from
+within 6 % of an Earth-referenced filter, and twenty-seven times better than
+uncompensated. The replay picks that for this IMU by itself, from
 the gyro's grade, as [adr/0008](docs/adr/0008-earth-model-by-sensor-grade.md)
 decides.
 
@@ -70,24 +71,21 @@ rotation in the filter's group instead. In simulation, a still 0.003 °/h unit
 starting 3° off finds north to **0.026°** in 15 minutes, level with the ESKF's
 0.025°, where the compensated filter stays about 4° off. The model holds at or near
 its anchor. For a unit that travels, use the ESKF. No navigation-grade IMU has been
-run through it yet.
+run through it.
 
-This section has said twice that the EqF diverges on this dataset, first
-blaming the Earth and then GCU. With compensation it was neither. The EqF has
-no scale-factor states, so the −260 ppm vertical accelerometer scale factor
-the ESKF estimates reaches it as a 250 mGal bias, seventeen sigma outside the
-bias prior it was handed; and GCU's covariance update was not the paper's, and
-recorded corrections it had only partly applied. With the scale factor carried
-in the prior and the paper's update, every GCU rate converges. See
-[docs/eqf.md](docs/eqf.md#three-things-that-were-wrong-none-of-them-the-earth).
+The EqF has no scale-factor states, so the −260 ppm vertical accelerometer scale
+factor the ESKF estimates reaches it as a 250 mGal bias, seventeen sigma outside an
+ordinary bias prior. The replay carries that scale factor in the prior, and the GCU
+covariance update is the paper's, counting the inflation as measurement noise. With
+both, every GCU rate converges. See
+[docs/eqf.md](docs/eqf.md#what-the-compensated-filter-needs).
 
-The EqF also self-calibrated the GNSS antenna lever arm from a zero start,
-against an ESKF handed the answer from config: `[+0.163, −0.305]` m
-horizontally against a configured `[+0.136, −0.301]`. The 2.7 cm along the
-vehicle is the configuration's error, not the filter's: the ESKF's own
-residuals sit 2.6 cm behind the fixes along the direction of travel, and handed
-the EqF's value it improves from 3.30 to 3.25 cm. The ESKF cannot do this at
-all.
+The EqF also calibrates the GNSS antenna lever arm from a zero start, where the
+ESKF is handed it from config: `[+0.163, −0.305]` m horizontally against a
+configured `[+0.136, −0.301]`. The 2.7 cm along the vehicle is the configuration's
+error, not the filter's: the ESKF's own residuals sit 2.6 cm behind the fixes along
+the direction of travel, and handed the EqF's value it improves from 3.30 to
+3.25 cm. The ESKF cannot estimate the lever arm at all.
 
 ![ESKF and EqF against ground truth on a GSDC 2023 phone trace](docs/figures/gsdc-comparison.svg)
 
@@ -136,9 +134,7 @@ The EqF's generalised covariance union is what its lead is built on. Its
 convergence rate α, the knob that replaces χ² rejection, is best at 0 on seven
 of eight trace and tuning combinations; and α = 0 is not off — it still
 inflates — while turning it off costs 4 to 36 % everywhere. Larger α helps on
-trace A at ×300 and does not survive the held-out traces. This paragraph used
-to say GCU was harmful, with α = 0.5 at 19.7 m on trace A; most of that was the
-covariance update that has since been made the paper's. Sweeps in
+trace A at ×300 and does not survive the held-out traces. Sweeps in
 [docs/eqf.md](docs/eqf.md#gcu-measured-on-four-traces) and
 [docs/gsdc.md](docs/gsdc.md).
 
@@ -156,25 +152,21 @@ Every replay takes `--engine eskf`, `eqf` or `eskf,eqf`, and runs each through
 the same loop. The table above is `drifters tune --dir <trace>`, which sweeps
 both.
 
-The per-filter diagnostic figures, with NIS, are still there: `drifters plot`
-and `drifters gsdc --figure`. Filter consistency means NIS *scattered about 3*,
-not NIS *small*.
+The per-filter diagnostic figures, with NIS, come from `drifters plot` and
+`drifters gsdc --figure`. Filter consistency means NIS *scattered about 3*, not NIS
+*small*.
 
 ### What made the phone result work: the GNSS, not the filter
 
-The first attempt at that trace was a negative result. Position-only aiding
-gained **1.7 %** over the phone's own GNSS, and un-tuned it was *worse* than
-doing nothing.
+Position-only aiding gains **1.7 %** over the phone's own GNSS on that trace, and
+un-tuned it is *worse* than doing nothing. Heading is weakly observable from
+position alone, so a phone gyro's drift injects error faster than 1 Hz fixes remove
+it. Solving a **Doppler velocity** from the dataset's pseudorange rates raises the
+gain to 34.7 %. The table above is still not the best this repository does with the
+same files.
 
-That was diagnosed rather than tuned away — heading is weakly observable from
-position alone, so a phone gyro's drift injects error faster than 1 Hz fixes
-remove it — and solving a **Doppler velocity** from the pseudorange rates in the
-dataset moved it to 34.7 %. But following that thread to the end turned the
-conclusion around, and the table above is no longer the best this repository
-does with the same files.
-
-The dataset ships raw observables, and almost none of the work was in the
-filter:
+The dataset ships raw observables, and most of the gain comes from using them, not
+from the filter:
 
 | what changed | competition score, four traces |
 |---|---|
@@ -197,76 +189,65 @@ trajectory shape the carrier phase measures directly and 2000× better. The
 batch fit is non-causal, so it is a different product rather than a competitor
 — but it settles where the remaining error lives.
 
-Three findings on the way there are worth more than the number:
+Three properties of this data matter more than the number:
 
 - **The cycle-slip flag is never set**, on any of the four traces, while 8.1 %
-  of carrier pairs are in fact slipped. This is the second validity flag in the
-  dataset worth nothing; the `State` bits on the pseudoranges were the first.
+  of carrier pairs are in fact slipped. The `State` bits on the pseudoranges are
+  just as uninformative.
 - **A delta is not a velocity at either endpoint.** Handing the filter
-  `delta/dt` threw away the entire advantage — the lagged carrier velocity is
-  no better than the Doppler it replaced — because a delta belongs to its
-  interval's midpoint.
+  `delta/dt` throws away the whole advantage, leaving a lagged carrier velocity
+  no better than Doppler, because a delta belongs to its interval's midpoint.
 - **A solve cannot always tell that it has failed.** About one epoch in a
-  hundred came out confidently wrong, and neither its residual scatter nor its
-  geometry could see it. Only an independent second solution could.
+  hundred comes out confidently wrong, and neither its residual scatter nor its
+  geometry shows it. Only an independent second solution does.
 
 Full diagnosis in [docs/gsdc.md](docs/gsdc.md) and
 [docs/gsdc-observables.md](docs/gsdc-observables.md).
 
 ## Status
 
-**Working and validated:** core math, strapdown mechanization, 21-state ESKF,
-loosely-coupled GNSS, auxiliary sensors (ZUPT, non-holonomic constraints,
-odometer, barometric height, three-axis magnetometer with hard and soft iron
-calibration), protobuf serialization,
-bare-metal Cortex-M, KF-GINS dataset regression.
+**Working and validated:** core math, strapdown mechanization, the ESKF at 21 or 15
+states, loosely and tightly coupled GNSS, RTS smoothing, auxiliary sensors (ZUPT,
+non-holonomic constraints, odometer, barometric height, three-axis magnetometer with
+hard and soft iron calibration), IMU-to-vehicle mounting estimation, initial
+alignment, protobuf serialization, bare-metal Cortex-M, KF-GINS dataset regression.
 
-**In progress:** the equivariant filter. It runs end to end on both datasets
-(see above) — symmetry group, lift, linearisation, group exponential, GCU and
-the propagate/update loop, every Jacobian checked against a numerical one. It
-now has an engine, `EqfEngine`, driven exactly as the ESKF's is: sans-IO,
-validated configuration, the IMU sample split at the GNSS epoch, gated updates.
-Both engines implement
-[`Estimator`](crates/drifters-core/src/estimator.rs), extracted once both
-existed, and one contract test runs against the pair. A fix that arrives late
-is applied by rewinding for either one, through the same generic layer in
-`drifters-core`, and every dataset replay above runs whichever engine
-`--engine` selects through one loop.
+The equivariant filter runs end to end on both datasets: symmetry group, lift,
+linearisation, group exponential, GCU and the propagate/update loop, with every
+Jacobian checked against a numerical one. `EqfEngine` is driven exactly as the
+ESKF's engine is: sans-IO, validated configuration, the IMU sample split at the GNSS
+epoch, gated updates. Both engines implement
+[`Estimator`](crates/drifters-core/src/estimator.rs), and one contract test runs
+against the pair. A fix that arrives late is applied by rewinding for either one,
+through the same generic layer in `drifters-core`, and every dataset replay above
+runs whichever engine `--engine` selects through one loop.
 
-Building it from the papers rather than from notes turned up
-[six places the source cannot be taken literally](docs/eqf.md#six-places-the-source-cannot-be-taken-literally).
-A transcription would have shipped all six. The last was caught only after
-moving a numerical Jacobian **off the identity element**, where `Â = I` had been
-quietly making a body-frame rate and a global-frame rate look like the same
-expression — it showed up in closed loop as a lever arm ten times more confident
-than it was correct.
+The paper cannot be transcribed as printed: there are
+[six places the source cannot be taken literally](docs/eqf.md#six-places-the-source-cannot-be-taken-literally),
+each with a test that fails under the other reading. One shows only away from the
+identity element, where `Â = I` makes a body-frame rate and a global-frame rate the
+same expression.
 
-**Not done:** timing on real silicon, and this has never run on a physical IMU.
-Everything is dataset replay plus emulation. [`cortex-m-hil`](cortex-m-hil) is
-the firmware for both, built and checked under emulation, and it has not yet
-been on a board. See [docs/milestones.md](docs/milestones.md) for the full
-roadmap and what each milestone actually proved.
+**Not done:** timing on real silicon, and any run on a physical IMU. Everything is
+dataset replay plus emulation. [`cortex-m-hil`](cortex-m-hil) is the firmware for
+both, built and checked under emulation, and it has never been on a board.
+[docs/milestones.md](docs/milestones.md) lists the open work.
 
 What emulation does say about timing is a floor, and it is not a comfortable
-one. An IMU sample costs 3.7 million instructions in the default build on a
+one. An IMU sample costs 3.9 million instructions in the default build on a
 Cortex-M4, because that core's FPU is single precision and the filter's `f64`
-runs in software: at least 22 ms at 168 MHz, so it cannot follow a 100 Hz IMU
-there. `--features f32-covariance` removes 87 % of that, to 486 thousand, with
+runs in software: at least 23 ms at 168 MHz, so it cannot follow a 100 Hz IMU
+there. `--features f32-covariance` removes 88 % of that, to 487 thousand, with
 no measurable change in any result, and is the configuration to use on that
 part. The equivariant filter is 4.5 million dense, and 0.89 million with its
 covariance factored and held in `f32`, again with no measurable change.
 
 A Cortex-M7 with a double-precision FPU is a different problem, once built with
-`-C target-cpu=cortex-m7`. The same sample is 304 thousand instructions for the
-ESKF and 275 thousand for the dense equivariant filter. `f32-covariance` then
-saves about 2 %, and the factored `f32` filter costs 21 % more than the dense
+`-C target-cpu=cortex-m7`. The same sample is 303 thousand instructions for the
+ESKF and 277 thousand for the dense equivariant filter. `f32-covariance` then
+saves under 2 %, and the factored `f32` filter costs 20 % more than the dense
 one. Those are instruction counts, and double-precision instructions take that
-core longer, so which build is fastest there still needs a board.
-
-For a long time this repository quoted 21 398 for the default build, 165 times too
-few, from a counter in the wrong unit that had also wrapped;
-[docs/testing.md](docs/testing.md#instructions-retired) has the numbers and how
-they were got wrong.
+core longer, so which build is fastest there needs a board.
 
 ## Layout
 
@@ -279,6 +260,7 @@ drifters-proto     no_std — protobuf codecs (micropb), codegen needs no protoc
 drifters-eqf       no_std, no alloc — equivariant filter, Lie groups,
                    self-calibration, EqfEngine
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
+drifters-gnss      std — robust positioning, carrier phase, RINEX, trajectory fit
 drifters-cli       std — replay, estimator comparison, NEES and tuning
 examples/rtic-imu  firmware — IMU interrupt to engine to telemetry under RTIC,
                    run on QEMU's STM32F405 in CI
@@ -442,9 +424,8 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   against a 3.3 cm error budget. The *covariance* is a separate question, and
   because it is stored factored the answer differs: `--features f32-covariance`
   halves it to 924 bytes and puts its arithmetic on the Cortex-M4F's
-  single-precision FPU instead of in soft-float — 87 % of the instructions
-  an IMU sample costs there — with KF-GINS, GSDC and NEES all unchanged. Both,
-  and how the second was got wrong the first time, in
+  single-precision FPU instead of in soft-float — 88 % of the instructions
+  an IMU sample costs there — with KF-GINS, GSDC and NEES all unchanged. See
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
 
 ## Minimum supported Rust
@@ -457,7 +438,8 @@ that go on the target, which depend on nothing but `libm`, and on `defmt` and
 
 ## Documentation
 
-The docs carry the reasoning, including the parts that did not work.
+The docs carry the reasoning and the evidence, including where the filters do not
+help.
 
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
@@ -466,14 +448,14 @@ The docs carry the reasoning, including the parts that did not work.
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
-- [milestones.md](docs/milestones.md) — roadmap and measured outcomes
-- [adr/](docs/adr/) — decisions and why, including the ones reversed later
+- [milestones.md](docs/milestones.md) — what works, what CI checks, and what is open
+- [adr/](docs/adr/) — decisions and why
 - [papers/](docs/papers/) — the source papers: citations, DOIs and how to fetch them
 
 Three worth reading if you are evaluating this seriously:
 [why an accelerometer bias and a tilt are the same measurement to a stationary
-filter](docs/state-model.md), [why `f32` was measured and
-rejected](docs/adr/0005-scalar-type.md), and [why the frame is NED/FRD rather
+filter](docs/state-model.md), [why position stays `f64` while the covariance can
+be `f32`](docs/adr/0005-scalar-type.md), and [why the frame is NED/FRD rather
 than the ROS convention](docs/adr/0006-frame-convention.md).
 
 ## Licence

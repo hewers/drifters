@@ -192,10 +192,7 @@ impl EqFilter {
     /// both self-calibrate; `the_lever_arm_converges_from_zero` reproduces
     /// that.
     ///
-    /// GCU starts at `α = 0`, the engine's default. It used to start at `0.5`,
-    /// and a replay that built this directly and never set it ran there
-    /// unawares; the divergence it recorded was then attributed to the Earth
-    /// model. See docs/eqf.md.
+    /// GCU starts at `α = 0`, the engine's default.
     ///
     /// `frame` is a gravity vector for the paper's flat Earth, or a
     /// [`GlobalFrame`].
@@ -245,7 +242,7 @@ impl<C: Covariance> EqFilter<C> {
     /// filter absorbs it into `b_a` and reports a converged but incorrect bias.
     ///
     /// One midpoint evaluation removes it and makes the scheme second order.
-    /// Attitude and the calibration states were exact to `10⁻¹⁵` either way,
+    /// Attitude and the calibration states are exact to `10⁻¹⁵` either way,
     /// their part of `Λ` being constant over the interval.
     ///
     /// # Negative `dt`
@@ -552,13 +549,11 @@ mod tests {
         ///
         /// # Why the rotation axis has to move
         ///
-        /// A first attempt used a constant body rate, and the lever arm did not
-        /// converge at all — by construction, not by accident. Under a fixed
-        /// rotation axis `n̂`, `R t` splits into `R₀ t_∥ n̂`, which is constant
-        /// and therefore indistinguishable from a position offset, plus a
-        /// rotating remainder. `t_∥` and `p` are jointly unobservable, and here
-        /// `t · n̂ = −0.86` of a `0.97 m` lever — so the "failure" was an
-        /// unobservable direction being faithfully not estimated.
+        /// With a constant body rate the lever arm cannot converge. Under a
+        /// fixed rotation axis `n̂`, `R t` splits into `R₀ t_∥ n̂`, which is
+        /// constant and therefore indistinguishable from a position offset,
+        /// plus a rotating remainder. `t_∥` and `p` are jointly unobservable,
+        /// and here `t · n̂ = −0.86` of a `0.97 m` lever.
         ///
         /// Sweeping the axis fixes it. The specific force is derived from a
         /// desired global acceleration rather than set in the body frame, so the
@@ -719,10 +714,10 @@ mod tests {
         }
     }
 
-    /// The covariance arithmetic as it was first written: one expression per
-    /// equation, every operator returning a `21 × 21` by value.
+    /// The covariance arithmetic written one expression per equation, every
+    /// operator returning a `21 × 21` by value.
     ///
-    /// Kept verbatim, because it is the form a reader checks against the
+    /// Kept because it is the form a reader checks against the
     /// paper, and because "the in-place rewrite computes the same thing" is a
     /// claim about every bit of 441 numbers that only a comparison can make.
     impl EqFilter {
@@ -1122,10 +1117,8 @@ mod tests {
             f.update_position(t.antenna(), &Mat3::from_diagonal(&[0.04, 0.04, 0.09]));
         }
         let after = observed(&f);
-        // 3.68 m -> 0.08 mm. Run with GCU's β in the loop, as this test first
-        // was, it stopped at 7.4 mm: most of the twelve updates applied about
-        // half their correction, and that was mistaken for a linearisation
-        // floor.
+        // 3.68 m -> 0.08 mm. With GCU's β in the loop it stops at 7.4 mm: most
+        // of the twelve updates apply about half their correction.
         assert!(
             after < before * 1e-4,
             "repeated updates should collapse the innovation: {before:.4} -> {after:.4}"

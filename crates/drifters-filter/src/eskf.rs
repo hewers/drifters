@@ -456,11 +456,8 @@ impl Eskf {
     ) -> bool {
         let dt = imu.dt;
 
-        // Φ = I + F·dt, the same first-order discretisation the dense form
-        // used. Built in place for the reason the dense one was: the
-        // expression-chained version held about a dozen 21x21 matrices live,
-        // which measured at 35.3 KiB of stack on Cortex-M4 — see
-        // docs/design.md.
+        // Φ = I + F·dt, first order. Built in place because an expression-chained
+        // version holds about a dozen 21x21 matrices live — see docs/design.md.
         let mut phi = transition_matrix(state, imu, noise);
         for (i, row) in phi.data.iter_mut().enumerate() {
             for x in row.iter_mut() {
@@ -504,8 +501,7 @@ impl Eskf {
             *d *= dt;
         }
         // A degenerate transition or a variance past `MAX_VARIANCE` is the only
-        // way this fails, and it leaves the covariance untouched, which is
-        // what the dense form did when its symmetrisation had nothing to fix.
+        // way this fails, and it leaves the covariance untouched.
         let _ = self.covariance.predict(&phi, &mapping, &density);
         true
     }
@@ -823,7 +819,7 @@ impl Eskf {
     /// True when the covariance is finite and has no negative variance.
     ///
     /// The factored form keeps the second half true by construction, so this
-    /// is now a check that nothing has gone non-finite rather than a check
+    /// is a check that nothing has gone non-finite rather than a check
     /// that the covariance is still a covariance.
     pub fn is_healthy(&self) -> bool {
         self.covariance.is_healthy()

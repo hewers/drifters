@@ -947,7 +947,7 @@ fn gsdc_pass<E: ReplayEngine>(
 
             // Before the update: what the filter predicted, against what the
             // receiver said. After it, the difference is mostly the fix's own
-            // error, which is what this column held until it was moved here.
+            // error.
             let predicted = engine.antenna_position().ned_from(fix.position);
 
             // Tight coupling consumes the ranges the epoch was solved from,

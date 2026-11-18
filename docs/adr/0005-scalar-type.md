@@ -8,9 +8,9 @@
 matrix in the stack. The Cortex-M4F and many Cortex-M7 parts have
 single-precision FPUs, so `f64` arithmetic on them is emulated in software by
 `compiler-builtins`. That is the largest performance question the project has:
-whether a narrower scalar is available anywhere it would matter. This record
-first said every Cortex-M7 was such a part. Those with a double-precision FPU
-are not, once built for it; see the last consequence below.
+whether a narrower scalar is available anywhere it would matter. Cortex-M7 parts
+with a double-precision FPU, built for it, are the exception; see the last
+consequence below.
 
 It needs measurement rather than intuition. "Position needs `f64`" is easy to
 assert and easy to get wrong in either direction.
@@ -67,13 +67,14 @@ Measured across the campaign at both precisions:
 
 | | `f64` | `f32-covariance` |
 |---|---|---|
-| KF-GINS horizontal residual | 0.0330 m | 0.0330 m |
+| KF-GINS horizontal residual | 0.0329 m | 0.0329 m |
 | KF-GINS NIS over 3 362 fixes | 1.459 | 1.459 |
-| GSDC competition score | 3.244 | 3.244 |
+| GSDC competition score, `gsdc2023` at `--imu-scale 300` | 5.150 | 5.150 |
 | Monte-Carlo NEES, 40 runs | 13.874 / 15 | 13.874 / 15 |
 
-The KF-GINS and GSDC reports are byte-identical. The NEES per-block and per-pair
-figures differ in the fourth significant figure and nowhere earlier.
+Every KF-GINS summary figure is identical, and so is every GSDC figure except the
+smoother's largest horizontal error, 19.581 m against 19.580 m. The NEES per-block
+and per-pair figures differ by at most two units in the last printed figure.
 
 **3. No global `f32` switch.** A crate-wide `--features f32` would look like it
 worked — the code compiles, the tests that do not check absolute position still
@@ -90,28 +91,21 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
 - On `thumbv7em-none-eabihf` the UD routines compile to `vmul.f32`, `vdiv.f32`
   and `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
   `__aeabi_dadd` and `__aeabi_ddiv` without it. Measured over a full `add_imu`,
-  that is 3.58 million instructions retired against **530 thousand**: 85 % of
-  the work gone.
-
-  This bullet first read "22 415 instructions retired against 13 238". Both
-  were SysTick ticks of forty instructions, and the first had wrapped a 24-bit
-  counter twice; it was 89 524. The decision does not depend on the size of
-  the saving, only on its costing nothing in accuracy, so nothing above
-  changes. The saving is twice what it was credited with. See
-  [testing.md](../testing.md), Layer 9.
-- The covariance halves, 1 848 bytes to 924, and the engine goes 3 240 to 2 320.
+  that is 3.94 million instructions retired against **487 thousand**: 88 % of
+  the work gone. See [testing.md](../testing.md), Layer 9.
+- The covariance halves, 1 848 bytes to 924, and the engine goes 3 272 to 2 352.
 - Position stays `f64` on every target, so the remaining soft-float cost is the
   mechanization's. [adr/0009](0009-local-first-architecture.md) records why
-  moving it is not currently worth the accuracy it would spend.
+  moving it is not worth the accuracy it would spend.
 - Parts with no FPU at all (Cortex-M0+, `thumbv6m`) are unaffected in kind: they
   emulate `f32` too, and gain only the smaller footprint.
 - The 15-state reduced configuration remains the cheapest large saving, because
   it removes work and memory without touching numerics.
 - **On a Cortex-M7 with a double-precision FPU, built with
   `-C target-cpu=cortex-m7`, `f32-covariance` buys almost no instructions:**
-  295 thousand per `add_imu` against 290 thousand, 1.9 %, where the Cortex-M4F
-  saves 87 %. The equivariant filter's factored `f32` form costs 25 % *more* than
-  its dense `f64` one there. The decision stands, since the feature costs no
+  298 thousand instructions per `add_imu` against 303 thousand, 1.6 %, where the
+  Cortex-M4F saves 88 %. The equivariant filter's factored `f32` form costs 20 %
+  *more* than its dense `f64` one there. The decision stands, since the feature costs no
   accuracy and halves the covariance, but its reason is specific to parts whose
   `f64` is in software. Whether `f32` still wins in cycles on the Cortex-M7, where
   double-precision instructions take longer, needs a board. See

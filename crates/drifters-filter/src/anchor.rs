@@ -127,13 +127,11 @@ mod tests {
 
     /// A strongly **anisotropic** covariance with correlations everywhere.
     ///
-    /// Anisotropy is the whole point, and getting it wrong made this file's
-    /// first version useless. A rotation `J` is orthogonal, so `eᵀP⁻¹e` is
-    /// invariant under it *exactly* — which means a near-isotropic `P` is
+    /// Anisotropy is the whole point. A rotation `J` is orthogonal, so `eᵀP⁻¹e`
+    /// is invariant under it *exactly* — which means a near-isotropic `P` is
     /// invariant under the wrong rotation too, and the gate passes whatever
-    /// `jacobian` returns. The original fixture was `A Aᵀ + I` with `D`
-    /// spanning a factor of two, and under `f32-covariance` it accepted a
-    /// jacobian that rotated nothing.
+    /// `jacobian` returns. With `A Aᵀ + I` and `D` spanning a factor of two,
+    /// under `f32-covariance` the gate accepts a jacobian that rotates nothing.
     ///
     /// So the variances differ sharply *within* each rotating block: mixing
     /// them is what a wrong rotation does, and what a right one must not.

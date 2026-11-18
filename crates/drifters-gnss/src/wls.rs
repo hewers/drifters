@@ -218,12 +218,12 @@ mod tests {
     ///
     /// # The geometry has to be realistic or the test measures the wrong thing
     ///
-    /// A first version placed every satellite at the same range with only two
-    /// distinct elevations. That confounds the vertical position with the
-    /// receiver clock — both enter almost identically — and the resulting
-    /// dilution of precision swamped the weighting completely: robust and
-    /// ordinary least squares returned bit-identical answers, which read as a
-    /// broken solver and was a broken scene.
+    /// Every satellite at the same range with only two distinct elevations would
+    /// confound the vertical position with the receiver clock — both enter
+    /// almost identically — and the resulting dilution of precision would swamp
+    /// the weighting: robust and ordinary least squares would return
+    /// bit-identical answers, which reads as a broken solver and is a broken
+    /// scene.
     ///
     /// Satellites are therefore placed on a real orbital shell at spread
     /// azimuths and elevations, so range varies with elevation the way it does

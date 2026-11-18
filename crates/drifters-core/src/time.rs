@@ -8,19 +8,18 @@
 //!
 //! # Saying which epoch you mean
 //!
-//! The type used to be a week number and a float time of week, with a
-//! `from_tow` that accepted any float. Nothing then stopped a Unix timestamp
-//! being read as a time of week: 1 684 527 052 seconds reduces to 159 052
-//! seconds into week 2 785, which is internally consistent, compares fine
-//! against other timestamps built the same way, and is a decade away from the
-//! instant meant: the Unix and GPS epochs are ten years apart, so the number
-//! lands in 2033. A RINEX file reading 504 670 for the same instant then
-//! looks like a mismatch with no obvious cause.
+//! A week number and a float time of week would let a Unix timestamp be read as
+//! a time of week: 1 684 527 052 seconds reduces to 159 052 seconds into week
+//! 2 785, which is internally consistent, compares fine against other
+//! timestamps built the same way, and is a decade away from the instant meant:
+//! the Unix and GPS epochs are ten years apart, so the number lands in 2033. A
+//! RINEX file reading 504 670 for the same instant then looks like a mismatch
+//! with no obvious cause.
 //!
-//! That cost a debugging session, and the fix is in the constructors. Each one
-//! names the epoch and scale it expects, and a Unix time cannot be converted
-//! without stating a leap-second count — the count is not recoverable from the
-//! value, so assuming one silently is the same class of mistake.
+//! So each constructor names the epoch and scale it expects, and a Unix time
+//! cannot be converted without stating a leap-second count — the count is not
+//! recoverable from the value, so assuming one silently is the same class of
+//! mistake.
 
 // `Real` supplies the no_std float math; see math::real for why the test
 // harness's injected `std` makes this look unused.

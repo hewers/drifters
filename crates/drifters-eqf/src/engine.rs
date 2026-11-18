@@ -1189,8 +1189,8 @@ mod tests {
     /// The filter splits a correction between them in proportion to their
     /// priors, here 25 to 1, so of an 11.4 m gap the lever arm keeps 0.4 m
     /// for as long as the vehicle does not turn. That is the model being
-    /// honest about what it cannot see, and the first version of this test
-    /// asked the body position to converge and failed at 0.71 m.
+    /// honest about what it cannot see, so this test asks the antenna to
+    /// converge and not the body position.
     #[test]
     fn repeated_fixes_drive_the_antenna_to_the_fix() {
         let mut e = EqfEngine::new(options()).unwrap();

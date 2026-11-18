@@ -34,8 +34,8 @@ errors, a sigma for each, and the lever arm it used. It knows no estimator.
 `GinsOptions::with_alignment` and `EqfOptions::with_alignment` turn that into
 each engine's starting point.**
 
-Three choices inside it are worth recording, because each one replaced
-something simpler that was tried or considered.
+Three choices inside it are worth recording, because the simpler option fails in
+each case.
 
 **Heading comes from fitting the inertial track to the GNSS track, not from
 course over ground.** Course is the direction of travel, which is the vehicle's
@@ -48,14 +48,14 @@ yaw all work.
 than unknowns, so its residuals show how well the fixes and the IMU really
 agree. When they agree worse than the sigmas promise, the heading sigma and the
 sigma of the state taken from those fixes are widened by that ratio. Phone
-velocity sigmas needed this. The cost of an overconfident receiver becomes time
+velocity sigmas need this. The cost of an overconfident receiver becomes time
 to align, not a wrong sigma handed to the filter.
 
 **Bias sigmas do not go below the sensor's in-run figure.** Averaging a long rest
 drives the formal sigma of the gyro bias to a few degrees per hour, and on
-phones the bias the engine converged to afterwards was up to hundreds of degrees
+phones the bias the engine converges to afterwards is up to hundreds of degrees
 per hour away, because moving changes it. An engine seeded with the formal
-figure refused to learn the difference. Flooring it took the ESKF's horizontal
+figure refuses to learn the difference. Flooring it takes the ESKF's horizontal
 RMS on `gsdc2023` with position-only fixes from 15.06 m to 11.30 m.
 
 ## Consequences

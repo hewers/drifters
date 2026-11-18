@@ -587,9 +587,9 @@ the list below is what the release *is* rather than what changed.
   the documentation come from tests in this repository, and the results that did
   not work are recorded alongside the ones that did. See
   [`docs/testing.md`](docs/testing.md).
-- **The API will change.** This is `0.x`: the local-frame work in
-  [`docs/adr/0009`](docs/adr/0009-local-first-architecture.md) touches the core
-  types, and pre-1.0 that lands as a minor bump rather than waiting.
+- **The API can change.** This is `0.x`: the local-frame work parked in
+  [`docs/adr/0009`](docs/adr/0009-local-first-architecture.md) would touch the
+  core types, and pre-1.0 that would land as a minor bump.
 
 [Unreleased]: https://github.com/hewers/drifters/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/hewers/drifters/releases/tag/v0.1.0

@@ -21,7 +21,7 @@ from before the epoch and replays the samples since, in a fixed-size ring, with
 a result bit-identical to on-time delivery. The machinery is
 `drifters_core::rewind`, which the equivariant filter's engine uses too.
 
-Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 11.3 KiB peak
+Measured: 3.3 cm horizontal RMS over 57 minutes of real driving; 10.1 KiB peak
 stack on Cortex-M4 in the 15-state configuration; the data path links no panic
 machinery.
 
@@ -29,8 +29,8 @@ Features:
 
 - `reduced-state` — drops the scale factors for a 15-state filter.
 - `f32-covariance` — carries the covariance factors in single precision, which
-  on a Cortex-M4F is the difference between the FPU and soft-float: 479
-  thousand instructions per IMU sample against 3.6 million. On that core the
+  on a Cortex-M4F is the difference between the FPU and soft-float: 487
+  thousand instructions per IMU sample against 3.9 million. On that core the
   default build cannot keep up with a 100 Hz IMU, and this one is the
   configuration to use. A Cortex-M7 built with `-C target-cpu=cortex-m7` runs
   `f64` on its double-precision FPU, and there this saves under 2 % of the

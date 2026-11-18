@@ -109,9 +109,9 @@ macro_rules! require {
 
 impl From<&GpsTime> for pb::GpsTime {
     fn from(t: &GpsTime) -> Self {
-        // The wire format stays a week and a time of week: it is a separate
-        // compatibility surface from the Rust API, and the accessors give the
-        // same values the fields used to.
+        // The wire format is a week and a time of week: a separate
+        // compatibility surface from the Rust API, and the accessors give
+        // those two values.
         Self {
             r#week: t.week(),
             r#tow_s: t.tow(),

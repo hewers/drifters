@@ -69,7 +69,8 @@ pub mod types;
 /// geodetic latitude carries roughly 1e-9 rad of meaningful resolution (~6 mm),
 /// which `f32` cannot represent, so the position and attitude states require
 /// `f64` regardless of the target. Centralising the alias keeps the door open
-/// for a future generic scalar without an API-wide churn — see milestone M8.
+/// for a future generic scalar without an API-wide churn; see
+/// `docs/adr/0005-scalar-type.md`.
 pub type F = f64;
 
 /// Frequently used items, re-exported for `use drifters_core::prelude::*;`.

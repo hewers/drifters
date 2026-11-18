@@ -346,8 +346,8 @@ pub fn magnetic_heading(pva: &Pva, heading: F, sigma: F) -> Measurement<1> {
 /// average out the way noise does.
 ///
 /// Every state correlated with attitude is corrected, roll and pitch included.
-/// Holding tilt back was tried and flew worse, with and without a disturbance:
-/// the part of the residual tilt would have explained reaches the gyro biases
+/// Holding tilt back flies worse, with and without a disturbance: the part of
+/// the residual tilt would explain reaches the gyro biases
 /// regardless. `docs/testing.md` has the numbers. What protects the solution
 /// from a wrong field is a calibration that found the sensor's rotation
 /// ([`AidedMagFit`]) and a check of the strength before the reading is offered

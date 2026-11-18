@@ -8,9 +8,9 @@ Nothing here is part of the library, tested, or maintained.
 
 ## `gsdc_robust_wls.py`
 
-The robust weighted position solver characterised in
-[`../docs/gsdc-observables.md`](../docs/gsdc-observables.md), used to decide
-whether it was worth writing in Rust. It was.
+The Python form of the robust weighted position solver characterised in
+[`../docs/gsdc-observables.md`](../docs/gsdc-observables.md). The Rust form is in
+`drifters-gnss`.
 
 ```bash
 python3 prototypes/gsdc_robust_wls.py gsdc2023-b     # any datasets/ subdirectory

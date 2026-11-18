@@ -584,8 +584,7 @@ impl Ud {
     /// The weight multiply then happens once per pivot instead of once per
     /// pair, and both inner loops become a dot product and an AXPY over
     /// contiguous slices, which vectorise. Reading the pivot through the same
-    /// `&mut` that writes the other row does not, and that was how this was
-    /// first written.
+    /// `&mut` that writes the other row does not.
     ///
     /// All or nothing. A row is dead once it has been pivoted on, so its result
     /// is kept in it, `D` on the diagonal and `U`'s column to the left, and
@@ -804,8 +803,8 @@ mod tests {
     /// the two states are near uncorrelated, and dividing by one of those turns
     /// arithmetic noise into an enormous "relative error" without anything
     /// being wrong. One such pair — a correlation of −5e-6 between variances of
-    /// 13.7 and 250.7 — reported 4.1e-3 for a discrepancy that was 2.1e-8 of
-    /// the entry's natural scale.
+    /// 13.7 and 250.7 — reports 4.1e-3 for a discrepancy that is 2.1e-8 of the
+    /// entry's natural scale.
     ///
     /// `√(Pᵢᵢ Pⱼⱼ)` is that natural scale: the comparison becomes one between
     /// correlation coefficients, which is dimensionless and does not divide by
@@ -1034,9 +1033,8 @@ mod tests {
         // requirement comes from.
         //
         // `D`'s own spread is *not* that square root — it is the sequence of
-        // pivots, and it can span more than `P`'s diagonal does. Checking that
-        // instead is what this test used to do, and it was measuring the wrong
-        // quantity.
+        // pivots, and it can span more than `P`'s diagonal does. Checking it
+        // would measure the wrong quantity.
         let p = covariance(8, 1.0e6);
         let ud = Ud::from_covariance(&p).unwrap();
 

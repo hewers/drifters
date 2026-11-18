@@ -48,8 +48,7 @@ rm -f "$reports/$core"-*
 # over what was measured, a late fix through the rewind layer included.
 #
 # - 18 KiB for 21 states, measured at 17 088 B, and 14 KiB with
-#   `f32-covariance`, measured at 13 124 B. Each was 22 KiB until holding a
-#   state stopped forming `P`, and the deepest path became the time update.
+#   `f32-covariance`, measured at 13 124 B. The deepest path is the time update.
 # - 11 KiB for 15 states, measured at 10 360 B, and 9 KiB with
 #   `f32-covariance`, measured at 7 956 B: fitting where 21 states do not is the
 #   whole point of that configuration.
@@ -59,9 +58,8 @@ rm -f "$reports/$core"-*
 # - 8 KiB for the initial alignment, which runs before an engine exists and so
 #   is not added to either figure above.
 #
-# This job once could not build for three weeks, and the peak grew 63 % in that
-# window unnoticed. A job that fails to build measures nothing, which is why CI
-# builds in a step of its own before this runs.
+# A job that fails to build measures nothing, which is why CI builds in a step
+# of its own before this runs.
 configurations=(
   "default - 18432"
   "f32 f32-covariance 14336"

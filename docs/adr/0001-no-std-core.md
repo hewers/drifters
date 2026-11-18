@@ -15,19 +15,19 @@ build breaks weeks later — or worse, silently pulls in an allocator.
 Split the workspace along the `no_std` boundary and make the boundary
 structural, not conditional:
 
-- `drifters-core` and `drifters-filter` are `#![no_std]` **unconditionally**.
-  There is no `std` feature that changes their arithmetic or data structures;
-  the `std` feature only adds `std::error::Error` impls.
-- Neither crate uses `alloc`. Every type is `Copy` and fixed size.
-- `std`-requiring functionality lives in separate crates (`drifters-interop`,
-  `drifters-cli`) that depend on the core, never the reverse.
-- CI builds the `no_std` crates for a bare-metal target on every push.
+- `drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are
+  `#![no_std]` **unconditionally**. No feature changes their data structures, and
+  their error types implement `core::error::Error` without `std`.
+- None of them uses `alloc`. Every type is fixed size.
+- `std`-requiring functionality lives in separate crates (`drifters-gnss`,
+  `drifters-interop`, `drifters-cli`) that depend on the core, never the reverse.
+- CI builds the `no_std` crates for bare-metal targets on every push.
 
 Consequences that follow, and are accepted:
 
-- No dynamic sizing. The state vector is 21 elements, fixed at compile time via
-  const generics. A future 15-state variant is a different const, not a runtime
-  parameter.
+- No dynamic sizing. The state vector is 21 elements, or 15 under `reduced-state`,
+  fixed at compile time via const generics. The size is a different const, not a
+  runtime parameter.
 - No error strings, no `format!`. Errors are `Copy` enums with `as_str()`.
 - No logging inside the filter. Diagnostics are values the caller reads.
 - The engine is sans-IO. It cannot read a file or a clock even if we wanted it
@@ -41,10 +41,10 @@ run tells you the firmware build just gained an allocator. A separate crate make
 the mistake impossible to express.
 
 **`alloc` but not `std`.** Would allow `Vec` for variable-length observation
-vectors, which tight coupling eventually wants. Rejected for now: many embedded
-targets have no allocator at all, and a fallible allocation on the data path of a
-navigation filter is a failure mode with no good handling. Revisit if tight
-coupling lands.
+vectors. Rejected: many embedded targets have no allocator at all, and a fallible
+allocation on the data path of a navigation filter is a failure mode with no good
+handling. Tight coupling does not need one. `single_differences` takes its row
+count as a const generic and keeps the highest-elevation satellites that fit.
 
 ## Consequences
 

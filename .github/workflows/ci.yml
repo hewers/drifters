@@ -192,9 +192,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p drifters-core -p drifters-filter -p drifters-eqf
-      # The host-side libraries hold the same floor. Neither needs anything
-      # newer, and they sat at 1.88 for a while with no reason anyone could
-      # name, so the floor is checked here rather than asserted.
+      # The host-side libraries hold the same floor, checked here rather than
+      # asserted.
       - run: cargo build -p drifters-gnss
       - run: cargo build -p drifters-interop --features nav-types-interop
       # Including under the features that change the filter, since a feature
@@ -284,7 +283,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
       # Building is its own step so that "the harness does not compile" and
       # "the harness overflowed its budget" are different red marks in the job
-      # list. They were the same one for three weeks; see docs/testing.md.
+      # list.
       - name: build the harness in every configuration
         working-directory: cortex-m-harness
         run: |
@@ -398,9 +397,7 @@ jobs:
   # `portable_simd` is opt-in through `--cfg drifters_nightly_simd`, not a cargo
   # feature, so that `--all-features` on stable does not try to enable a
   # nightly-only attribute. Nothing here gates a release; it runs so the path
-  # cannot rot silently between now and stabilisation, because an unbuilt
-  # configuration is not a configuration and this repository has learnt that
-  # the expensive way.
+  # cannot rot silently before stabilisation.
   nightly_simd:
     name: portable_simd (nightly, optional)
     runs-on: ubuntu-latest

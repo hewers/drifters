@@ -98,7 +98,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> {
                 let a = self.data[i][k];
                 if a == 0.0 {
                     // Transition matrices are extremely sparse; skipping zero
-                    // rows is the single largest win in the predict step.
+                    // rows is what makes multiplying by one cheap.
                     continue;
                 }
                 for j in 0..C2 {

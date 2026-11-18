@@ -24,7 +24,7 @@
 //! # Why this is not in `drifters-core`
 //!
 //! The ESKF has no use for `SE₂(3)`, and core's firmware footprint is measured
-//! and defended (M8). Promote if a second consumer appears.
+//! and defended. Promote if a second consumer appears.
 
 use drifters_core::math::{Mat3, Matrix, Quat, Vec3};
 use drifters_core::F;
@@ -457,17 +457,17 @@ impl Se3 {
 /// [`Symmetry::exp`](crate::group::Symmetry::exp) needs only `ψ(v) x` for one
 /// vector, and takes it from [`integrated_adjoint_apply`]; this, the whole
 /// matrix, is for whatever needs `ψ` itself. As fifteen `6 × 6` products it
-/// was 461 thousand instructions a call on a Cortex-M4, and `exp` called it
-/// twice per IMU sample — more than the factored covariance's whole time
+/// is 461 thousand instructions a call on a Cortex-M4, and twice per IMU
+/// sample that would be more than the factored covariance's whole time
 /// update. `ad_v = [[ω^, 0], [ν^, ω^]]`, and every power of it,
 /// every partial sum and both factors of the doubling step keep that shape:
 /// lower block triangular with equal diagonal blocks. So the series runs on
 /// the diagonal block and the lower-left one, three `3 × 3` products a term
-/// where the `6 × 6` form spent the equivalent of eight.
+/// where the `6 × 6` form spends the equivalent of eight.
 ///
-/// Each element is accumulated in the order the `6 × 6` product accumulated
-/// it, skipping the same zero factors, and what the zero blocks contributed
-/// there was signed zeros added to a positive zero. The result is
+/// Each element is accumulated in the order the `6 × 6` product accumulates
+/// it, skipping the same zero factors, and what the zero blocks contribute
+/// there is signed zeros added to a positive zero. The result is
 /// bit-identical, which `the_block_series_is_the_full_one_bit_for_bit` holds
 /// it to against the `6 × 6` form, kept as a test reference.
 pub fn integrated_adjoint(v: Se3Tangent) -> Matrix<6, 6> {
@@ -577,7 +577,7 @@ fn accumulate(out: &mut Mat3, left: &Mat3, right: &Mat3) {
     }
 }
 
-/// The series as first written, as `6 × 6` products: the reference
+/// The series as `6 × 6` products: the reference
 /// [`integrated_adjoint`] is held to bit for bit.
 #[cfg(test)]
 fn integrated_adjoint_full(v: Se3Tangent) -> Matrix<6, 6> {

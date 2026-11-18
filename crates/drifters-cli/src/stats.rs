@@ -13,8 +13,7 @@
 //!
 //! - mean ≫ m — the filter is **overconfident**. Its covariance is smaller than
 //!   the errors it is actually making, so it under-weights measurements and, if
-//!   gating is on, eventually rejects all of them and freezes. This is the
-//!   failure mode M6 hit with ZUPT.
+//!   gating is on, eventually rejects all of them and freezes.
 //! - mean ≪ m — the filter is **underconfident** and throwing information away;
 //!   the estimate is valid but noisier than it needs to be.
 //!

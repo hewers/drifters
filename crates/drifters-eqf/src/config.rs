@@ -21,7 +21,7 @@ use crate::linear::DIM;
 /// other's numbers: the initial state is a geodetic [`Pva`], and every initial
 /// uncertainty is a one-sigma value in **physical** units. The engine maps
 /// them into the filter's own coordinates; see [`crate::physical`] for why
-/// that is not the identity and what it cost when it was assumed to be.
+/// that is not the identity.
 ///
 /// Where the two differ, the models do:
 ///
@@ -319,11 +319,11 @@ impl EqfOptions {
     ///
     /// The KF-GINS IMU has a vertical scale-factor error of about −260 ppm,
     /// which the ESKF estimates as a scale factor and this filter must
-    /// estimate as a 250 mGal bias. Its configured bias prior was 15 mGal, so
-    /// the truth sat seventeen sigma out. The plain update gets there anyway;
+    /// estimate as a 250 mGal bias. Its configured bias prior is 15 mGal, which
+    /// leaves the truth seventeen sigma out. The plain update gets there anyway;
     /// GCU at any `α` above zero, which slows a correction in proportion to how
-    /// surprising it is, never did, and the vertical channel ran away within
-    /// the first minute while the vehicle was still parked. See docs/eqf.md.
+    /// surprising it is, does not, and the vertical channel runs away within
+    /// the first minute while the vehicle is still parked. See docs/eqf.md.
     ///
     /// Gyroscope scale factors are left out deliberately. At rest a gyroscope
     /// reads at most Earth rate, and 300 ppm of that is `0.005 °/h`; in motion

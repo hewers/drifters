@@ -116,11 +116,9 @@ enforce it should not be casual about other people's copyright.
 blob forever, so a binary that large in history is permanent: it is paid for on
 every clone, by everyone, indefinitely.
 
-That is not hypothetical here. The archive **was** committed early on, and the
-repository's `.git` reached 3.6 GB against roughly 2 MB of actual source. It was
-purged from history in
-[`docs/adr/0007`](adr/0007-no-binaries-in-history.md), which also records how,
-and what that costs anyone holding an old clone.
+[`docs/adr/0007`](adr/0007-no-binaries-in-history.md) records why this repository's
+history holds no binaries, the purge that got it there from a 3.6 GB `.git`, and
+what that costs anyone holding an old clone.
 
 **Reproducibility is better served by a command than by a copy.** A fetch
 command names its source and its version. A committed copy silently becomes a

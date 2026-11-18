@@ -1,6 +1,6 @@
 # ADR 0008 — Earth modelling is a function of gyroscope grade
 
-**Status:** accepted; the top band revised 2026-11-18
+**Status:** accepted
 **Date:** 2026-08-11
 
 ## Context
@@ -11,35 +11,22 @@ mechanization and the error-state transition matrix. The EqF, following
 Fornasier et al., assumes a flat, non-rotating Earth with constant gravity in a
 Cartesian frame.
 
-Running both on the KF-GINS dataset made the consequence measurable. The
-uncompensated EqF diverges, with position error growing as `t³` — `7.8 × 10² m`
-at 200 s, `3.3 × 10⁶ m` at 3 200 s. A `t³` position error is a constant
-attitude-rate error; solving back gives `5.96 × 10⁻⁵ rad/s` against an Earth
-rate of `7.29 × 10⁻⁵`. The gyroscope in that dataset has a bias stability of
-0.027 °/h, so Earth rate is 557 times larger and no state in the flat-Earth
-model can absorb it. On a phone-grade trace the same filter is within 20 % of
-the ESKF, because a 20 °/h phone gyroscope sees Earth rate at 0.75 times its own
-noise floor.
+Running both on the KF-GINS dataset makes the consequence measurable. The gyroscope
+in that dataset has a bias stability of 0.027 °/h, so Earth rate is 557 times
+larger. The flat-Earth filter's gyro-bias state absorbs the vertical component,
+which is constant about a level vehicle's down axis: it converges to
+`−3.66 × 10⁻⁵ rad/s` against the `3.69 × 10⁻⁵` that is vertical at this latitude.
+The horizontal component turns with the vehicle, and no state can follow it. With
+the EqF's GCU convergence rate α = 0, the 1 Hz fixes hold the result to a metre:
+0.943 m RMS with a NIS of 6 718, twenty-seven times worse than the compensated filter
+and forty-seven times overconfident. Above α = 0 it diverges, because GCU inflates
+against fixes that bound a forcing which never stops. At α = 0.5 it ends
+`3.9 × 10⁶ m` from the last fix.
 
-**Corrected 2026-11-17.** The divergence above is real and was measured with
-the EqF's GCU convergence rate at α = 0.5, the filter's default, which the
-replay never overrode. At α = 0 the uncompensated filter does not diverge. The
-gyro-bias state absorbs the vertical component of Earth rate, constant about a
-level vehicle's down axis — it converges to `−3.66 × 10⁻⁵ rad/s` against the
-`3.69 × 10⁻⁵` that is vertical at this latitude — and the 1 Hz fixes hold the
-horizontal component, which turns with the vehicle and which no state can
-follow, to a metre: 0.943 m RMS, with a NIS of 6 718. Above α = 0 it still
-diverges, and for the flat-Earth filter that is GCU inflating against fixes
-that bound a forcing which never stops. So "no state can absorb it" was half
-wrong, and the half it was right about is the half that matters: the ratio
-below still separates a filter within 6 % of the ESKF from one twenty-seven
-times worse and forty-seven times overconfident, and the decision stands.
-
-The compensated filter's own divergences at α > 0, also once read as Earth
-rate, were not: they were an accelerometer scale factor seventeen sigma
-outside the EqF's bias prior, and a GCU covariance update that was not the
-paper's. Both are fixed and compensated runs converge at every α. See
-[eqf.md](../eqf.md#three-things-that-were-wrong-none-of-them-the-earth).
+Compensated, the same filter is within 6 % of the ESKF and converges at every α,
+given what [eqf.md](../eqf.md#what-the-compensated-filter-needs) describes. On a
+phone-grade trace the flat-Earth filter is within about 20 % of the ESKF, because a
+20 °/h phone gyroscope sees Earth rate at 0.75 times its own noise floor.
 
 The single ratio that separates those two outcomes is
 
@@ -71,8 +58,7 @@ a' = ᴵa − R̂ᵀ[(2ω_ie + ω_en) × v̂]
 
 Measured on KF-GINS, this takes the filter to 3.5 cm horizontal RMS against
 the ESKF's 3.3 cm, with a NIS of 1.55 against the ESKF's 1.46, from 0.943 m and
-a NIS of 6 718 uncompensated. (First recorded as five orders of magnitude and
-1.5 cm at the last fix, both at α = 0.5; see the correction above.)
+a NIS of 6 718 uncompensated.
 
 It is a deviation from the published filter, so the library leaves
 `EqfOptions::compensate_earth` off by default, as the paper does, and
@@ -88,8 +74,8 @@ section. The CLI selects the model here by itself. The library leaves it off, li
 compensation, and `FlatEarthVerdict::compensates_input` returns `None` because
 neither value of that setting is right.
 
-**Revised 2026-11-18.** This band was unsupported until then, on the expectation
-that a rotating frame needed a new symmetry group. It does not. Written with the
+A rotating frame does not need a new symmetry group. Written with the
+velocity `v' = v + ω × p`, the dynamics in an Earth-fixed tangent frame are
 velocity `v' = v + ω × p`, the dynamics in an Earth-fixed tangent frame are
 
 ```text
@@ -195,24 +181,23 @@ navigation grade is structural rather than numerical: the correction occupies
 the channel the estimator needs. Additional terms improve the accuracy of the
 subtraction without removing the circularity.
 
-**Add `ω_ie` to the EqF's lift and linearisation directly.** Rejected as first
-stated, and done properly in the 2026-11-18 revision. The lift (6)–(9) and the
-linearised `A_t⁰` are derived for the flat-Earth system, and adding Earth terms to
-one and not the others produces a filter that compiles, runs, and is wrong in a way
-the covariance does not report. So the system was rewritten first, with the velocity
-above, and the lift, `A_t⁰`, the output equations and the map to physical errors were
-all derived from it. A numerical Jacobian and a NEES run in a turning world check them.
+**Add `ω_ie` to the EqF's lift and linearisation directly.** Rejected as a patch.
+The lift (6)–(9) and the linearised `A_t⁰` are derived for the flat-Earth system, and
+adding Earth terms to one and not the others produces a filter that compiles, runs,
+and is wrong in a way the covariance does not report. The in-group model rewrites the
+system first, with the velocity above, and derives the lift, `A_t⁰`, the output
+equations and the map to physical errors from it. A numerical Jacobian and a NEES run
+in a turning world check them.
 
 **Adopt a two-frame group.** Barrau and Bonnabel's work on the geometry of
 navigation problems addresses rotating-frame navigation with an extended group
 construction, which matches the shape of this requirement. Not adopted: the change
 of velocity above reaches the same structure for a fixed tangent frame without a new
-group. It has still not been read closely enough to say whether it would lift the
-limit on distance from the anchor, and that is where to look if this is taken further.
+group. Whether that work would lift the limit on distance from the anchor is open, and
+it is where to look if this is taken further.
 
-**Use the ESKF above tactical grade and stop there.** The answer until 2026-11-18,
-and still the right one for a unit that travels. The ESKF models Earth rotation,
-transport rate and normal gravity along the whole trajectory. The EqF now keeps the
-gyrocompassing channel, so a unit at or near its anchor can choose either, and the
-EqF's advantages, a fixed linearisation origin and self-calibrating extrinsics, are
-no longer bought by losing true north.
+**Use the ESKF above tactical grade and stop there.** Right for a unit that travels:
+the ESKF models Earth rotation, transport rate and normal gravity along the whole
+trajectory. The EqF keeps the gyrocompassing channel, so a unit at or near its anchor
+can choose either, and the EqF's advantages, a fixed linearisation origin and
+self-calibrating extrinsics, do not cost it true north.

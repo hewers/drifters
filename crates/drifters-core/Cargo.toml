@@ -23,9 +23,9 @@ serde_json = { workspace = true }
 
 [features]
 default = []
-## Adds `std`-only conveniences (`std::error::Error` impls, `Display` helpers).
-## Does **not** change any arithmetic: scalar math always goes through `libm`
-## so results are bit-identical on host and target. See docs/adr/0004.
+## Marks a build that links `std`. It adds no API: error types implement
+## `core::error::Error` without it. Where `std` is linked, `x.sin()` reaches the
+## platform's libm rather than `libm`. See docs/adr/0004.
 std = []
 ## `defmt::Format` on every public type that implements `Debug`, for logging
 ## on target. Formatting only: no arithmetic changes.

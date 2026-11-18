@@ -9,10 +9,8 @@
 //! a clock indicator, and the weights are elevation-based with a Huber factor
 //! on top.
 //!
-//! Keeping that in one place is not only tidiness. The two solvers have to
-//! agree on the clock parameterisation and the robust scale, and when they
-//! were written separately the first thing that went wrong was that they did
-//! not.
+//! Keeping that in one place is not only tidiness: the two solvers have to
+//! agree on the clock parameterisation and the robust scale.
 
 use drifters_core::math::{Cholesky, Matrix};
 

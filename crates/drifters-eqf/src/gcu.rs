@@ -52,14 +52,13 @@
 //! form with it, which is the same update in the form that stays symmetric and
 //! positive definite under rounding.
 //!
-//! This filter first ran the Joseph form with the sensor's own `R` instead.
-//! That is the exact covariance of the error for the gain used *if* `R` is
-//! right — and GCU's whole premise is that it may not be. The posterior came
-//! out smaller by `K(S' − S)Kᵀ` on every update: a filter that had only
-//! partly applied a correction, and believed it had applied all of it. On the
-//! KF-GINS dataset that turned every `α` above zero into a divergence; with
-//! the paper's update they converge, in the order the paper says. See
-//! docs/eqf.md.
+//! Running the Joseph form with the sensor's own `R` instead is the mistake to
+//! avoid. That is the exact covariance of the error for the gain used *if* `R`
+//! is right — and GCU's whole premise is that it may not be. The posterior comes
+//! out smaller by `K(S' − S)Kᵀ` on every update: a filter that has only partly
+//! applied a correction, and believes it has applied all of it. On the KF-GINS
+//! dataset that turns every `α` above zero into a divergence; with the paper's
+//! update they converge, in the order the paper says. See docs/eqf.md.
 //!
 //! # The bound, and where it stops holding
 //!

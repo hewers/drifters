@@ -33,10 +33,10 @@ the IMU interval, and gated updates. It implements `drifters_core`'s
 The covariance is dense `f64` by default. For a microcontroller whose FPU is
 single precision, `EqfEngine::<Ud<f32>>::with_covariance(options)` holds it
 factored as `U D Uᵀ` in `f32` instead: equal to the dense form to the third
-decimal on every dataset in this repository, and 0.85 million instructions per
-IMU sample on a Cortex-M4 against 4.45 million. A Cortex-M7 built with
+decimal on every dataset in this repository, and 0.89 million instructions per
+IMU sample on a Cortex-M4 against 4.51 million. A Cortex-M7 built with
 `-C target-cpu=cortex-m7` has `f64` in hardware, and there the dense form takes
-fewer instructions, 262 thousand against 326 thousand.
+fewer instructions, 277 thousand against 334 thousand.
 
 ```rust
 use drifters_core::prelude::*;
@@ -49,8 +49,8 @@ let solution = engine.nav_state();      // geodetic
 let lever_arm = engine.lever_arm();     // estimated, not configured
 ```
 
-Measured on Cortex-M4: 15.1 KiB peak stack, no panic machinery linked, and
-5.1 million instructions per IMU sample. The last is the constraint. The
+Measured on Cortex-M4: 15.4 KiB peak stack, no panic machinery linked, and
+4.5 million instructions per IMU sample. The last is the constraint. The
 covariance is dense `f64` and that core's FPU is single precision, so on a
 Cortex-M4F this engine cannot keep pace with an IMU at any usual rate; it
 wants a host or a part with a double-precision FPU.

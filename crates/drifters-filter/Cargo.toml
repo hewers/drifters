@@ -47,7 +47,8 @@ reduced-state = []
 ## NOT additive: this changes the numerics of every filter in the build. Do not
 ## enable it via feature unification by accident.
 f32-covariance = []
-## Enables `std`-only conveniences inherited from `drifters-core`.
+## Links `std`, and passes the feature to `drifters-core`. It adds no API. See
+## docs/adr/0004 for what linking `std` does to the scalar functions.
 std = ["drifters-core/std"]
 ## `defmt::Format` on every public type that implements `Debug`, here and in
 ## `drifters-core`. Formatting only.

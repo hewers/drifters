@@ -16,13 +16,12 @@
 //! - **in**, to initialise: [`covariance_from_std`] maps independent physical
 //!   sigmas to the `Σ` that describes them.
 //!
-//! The second is the one that was got wrong. A Monte-Carlo harness drew its
-//! initial errors independently in physical coordinates and handed the filter
-//! `diag(σ²)` as though the two charts were the same. They are the same only
-//! at the anchor with no velocity. The filter read 12 % overconfident for a
-//! long time, and nothing in the filter was at fault. An engine that accepts
-//! physical sigmas, which is the only kind anyone has, must not repeat that,
-//! and this module is why it does not.
+//! The second is the easy one to get wrong. Drawing initial errors
+//! independently in physical coordinates and handing the filter `diag(σ²)`
+//! treats the two charts as the same, which they are only at the anchor with no
+//! velocity. A Monte-Carlo harness that does this reads the filter 12 %
+//! overconfident with nothing in the filter at fault. An engine accepting
+//! physical sigmas, the only kind anyone has, goes through this module.
 //!
 //! # The map
 //!

@@ -46,17 +46,17 @@ magnetometer output living on `S²` to be handled in the same framework.
 
 ## Motivation
 
-The paper's motivating experiment is the failure mode this project already hit
-from the other direction. Under prolonged static conditions an EKF suffers
+The paper's motivating experiment is a failure the ESKF here meets from the other
+direction. Under prolonged static conditions an EKF suffers
 "spurious information gain … leading to what is commonly termed *false
 observability*" (Sec. VII-A), producing a confident, wrong attitude. Their Fig. 3
 shows ArduPilot's EKF3 doing exactly that while the EqF stays consistent.
 
-M6 found the same class of problem here — accelerometer bias and tilt trading
-places along an unobservable direction — and fixed it by *constraining* the
-direction with held states. The EqF attacks the reason the linearisation is
-wrong in the first place. That makes it a genuinely different point in the
-design space rather than a re-implementation.
+The ESKF has the same class of problem — accelerometer bias and tilt trading places
+along an unobservable direction ([state-model.md](state-model.md)) — and handles it
+by *constraining* the direction with held states. The EqF attacks the reason the
+linearisation is wrong in the first place. That makes it a genuinely different point
+in the design space rather than a re-implementation.
 
 ---
 
@@ -388,28 +388,19 @@ is a bias rather than a second-order refinement.
 ∂ᴳν/∂ε₃ = −R̂ ᴵω^ Âᵀ = −Â ᴵω^ Âᵀ = −(Â ᴵω)^
 ```
 
-### The one that a passing test was hiding
+### Where a Jacobian must be evaluated
 
-The lever-arm half of that is the only correction here that a first round of
-numerical Jacobians **missed**, and how it was missed is the useful part.
+Differentiate the **innovation the update is handed**, as a function of the true
+state, at a non-identity `X̂`. At the identity observer `Â = I`, and a body-frame
+rate is indistinguishable from a global-frame one, so the lever-arm block above and
+the same block without its `Â` agree there and nowhere else.
+`the_velocity_output_matrix_matches_a_numerical_jacobian` is written that way, and
+asserts that its observer separates the two.
 
-Those tests differentiated the output map at the **identity** observer — where
-`Â = I` and a body-frame rate is indistinguishable from a global-frame one. The
-printed form passed. It surfaced instead in the closed loop, as a lever arm
-converging to `0.44 m` of error while its own covariance claimed `0.045 m`: an
-an estimate that was confidently wrong, which is the failure mode the EqF
-exists to avoid.
-
-The fix to the tests is to differentiate the **innovation the update is
-handed**, as a function of the true state, at a non-identity `X̂` — the
-definition above. Correcting the matrix moved the 300-second closed-loop
-position error from `0.45 m` to `4.6 mm` and the lever arm from `0.44 m` to
-`5 mm`, with the covariance consistent afterwards.
-
-Two conclusions. A numerical Jacobian is only as good as the point it is
-evaluated at, and identity elements are the worst available choice because they
-make distinct expressions agree. And a filter whose covariance disagrees with
-its own error by a factor of ten is reporting a modelling error, not noise.
+Two conclusions. A numerical Jacobian is only as good as the point it is evaluated
+at, and identity elements are the worst available choice because they make distinct
+expressions agree. And a filter whose covariance disagrees with its own error by a
+factor of ten is reporting a modelling error, not noise.
 
 ## Measured: the EqF on the KF-GINS dataset
 
@@ -431,7 +422,7 @@ compensated, for this one — and `--flat-earth`, `--earth-rate` or
 | EqF, flat Earth as written (`--flat-earth`) | 0.943 m | 0.069 m | 6 718 |
 
 At GCU's α = 0, the engine's default. With GCU off altogether,
-`--alpha off`, the compensated filter reads 0.0343 m and a NIS of 1.44. Both
+`--alpha off`, the compensated filter reads 0.0342 m and a NIS of 1.44. Both
 filters sit near 1.5 against an expected 3, and agree about it: the RTK fixes'
 quoted sigmas are pessimistic. The window opens on a fix 4.4 ms before the
 first IMU sample, which both engines report as stale rather than use.
@@ -440,8 +431,7 @@ first IMU sample, which both engines report as stale rather than use.
 itself.** Earth rate is `7.29 × 10⁻⁵ rad/s` and the gyro bias prior for this
 IMU is `0.027 °/h`, so Earth rate is **557×** the sensor's own noise floor:
 ["Can we assume an ellipsoidal, rotating Earth?"](#can-we-assume-an-ellipsoidal-rotating-earth)
-predicted a problem before any of this was written. What the prediction got
-wrong is that no state can represent it. Half of it, one can. At this latitude
+predicts a problem, and half of that problem a state can represent. At this latitude
 `3.69 × 10⁻⁵ rad/s` of Earth rate is vertical, and for a level car that
 component is the same about the body's down axis however it turns, so the gyro
 bias absorbs it: uncompensated, the estimate converges to `−3.66 × 10⁻⁵` there.
@@ -460,65 +450,41 @@ Both corrections are deviations from the paper, and both make the input depend
 on the estimate, which the lift's derivation does not contemplate. See
 [`local.rs`](../crates/drifters-eqf/src/local.rs).
 
-### Three things that were wrong, none of them the Earth
+### What the compensated filter needs
 
-As first measured through the engine, the compensated filter read 3.56 cm
-with a NIS of 2.15, put the lever arm 5.9 cm from the configured one, and
-diverged at every α above zero: 2.78 m at 0.25, 29.2 m at 0.5, 216 m at 1.
-This section once attributed the divergence to the Earth model, and then to
-GCU. It was two narrower things, and a third was in the dataset.
+Two things, and neither is about the Earth.
 
-**The accelerometer scale factor had nowhere to go.** Across the run the ESKF
-estimates this IMU's vertical accelerometer scale-factor error at −250 to
-−272 ppm. At 1 g that is `2.5 × 10⁻³ m/s²`, and the EqF, which has no
-scale-factor states, has to carry it as a bias: its vertical accelerometer
-bias converges to about +250 mGal while the ESKF's stays within 2 mGal. It was
-handed the YAML's bias prior, 15 mGal, so the truth sat seventeen sigma
-outside it. `EqfOptions::with_accel_scale_factor` now folds the scale-factor
-prior the ESKF is given into the bias prior — `σ_b² + (σ_s f)²`, with `f` the
-specific force each axis reads at rest — and its Gauss–Markov wander into the
+**Somewhere to put the accelerometer scale factor.** Across the run the ESKF
+estimates this IMU's vertical accelerometer scale-factor error at −250 to −272 ppm.
+At 1 g that is `2.5 × 10⁻³ m/s²`, and the EqF, which has no scale-factor states, has
+to carry it as a bias: its vertical accelerometer bias converges to about +250 mGal
+while the ESKF's stays within 2 mGal. The YAML's bias prior, 15 mGal, would leave
+that seventeen sigma outside it. `EqfOptions::with_accel_scale_factor` folds the
+scale-factor prior the ESKF is given into the bias prior — `σ_b² + (σ_s f)²`, with
+`f` the specific force each axis reads at rest — and its Gauss–Markov wander into the
 process noise. Vertically that is a 294 mGal prior.
 
-**GCU's covariance update was not the paper's.** The paper inflates `S` and
-then updates "according to [9]", whose covariance step is `(I − KC*)Σ`: the
-inflation is counted as measurement noise, `R' = S' − C*ΣC*ᵀ`, and the
-posterior says the measurement was worth that little. This filter ran its
-Joseph form with the sensor's own `R` instead, which under-reports the
-posterior by `K(S' − S)Kᵀ` on every inflated update — a filter that applied
-part of a correction and recorded all of it. It now runs the Joseph form with
-`R'`, the paper's update in the form that stays symmetric under rounding. See
+**GCU's inflation in the covariance update.** The paper inflates `S` and then updates
+"according to [9]", whose covariance step is `(I − KC*)Σ`: the inflation is counted
+as measurement noise, `R' = S' − C*ΣC*ᵀ`, and the posterior says the measurement was
+worth that little. The filter runs its Joseph form with `R'`, the paper's update in
+the form that stays symmetric under rounding. With the sensor's own `R` there, it
+would under-report the posterior by `K(S' − S)Kᵀ` on every inflated update. See
 [`gcu.rs`](../crates/drifters-eqf/src/gcu.rs).
 
 Compensated, horizontal RMS:
 
-| α | as first measured | the paper's update | the scale factor | both, now |
-|---|---|---|---|---|
-| off | 0.0343 m | 0.0343 m | 0.0343 m | 0.0343 m |
-| **0** | 0.0356 m | 0.0351 m | 0.0355 m | **0.0350 m** |
-| 0.25 | 2.78 m | 0.249 m | 0.094 m | 0.053 m |
-| 0.5 | 29.2 m | 3.36 m | 0.41 m | 0.106 m |
-| 1 | 216 m | 63.0 m | 9.66 m | 0.73 m |
+| α | horizontal RMS |
+|---|---|
+| off | 0.0342 m |
+| **0** | **0.0350 m** |
+| 0.25 | 0.053 m |
+| 0.5 | 0.106 m |
+| 1 | 0.73 m |
 
-Every α now converges — the residual at the last fix is 8 to 21 mm at each —
-and in the order the paper gives, "the lower, the faster". Each is still worse
-than α = 0, which on RTK is right: GCU insures against measurements that are
-wrong, and these are not.
-
-**How it began.** At α = 0.5 the vertical error started growing six seconds in,
-with the car still parked: 4 cm at 6 s, 0.79 m at 30 s, 3.1 m at 60 s.
-Quadratic, so a constant acceleration, `2 × 10⁻³ m/s²` — the scale factor. GCU
-above α = 0 weighs a correction down by how surprising it is, and a bias
-seventeen sigma outside its prior never stops being surprising: the estimate
-crept up at 0.7 mGal/s where the α = 0 filter reached 190 mGal within the
-minute. Nothing about that involves the Earth.
-
-**The 29.2 m against the old loop's 14.7 m.** The two runs agree to the
-millimetre through the first minute, which is the onset above. They part once
-the car moves, and what parts them is fix timing: the old loop applied each
-fix at the end of the IMU sample it fell in, 4.4 ms late on this data. With
-that restored the engine reads 13.8 m; with the first fix and the old loop's
-diagonal prior restored as well, 14.77 against 14.71. Two paths of one
-divergence, and neither number described the filter.
+Every α converges — the residual at the last fix is 8 to 21 mm at each — and in the
+order the paper gives, "the lower, the faster". Each is worse than α = 0, which on
+RTK is right: GCU insures against measurements that are wrong, and these are not.
 
 ### Lever-arm self-calibration, and the configured value is the one that is off
 
@@ -539,18 +505,13 @@ has a mean of −2.58 cm, and across it 0.00: its predicted antenna sits behind
 the measured one by what the EqF says the lever arm is missing. It is not a
 timing offset, which would scale with speed — regressed on speed, the slope is
 −0.29 ms and the intercept −2.28 cm. Handed the EqF's horizontal estimate, the
-ESKF improves, 0.0330 → 0.0325 m, and its NIS 1.46 → 1.33.
+ESKF improves, 0.0329 → 0.0324 m, and its NIS 1.46 → 1.33.
 
 **The vertical is not observable on this drive.** A car that stays level
 barely rotates its lever arm in pitch or roll, so a vertical offset never
 shows in the antenna's position. The ESKF reads the same to four figures with
 either vertical value, so this dataset cannot say which is right. With GCU off
 the EqF puts it at −0.223 m.
-
-An earlier version of this section reported the horizontal components within
-2 mm of the configured value, from the α = 0.5 run. That was the final state of
-a filter that had spent forty minutes up to 100 m off, agreeing with a value
-that is itself 2.6 cm out.
 
 This is the paper's headline capability (Sec. VII-A) reproduced on data it was
 never tuned for, where it found an error in the dataset's own configuration.
@@ -601,43 +562,12 @@ ESKF is 17 % ahead and the EqF's worst-case excursion is twice as large. At
 the EqF's own consistent tuning, and on the three traces held out from this
 one, the order changes; see [gsdc.md](gsdc.md#held-out-the-fitted-tuning-does-not-transfer).
 
-The EqF read 5.445 m here until its GCU update was corrected — see
-[GCU, measured on four traces](#gcu-measured-on-four-traces) — and 4.850 m
-before that, through a replay loop of its own.
+### The velocity gate
 
-### What moved when the EqF moved onto the engine
-
-Measured before the GCU correction, so the absolute figures are the old
-update's; the attribution is of the loop, and holds.
-
-This table read 4.850 m for the EqF when it was written, and 4.813 m just
-before its replay was put through the engine; the gap between those two is
-drift in the code between, and was never chased. The move itself costs 13 %,
-and nearly all of it is one thing: the engine gates GNSS velocity at the 99.9th
-percentile, as the ESKF's does, and the old loop applied every velocity it was
-given. Measured by switching each difference off in turn:
-
-| `--imu-scale 300` | horizontal RMS | horizontal max | score |
-|---|---|---|---|
-| through the engine | 5.445 m | 31.35 m | 6.046 |
-| without the velocity gate | 4.814 m | 23.91 m | 5.885 |
-| without the gate, fix at the sample's end | 4.811 m | 23.91 m | 5.873 |
-| the old loop | 4.813 m | 23.92 m | 5.877 |
-
-Without the gate, and with each fix applied at the end of the sample it falls
-in as the old loop did, the engine reproduces the old loop to three figures.
-The 2 mm left is the bias-corrected rate the engine hands the velocity update,
-or the prior now being mapped into the filter's coordinates; the two have not
-been separated. The split of the sample at the fix's epoch, which matters at
-30 m/s with RTK, is invisible here.
-
-The gate is kept, because the point of one loop is that both engines are
-configured alike, and it is not a clear loss. At ×300 it is worse on every
-figure above. At ×74 it trades RMS and the worst case — 4.93 against 4.37 m,
-38.8 against 12.7 m — for a better 95th percentile and a better score, 5.26
-against 5.63. Refusing a surprising velocity is right when the velocity is
-what has gone wrong and wrong when the filter has, and this trace has both;
-that is the GCU question below in another form.
+The engine gates GNSS velocity at the 99.9th percentile, as the ESKF's does, so that
+both engines are configured alike. Refusing a surprising velocity is right when the
+velocity is what has gone wrong and wrong when the filter has, and this trace has
+both; that is the GCU question below in another form.
 
 ### GCU, measured on four traces
 
@@ -668,18 +598,9 @@ ESKF's 4.06. On the three held-out traces at the same tuning, α = 0.5 is 14 %,
 119 % and 110 % worse than α = 0. Choosing α on A would be fitting the test
 set; the default stays at 0.
 
-**This section used to be called "GCU made it worse", and the numbers under
-it were mostly the filter's.** Through the old update, α = 0.25, 0.5 and 1 on
-trace A at ×300 read 12.9, 19.7 and 19.2 m — three times the phone's own GNSS
-— and the explanation given was that inflating along the innovation suppresses
-the correction a drifted filter needs. That mechanism is real, and it is why
-larger α is still worse almost everywhere above. But most of the damage was
-the covariance update recording the whole of a correction it had only partly
-applied, so that each fix found the filter more confident than it had a right
-to be. With the paper's update GCU is a mixed result on these traces rather
-than a liability, and on the trace with the worst GNSS it helps.
-
-What stands is that `α` is not a robustness dial that is safe to turn up. It
+Inflating along the innovation suppresses the correction a drifted filter needs,
+which is why larger `α` is worse almost everywhere above. `α` is not a robustness
+dial that is safe to turn up. It
 encodes an assumption about *which side* the surprise comes from: right when a
 large innovation is a bad measurement — the GNSS shift of the paper's Fig. 4 —
 and wrong when it is the filter that has drifted, and trace C, with the best
@@ -708,116 +629,71 @@ position 2.959, gyro bias 2.931, accelerometer bias 3.082, lever arm 2.828,
 magnetometer 2.906. With the covariance factored and held in `f32`,
 `--factored`, it reads 20.825 and every block agrees to the third decimal.
 
-### The interval was too narrow, by about five
+### The interval comes from the runs
 
-The harness used to print one interval, `m ± 3√(2m/N)` over the `N` scored
-epochs. That treats every epoch as an independent sample, and within a run
-they are not: an error in a bias or the lever arm lasts tens of seconds and is
-scored at every epoch it lasts. Each run's mean is independent of the others',
-so the scatter of those means is what bounds the campaign's mean, and it is
-about five times wider: [19.53, 22.47] over forty runs where the per-epoch
-interval said [20.71, 21.29]. Both are printed now, the per-epoch one labelled
-for what it assumes, and the verdicts here are from the second.
+`m ± 3√(2m/N)` over the `N` scored epochs treats every epoch as an independent
+sample, and within a run they are not: an error in a bias or the lever arm lasts tens
+of seconds and is scored at every epoch it lasts. Each run's mean is independent of
+the others', so the scatter of those means is what bounds the campaign's mean, and it
+is about five times wider: [19.53, 22.47] over forty runs where the per-epoch
+interval says [20.71, 21.29]. Both are printed, the per-epoch one labelled for what
+it assumes, and the verdicts here are from the second.
 
-The narrow interval had been producing findings. At forty runs it called the
-attitude block overconfident at 3.45 and the magnetometer conservative at
-2.48, and the section that ended this one built an argument on them — that
-some redistribution between those two blocks was still wrong. At two hundred
-runs they read 3.05 and 2.91, both consistent; at forty, both were inside
-their own run-to-run intervals all along.
+### The prior goes through the exact map
 
-### The bias prior was not the map
+The harness builds its prior with `physical::covariance_from_std`, the map the engine
+uses. The exact map, `physical::jacobian_inverse`, which a numerical Jacobian checks,
+has `−Ad_B̂`, `−Â` and `Ê` on the bias, lever-arm and magnetometer blocks. The first
+is not close to `−I` here. `Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s this truth
+moves at, `v̂^ δb_ω` is as large as the accelerometer-bias sigma. With `−I` in its
+place, over 200 runs, the overall reads 21.718 and the accelerometer-bias block
+3.333, outside its interval [2.68, 3.32]. With `−Ad_B̂` they read 20.824 and 3.082,
+inside [20.30, 21.70] and [2.71, 3.29]. Scaling every error by ten
+(`--strength 0.1`) leaves the overall at 20.819, so what separates the two is the
+prior and not linearisation error.
 
-This harness wrote its own physical-to-ε map for the prior, with `−I`, `−I`
-and `I` on the bias, lever-arm and magnetometer blocks where the exact map —
-`physical::jacobian_inverse`, which a numerical Jacobian checks — has
-`−Ad_B̂`, `−Â` and `Ê`. The first is not close here.
-`Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s this truth moves at,
-`v̂^ δb_ω` is as large as the accelerometer-bias sigma it was being left out
-of. It now uses `physical::covariance_from_std`, the map the engine builds its
-own prior with. Over 200 runs:
+The harness sets GCU to `None`, which is off. At α = 0 the update counts GCU's
+inflation as measurement noise and the campaign reads 18.43: conservative, as a
+filter told its measurements may be worse than they are should be.
 
-| prior | overall | accelerometer bias |
-|---|---|---|
-| `−I` | 21.718, interval [20.19, 21.81] | **3.333, interval [2.68, 3.32]: overconfident** |
-| `−Ad_B̂` | 20.824, interval [20.30, 21.70] | 3.082, interval [2.71, 3.29] |
+### The prior belongs in the filter's coordinates
 
-The block the missing coupling feeds is the one that read overconfident, and
-neither figure moves when every error is scaled by ten (`--strength 0.1`,
-21.715 and 20.819), so this is the prior and not linearisation error. At forty
-runs, which is what this section used to quote, the difference does not
-resolve: 21.102 against 20.508, inside their run-to-run intervals of
-[19.35, 22.65] and [19.53, 22.47].
-
-It read 21.007 when this section was first written, with GCU's α = 0 still in
-the loop in the belief that α = 0 was off. It is not — `β` still inflates —
-but the Joseph form the filter ran then, with the sensor's own `R`, is the
-exact covariance of the error for any gain when the model is right, so the
-result was consistent either way. The update is now the paper's, which counts
-GCU's inflation as measurement noise, and under it α = 0 reads 18.43:
-conservative, as a filter told its measurements may be worse than they are
-should be. The harness sets GCU to `None`, which is off.
-
-### It read 23.6 until the prior was corrected
-
-The filter's covariance lives in **ε**, the chart the symmetry induces. The
-harness drew its initial error in **physical** coordinates — an attitude
-perturbation, a velocity perturbation, a position perturbation, each independent
-— and handed the filter `diag(σ²)` as though the two were the same thing.
-
-They are the same only at the anchor with no velocity. Away from it,
-`physical_jacobian` is not the identity:
+The filter's covariance lives in **ε**, the chart the symmetry induces. The harness
+draws its initial error in **physical** coordinates — an attitude perturbation, a
+velocity perturbation, a position perturbation, each independent — and the two are
+the same only at the anchor with no velocity. Away from it, `physical_jacobian` is
+not the identity:
 
 ```text
 δv = −v̂^ ε₁,ω + ε₁,ν      δS = Êᵀ(ε₄ − ε₁,ω)
 δp = −p̂^ ε₁,ω + ε₁,ρ
 ```
 
-So a magnetometer-calibration error drawn with variance `σ_mag²` is an
-ε-variance of `σ_mag² + σ_att²`, correlated with attitude — and the filter was
-told `σ_mag²` with no correlation. The harness now inverts the Jacobian, whose
+So a magnetometer-calibration error drawn with variance `σ_mag²` is an ε-variance of
+`σ_mag² + σ_att²`, correlated with attitude. The harness inverts the Jacobian, whose
 block-triangular structure makes that a matter of writing it down rather than
 factorising anything.
 
-**The test that confirms it.** The mismatch grows with range, because the
-Jacobian's off-diagonal blocks are `v̂^` and `p̂^`. Starting the vehicle away from
-the anchor, before and after:
+The Jacobian's off-diagonal blocks are `v̂^` and `p̂^`, so an error in this step would
+grow with range. Starting the vehicle away from the anchor, over forty runs:
 
-| start position | before | after |
-|---|---|---|
-| at the anchor | 23.62 | **20.508** |
-| 1 km | 46.56 | **20.508** |
-| 10 km | 50.08 | **20.508** |
+| start position | NEES |
+|---|---|
+| at the anchor | 20.508 |
+| 1 km | 20.508 |
+| 10 km | 20.508 |
 
-Forty runs, the campaign this table was first measured with. Identical to
-three decimals at every range, where it had doubled by a kilometre. (The
-"after" column read 21.007 under the old α = 0 update and 21.102 with GCU off
-and the old bias prior, at every range each time.)
+Identical to three decimals at every range.
 
-### What was ruled out on the way
+### What the result does not depend on
 
-- **The reset not transporting the covariance.** Implementing
-  `Ad_{exp(Δ)} J_r(Δ)` moved NEES from 23.910 to 23.870. Retained as the more
-  correct form, at one 21×21 product per update, but it was not the cause.
-- **Anything scaling with the step.** The figure is flat across a ten-fold sweep
-  of `dt`, which rules out the transition matrix truncation and the `Q dt`
-  discretisation.
-- **The process noise.** Scaling the filter's gyro density by 1.65 brings the
-  overall to 21, which looks like a fix and is not: every block overshoots into
-  conservative — attitude 2.70, velocity 2.53, gyro bias 2.48 — while the
-  magnetometer block, the one that was actually wrong, barely moves. A tuning
-  knob compensating for a structural error.
-- **The correlations.** `drifters nees` scores each pair of blocks jointly, the
-  diagnostic that found the ESKF's fault. Here it exonerated them: the pairs
-  tracked two overconfident marginals and added nothing of their own.
+- **The step.** The figure is flat across a ten-fold sweep of `dt`, which rules out
+  the transition matrix truncation and the `Q dt` discretisation.
+- **The size of the errors.** `--strength 0.1` moves it by 0.005.
 
-### What is left
-
-Nothing this harness resolves. Every block is consistent over 200 runs against
-an interval that respects how the samples are correlated. What this section
-used to list here, an attitude block reading 14 % high against a magnetometer
-block reading low, was forty runs judged against an interval five times too
-narrow; see above.
+The reset transports the covariance by `Ad_{exp(Δ)} J_r(Δ)`, at one 21×21 product per
+update. Every block is consistent over 200 runs against an interval that respects how
+the samples are correlated.
 
 ## Uncertain observation handling (Sec. VI)
 
@@ -833,8 +709,7 @@ S' = β (C* Σ C*ᵀ + α ỹ ỹᵀ) + R
 `α ∈ [0,1]` sets the convergence rate, "the lower, the faster": its Fig. 4
 shows a smooth transition after a GNSS shift at `α = 1` and a semi-smooth one at
 `0.5`. More `α` is more inflation along the innovation, so less weight on a
-surprising measurement and a slower move to meet it. This document had the
-direction backwards for a long time.
+surprising measurement and a slower move to meet it.
 
 **`α = 0` is not off.** `β` still applies, and `β = 2` for every `r ≥ 1`. A
 position fix's `r` is χ² with three degrees of freedom and exceeds one about
@@ -853,11 +728,8 @@ R' = S' − C*ΣC*ᵀ = (β − 1) C*ΣC*ᵀ + αβ ỹỹᵀ + R
 
 so the posterior records that the measurement was worth that little. The
 filter runs its Joseph form with `R'`, which is the same update in the form
-that stays symmetric under rounding. It first ran the Joseph form with `R`,
-which records the whole of a correction it applied only part of; on KF-GINS
-that made every `α` above zero diverge, and on the phone traces it made GCU
-look like a liability. See
-[the KF-GINS section](#three-things-that-were-wrong-none-of-them-the-earth).
+that stays symmetric under rounding. See
+[the KF-GINS section](#what-the-compensated-filter-needs).
 
 The stated goal is that after inflation `ỹᵀ S'⁻¹ ỹ < 1`: the measurement is, by
 construction, no longer surprising. Sherman–Morrison gives the condition —
@@ -898,11 +770,10 @@ construction. Accommodating it equivariantly would need the symmetry to act on
 the input space, which is a larger group and a full re-derivation of the lift
 and linearisation, not an extra block.
 
-The empirical case points the same way. M8's 15-state configuration dropped
-exactly these six states and cost **3 % horizontal RMS** on the KF-GINS dataset,
-while the NIS ratio *improved* (0.486 → 0.554) — dropping states the data cannot
-observe made the filter less conservative. Scale factors need dynamics to be
-observable at all.
+The empirical case points the same way. The 15-state configuration drops exactly
+these six states and costs **3 % horizontal RMS** on the KF-GINS dataset, while the
+NIS ratio *improves* (0.486 → 0.554): dropping states the data cannot observe makes
+the filter less conservative. Scale factors need dynamics to be observable at all.
 
 Note what the paper spends those six dimensions on instead: GNSS lever arm and
 magnetometer rotation. That is a deliberate allocation — extrinsics are constant
@@ -910,11 +781,11 @@ and observable under ordinary motion; scale factors drift and are not.
 
 **The prior has to know, though.** Without the states, a scale-factor error
 still arrives, and an accelerometer axis that reads gravity all the time turns
-its scale factor into a bias. On KF-GINS that is about 250 mGal on the vertical
-axis against a bias prior of 15 mGal, and it is what made every `α` above zero
-diverge there. `EqfOptions::with_accel_scale_factor` carries the scale-factor
-uncertainty in the bias prior instead; see
-[the KF-GINS section](#three-things-that-were-wrong-none-of-them-the-earth).
+its scale factor into a bias. On KF-GINS that is about 250 mGal on the vertical axis,
+seventeen sigma outside a bias prior of 15 mGal.
+`EqfOptions::with_accel_scale_factor` carries the scale-factor uncertainty in the
+bias prior instead; see
+[the KF-GINS section](#what-the-compensated-filter-needs).
 
 If they are wanted later, the defensible route is to append them as **explicitly
 non-equivariant** states with a trivial group action, forfeiting the guarantee
@@ -977,11 +848,6 @@ three bands: below 1, model nothing; 1 to 1000, compensate the input; above
 destroys the gyrocompassing channel that a navigation-grade sensor is bought
 for. `flat_earth_verdict` computes the band.
 
-**What was done, in order.** The paper first, as written, compared on
-consumer-grade terms where its assumptions hold. Then input-side Earth-rate
-compensation (`ω_ib − R̂ᵀ ω_ie`), which makes the input depend on the estimate and
-so had to be checked against the lift's assumptions. Then the rotation in the group.
-
 ### Earth rotation in the group
 
 `EqfOptions::earth_in_group`, or `--earth-in-group` on the command line. The
@@ -1020,8 +886,9 @@ from it:
 
 Two entries are easy to get wrong. The block from attitude to the magnetometer's
 rotation is `−(Âω_m + γ̂_ω)^`, with no `ω`, because attitude error does not act on
-the Earth's rate there: `Sᵀ·rate = Êᵀ exp(−ε_E)[exp(ε_φ)(Âω − Âb) − ω_e]`. The first
-derivation had it wrong and a numerical Jacobian caught it. And the velocity fix uses
+the Earth's rate there: `Sᵀ·rate = Êᵀ exp(−ε_E)[exp(ε_φ)(Âω − Âb) − ω_e]`, and
+`the_state_matrix_matches_a_numerical_jacobian_in_a_rotating_frame` holds it to a
+numerical Jacobian. And the velocity fix uses
 the *measured* antenna position, which is why that position's noise joins the fix's.
 
 A still navigation-grade unit, 0.003 °/h at 30° latitude, starting 3° off in heading
@@ -1059,18 +926,16 @@ deliberately does not.
 **The prior is in physical units.** `EqfOptions` takes one-sigma position,
 velocity, attitude, bias, lever-arm and calibration uncertainties, as
 `GinsOptions` does, and `physical::covariance_from_std` builds the `Σ` they
-describe. That is not `diag(σ²)`: it is the correction
-[the consistency result](#it-read-236-until-the-prior-was-corrected) needed,
-moved from the Monte-Carlo harness to the one place a filter is constructed, so
-that the mistake the harness made cannot be made through the engine. A test
+describe. That is not `diag(σ²)`, for the reason
+[the consistency section](#the-prior-belongs-in-the-filters-coordinates) gives, and
+it is done where a filter is constructed so that every caller gets it. A test
 starts the engine three kilometres from its anchor and reads the configured
 sigmas back out exactly. `std_deviations` and `pva_std` report the covariance
 the same way, through the forward map.
 
 **The fix is applied at its epoch.** Through the same placement rule as the
-ESKF — `drifters_core::estimator::place`, which used to be private to
-`drifters-filter` — so the two engines cannot disagree about which sample
-consumes a fix. At 30 m/s, a fix 40 % of the way through a 10 ms sample is
+ESKF, `drifters_core::estimator::place`, so the two engines cannot disagree about
+which sample consumes a fix. At 30 m/s, a fix 40 % of the way through a 10 ms sample is
 18 cm behind the sample's end; applied there it would be an 18 cm correction
 that should not have happened, a NIS of about 160 against a centimetre-level
 fix. Applied at its epoch it is below 10⁻³.
@@ -1091,8 +956,7 @@ innovation lies in the plane normal to the field.
 **A velocity fix needs a rate, and the engine supplies the right one.**
 `ᴳν = v + R ᴵω^ ᴵt` depends on the body rate over the interval the epoch falls
 in. The engine passes the rate the filter is integrating there, less the
-estimated gyro bias, which is the rate `C*_v` is derived for. The CLI's
-replays used to pass the raw gyro reading; they now go through the engine.
+estimated gyro bias, which is the rate `C*_v` is derived for.
 
 **What it does not add.** No arithmetic: driven with no gate and fixes that
 land on sample boundaries, it is `EqFilter` called in a loop, and
@@ -1102,7 +966,7 @@ sample. A fix behind the stream is refused as `GnssQueued::Stale` and
 counted, as `GinsEngine` refuses one.
 
 **A late fix goes through `EqfRewindEngine`.** It is the ESKF's rewind
-machinery, which now lives in `drifters_core::rewind` and wraps either engine:
+machinery, which lives in `drifters_core::rewind` and wraps either engine:
 two snapshots, a ring of samples and magnetometer readings, and a replay from
 the snapshot before the fix's epoch. Its tests run a stream with Earth
 compensation on — so the input itself depends on the estimate, and a replay
@@ -1134,8 +998,8 @@ interval to spare and misses 200 Hz, its floor being 6 % over the 5 ms. It is a
 floor on time, not a measurement of it; timing needs a board.
 
 The ranking belongs to that core. On a Cortex-M7 built for its double-precision
-FPU the dense form is 275 thousand instructions and the factored `f32` form 333
-thousand, so the factored form is the dearer one, by 21 %. See
+FPU the dense form is 277 thousand instructions and the factored `f32` form 334
+thousand, so the factored form is the dearer one, by 20 %. See
 [testing.md](testing.md#the-cortex-m7-with-f64-in-hardware).
 
 ### The factored form runs the same filter
@@ -1145,9 +1009,7 @@ them, with two things particular to this filter: GNSS rows are whitened by the
 Cholesky factor of their noise, which is dense whenever GCU inflates it, and
 the reset's transport is a second Gram–Schmidt pass through
 `T = I + ½ ad_Δ`. Bierman applies the optimal gain for the noise it is
-handed, which makes it exactly the paper's GCU update; the Joseph form with
-the sensor's own `R` that this filter ran before that was corrected would have
-had no factored counterpart. See
+handed, which makes it exactly the paper's GCU update. See
 [`covariance.rs`](../crates/drifters-eqf/src/covariance.rs).
 
 | | against dense `f64` |
@@ -1162,109 +1024,90 @@ Single precision costs this filter nothing measurable, as it cost the ESKF
 nothing. `--engine eqf-f32` runs it on any dataset the replays read, and the
 contract test runs its eleven checks against it as it does the other two.
 
-### Where the instructions went
+### Where the instructions go
 
-The dense form read 5.08 million per sample. A factored covariance alone
-brought the single-precision one to 1.66 million, which was less than the
-covariance arithmetic predicted; measured piece by piece, the rest was
-`Symmetry::exp`, at 461 thousand instructions a call and two calls a sample.
-Its semi-direct part integrates the `SE(3)` adjoint as a sixteen-term series
-of `6 × 6` products. Two changes, neither of which moved a result:
+`Symmetry::exp` runs twice a sample, and its semi-direct part integrates the `SE(3)`
+adjoint as a sixteen-term series. Two things keep that cheap, and neither changes a
+result:
 
-- **The series on `3 × 3` blocks.** `ad_v`, its powers and every partial sum
-  are lower block triangular with equal diagonal blocks, so the series needs
-  two `3 × 3` blocks, not a `6 × 6`. Summed in the same order with the same
-  zero skips, it is bit-identical to the full form, which a test holds it to.
-- **Applied to a vector.** `exp` needs `ψ(v) u_γ`, never `ψ(v)`; the same
-  series run on the vector is three cross products a term. 461 thousand
-  instructions a call became 79 thousand.
+- **The series is on `3 × 3` blocks.** `ad_v`, its powers and every partial sum are
+  lower block triangular with equal diagonal blocks, so the series needs two `3 × 3`
+  blocks, not a `6 × 6`. Summed in the same order with the same zero skips, it is
+  bit-identical to the full form, which a test holds it to.
+- **It is applied to a vector.** `exp` needs `ψ(v) u_γ`, never `ψ(v)`, and the same
+  series run on the vector is three cross products a term.
 
-The dense form gained as much as the factored one did from that, 5.08 to 4.29
-million. The factored form's time update is now 0.52 million of its 0.84:
-226 thousand in Gram–Schmidt, which is the algorithm at the size the ESKF runs
-it, and 179 thousand building `G` in `f64`, by evaluating the lift twice per
-noise channel — the choice this document makes over a hand-written Jacobian
-that would have to be kept in step with it.
+In the factored form the time update carries most of what remains: Gram–Schmidt,
+which is the algorithm at the size the ESKF runs it, and building `G` in `f64` by
+evaluating the lift twice per noise channel. That evaluation is the choice this
+document makes over a hand-written Jacobian that would have to be kept in step with
+the lift.
 
-### The stack, and one figure not yet explained
+### The stack
 
-The dense stack was 28 852 bytes as first measured, for the reason the ESKF's
-first measurement was 35 328: covariance arithmetic written as expressions,
-each `21 × 21` operator result a 3 528-byte temporary. The in-place rewrite
-is bit-identical to the expressions, which are kept as a test reference. It
-read 13 488 bytes after that, and 13 568 once the GCU update took its
-inflated noise into the Joseph form.
+Covariance arithmetic is done in place, because written as expressions each `21 × 21`
+operator result is a 3 528-byte temporary. The in-place code is bit-identical to the
+expressions, which are kept as a test reference. The factored time update forms `Φ`
+a row at a time, and `A` and `G` are handed over entry by entry and narrowed straight
+into the factored buffers, so no whole `Φ` or `f64` copy of `G` sits beside the
+Gram–Schmidt rows.
 
-It read 15 472, on its update paths only — propagation went the other
-way, 9 856 to 9 772 — and the cause has not been isolated. The dense
-arithmetic is unchanged and its results are bit-identical; what changed
-around it is that the update now reaches it through the covariance trait.
-Keeping the dense `fuse` and `transport` out of the update's frame, which
-was the obvious suspect, moved nothing.
+On a Cortex-M4 a sample alone peaks at 14 160 bytes dense and 10 564 factored, and a
+sample that consumes a fix at 15 800 and 14 392.
 
-The factored form's first measurement was 19 036, higher than the dense,
-because its time update held `A` in `f64`, `A dt` in `f32`, a whole `Φ`, the
-Gram–Schmidt rows and `G` in `f64`. `Φ` is now formed a row at a time, and
-`A` and `G` are handed over entry by entry and narrowed straight into the
-factored buffers, which neither form's results noticed: 14 000. Both rose
-by 8 bytes, to 15 480 and 14 008, when the engine began recording its last
-IMU interval for the epoch tolerance: the engine is copied on those paths.
-
-## Implementation plan
+## Implementation map
 
 `crates/drifters-eqf`, separate from `drifters-filter`, so the ESKF's dependency
 footprint and measured firmware budget are untouched.
 
-1. **Lie machinery** — done, `lie.rs`. `SO(3)`, `SE₂(3)`, `se(3)`/`se₂(3)`,
-   wedge/vee, exp/log, `Ad`/`ad`, `Γ`/`χ`/`Π`. Verified against the defining
-   identities: `X exp(u) X⁻¹ = exp(Ad_X u)`, `Ad_X ad_u Ad_X⁻¹ = ad_{Ad_X u}`
-   (the paper states this commuting relation in Sec. II), exp/log round trips,
-   group axioms.
-2. **Symmetry group, state, actions** — done, `group.rs`. The composite `G`, its
-   product, inverse and `21 × 21` Adjoint, `φ` and `ρ_*`, and the three output
-   maps. The Adjoint is checked against a numerical conjugation of
-   `X exp(su) X⁻¹`, all 21 columns, which is what makes it usable as ground
-   truth for the linearisation.
-3. **Lift** — done, `lift.rs`. `Λ₁…Λ₄` against the defining property
-   `D_E|_id φ_ξ(E)[Λ] = f_u(ξ)`, plus the three "this state must not move"
-   checks and a mutation test that each of `Λ₂`, `Λ₃`, `Λ₄` is load-bearing.
-4. **Linearisation** — done, `linear.rs`. `A_t⁰` and `C*_m`/`C*_p`/`C*_v`, every
-   block against a central-difference Jacobian of the map it linearises.
-5. **GCU inflation** — done, `gcu.rs`. Self-contained, including where the
-   paper's `ỹᵀS'⁻¹ỹ < 1` bound stops holding, and the inflation expressed as
-   the measurement noise it amounts to, which the covariance update uses.
-6. **Group exponential** — done, in `group.rs`. Componentwise for `C` and `E`,
-   but `γ` and `δ` are the vector part of a semi-direct product and pick up
-   `∫₀¹ Ad_{χ(exp(s u_c))} ds` and the `SO(3)` left Jacobian. Characterised
-   completely by three tests — identity, derivative, one-parameter subgroup —
-   so no reference values and no need for `log`.
-7. **Filter** — done, `filter.rs`. Midpoint propagation, GCU-inflated update,
-   left-multiplied reset, Joseph covariance. Closed-loop against an independent
-   fourth-order simulator: from a `10 m`, `0.1 rad`, zero-lever start it
-   reaches `3 cm` position, `1.5 mrad` attitude and `3 cm` lever arm in 120 s.
-8. **Engine** — done, `engine.rs` and `config.rs`. `EqfEngine` mirrors the
-   ESKF's `GinsEngine`: sans-IO, `EqfOptions` validated at construction, a GNSS
-   fix applied at its own epoch by splitting the IMU sample there, chi-squared
-   gates, and covariance inflation after a run of rejections. With no gate it
-   is the filter driven by hand, bit for bit. See
-   [The engine](#the-engine) below.
-9. **Backend trait** — done, `drifters_core::estimator::Estimator`, extracted
-   once both engines existed rather than guessed in advance. One contract test,
-   generic over it, runs against both.
-10. **Comparison** — local-tangent-frame adapter, then ESKF vs EqF on the same
-    data, reporting the flat-Earth modelling error as its own term. Done, and
-    since moved onto the engine: every replay in `drifters-cli` is one loop
-    over `Estimator`, and `--engine` chooses what it drives. Re-measured
-    through it, which is what found that the KF-GINS divergences were neither
-    the Earth nor GCU itself, but GCU's covariance update and an accelerometer
-    scale factor the EqF's prior did not allow for.
-11. **Factored covariance** — done, `covariance.rs`. `EqFilter`, `EqfEngine`
-    and `EqfRewindEngine` are generic over how `Σ` is held: dense `f64` by
-    default, or `Ud<f32>`, Thornton and Bierman in single precision, for a
-    part whose FPU is single precision. Equal to the dense form to rounding in
-    `f64` and to the third decimal on every dataset in `f32`; 0.89 million
-    instructions per sample on a Cortex-M4 against the dense form's 4.51.
-    See [What it costs on a microcontroller](#what-it-costs-on-a-microcontroller).
+- **Lie machinery, `lie.rs`.** `SO(3)`, `SE₂(3)`, `se(3)`/`se₂(3)`, wedge/vee,
+  exp/log, `Ad`/`ad`, `Γ`/`χ`/`Π`, verified against the defining identities:
+  `X exp(u) X⁻¹ = exp(Ad_X u)`, `Ad_X ad_u Ad_X⁻¹ = ad_{Ad_X u}` (the paper states this
+  commuting relation in Sec. II), exp/log round trips and the group axioms. The left
+  Jacobian's small-angle branch is wide on purpose. The direct forms lose about
+  `log₁₀(1/θ²)` significant digits, four at `θ = 10⁻⁶`, so the threshold is
+  `θ < 10⁻²`: a 200 Hz IMU turning at 1 rad/s gives `θ = 5 × 10⁻³` every sample.
+- **Symmetry group, state and actions, `group.rs`.** The composite `G`, its product,
+  inverse and `21 × 21` Adjoint, `φ` and `ρ_*`, and the three output maps. The Adjoint
+  is checked against a numerical conjugation of `X exp(su) X⁻¹`, all 21 columns, which
+  is what makes it usable as ground truth for the linearisation.
+- **Group exponential, also `group.rs`.** Componentwise for `C` and `E`, but `γ` and
+  `δ` are the vector part of a semi-direct product and pick up
+  `∫₀¹ Ad_{χ(exp(s u_c))} ds` and the `SO(3)` left Jacobian. Three tests characterise
+  it completely — identity, derivative, one-parameter subgroup — so it needs no
+  reference values and no `log`.
+- **Lift, `lift.rs`.** `Λ₁…Λ₄` against the defining property
+  `D_E|_id φ_ξ(E)[Λ] = f_u(ξ)`, plus the three "this state must not move" checks and a
+  mutation test that each of `Λ₂`, `Λ₃`, `Λ₄` is load-bearing. The lift is not
+  equivariant: its position column would need `a_C = (ω − b_ω) × b_C`, a condition on
+  the group element, which is why `A_t⁰` depends on `X̂`. The paper's Theorem 4.1
+  claims only a lift, and a test in `lift.rs` records the obstruction.
+- **Linearisation, `linear.rs`.** `A_t⁰` and `C*_m`/`C*_p`/`C*_v`, every block against
+  a central-difference Jacobian of the map it linearises.
+- **GCU inflation, `gcu.rs`.** Self-contained, including where the paper's
+  `ỹᵀS'⁻¹ỹ < 1` bound stops holding, and the inflation expressed as the measurement
+  noise it amounts to, which the covariance update uses.
+- **Filter, `filter.rs`.** Midpoint propagation, GCU-inflated update, left-multiplied
+  reset, Joseph covariance. Closed-loop against an independent fourth-order simulator:
+  from a `10 m`, `0.1 rad`, zero-lever start it reaches `3 cm` position, `1.5 mrad`
+  attitude and `3 cm` lever arm in 120 s.
+- **Factored covariance, `covariance.rs`.** `EqFilter`, `EqfEngine` and
+  `EqfRewindEngine` are generic over how `Σ` is held: dense `f64` by default, or
+  `Ud<f32>`, Thornton and Bierman in single precision, for a part whose FPU is single
+  precision. Equal to the dense form to rounding in `f64` and to the third decimal on
+  every dataset in `f32`; 0.89 million instructions per sample on a Cortex-M4 against
+  the dense form's 4.51. See
+  [What it costs on a microcontroller](#what-it-costs-on-a-microcontroller).
+- **Engine, `engine.rs` and `config.rs`.** `EqfEngine` mirrors the ESKF's
+  `GinsEngine`: sans-IO, `EqfOptions` validated at construction, a GNSS fix applied at
+  its own epoch by splitting the IMU sample there, chi-squared gates, and covariance
+  inflation after a run of rejections. With no gate it is the filter driven by hand,
+  bit for bit. See [The engine](#the-engine).
+- **Backend trait, `drifters_core::estimator::Estimator`.** One contract test, generic
+  over it, runs against every engine.
+- **Comparison, `local.rs` and `drifters-cli`.** A local-tangent-frame adapter, with
+  the flat-Earth modelling error reported as its own term. Every replay in
+  `drifters-cli` is one loop over `Estimator`, and `--engine` chooses what it drives.
 
 The Lie machinery lives in `drifters-eqf`, not `drifters-core`: the ESKF has no
 use for `SE₂(3)`, and core's job is to stay small. Promote it if a second

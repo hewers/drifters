@@ -4,9 +4,9 @@ A run against a Google Smartphone Decimeter Challenge 2023 phone-trace —
 `train/2023-05-19-20-10-us-ca-mtv-ie2/sm-s908b`, a Samsung Galaxy S22 in a car
 around Mountain View, 1 228 s at 100 Hz.
 
-This is the first dataset here with **survey-grade ground truth**, so unlike the
-KF-GINS regression it reports *true position error* rather than a prediction
-residual against the fixes themselves.
+This dataset has **survey-grade ground truth**, so unlike the KF-GINS regression
+it reports *true position error* rather than a prediction residual against the
+fixes themselves.
 
 ## Result
 
@@ -21,18 +21,17 @@ residual against the fixes themselves.
 — 47.96 m to 12.97 m, which matters more than the RMS for anything that has to
 trust the solution.
 
-Getting there took a diagnosis first. With **position-only** aiding the filter
-gained 1.7 %, and with datasheet-class phone noise and no tuning it was nearly
-**twice as bad** as GNSS alone. The section below is how that was tracked down,
-because the fix — a velocity observation — came directly out of it.
+Doppler velocity is what does it. With **position-only** aiding the filter gains
+1.7 %, and with datasheet-class phone noise and no tuning it is nearly **twice as
+bad** as GNSS alone. The next section shows why, and the fix comes directly out of
+it.
 
 ## Why — the diagnosis
 
-The result was chased down rather than accepted, and each step ruled something
-out.
+Each check here uses position-only aiding and rules one cause out.
 
 **The GNSS and fusion paths are correct.** Weighting the IMU out entirely
-(process noise ×10⁴) reproduces the GNSS solution to a millimetre — 6.206 m
+(process noise ×10⁴) reproduces the GNSS solution to within 3 mm — 6.206 m
 against 6.209 m. Whatever is wrong is on the inertial side.
 
 **Monotonic in one direction.** Sweeping IMU process noise, the error falls all
@@ -74,7 +73,7 @@ phone gyro drifts; as heading drifts, body-frame accelerations rotate into the
 wrong direction in the navigation frame and inject error faster than the fixes
 remove it.
 
-## The fix: GNSS velocity from Doppler — done
+## The fix: GNSS velocity from Doppler
 
 The dataset carries `PseudorangeRateMetersPerSecond`, per-satellite ECEF
 positions and velocities, and satellite clock drift, so a velocity solution is
@@ -93,10 +92,9 @@ negated velocity, which looks entirely plausible. So it is tested closed-loop
 against synthetic epochs with a known velocity and a known clock drift, and
 separately that the clock drift does not leak into the velocity estimate.
 
-**This confirmed the diagnosis rather than merely improving the number.** The
-prediction was that heading was the missing constraint; adding a velocity
-observation is precisely what makes heading observable, and it moved the result
-from 1.7 % to 34.7 %.
+**This is what the diagnosis predicts.** Heading is the missing constraint, a
+velocity observation is what makes heading observable, and adding one moves the
+gain from 1.7 % to 34.7 %.
 
 ### A tension between the two tunings
 
@@ -112,12 +110,12 @@ consistent tuning over-trusts the bias. Reporting the tuned number while showing
 the NIS is the honest way to present that — neither figure alone tells the
 truth.
 
-### Still open
+### Open
 
 **Non-holonomic constraints** would help further — but the phone's
 sensor axes are not the vehicle's, and the mounting rotation is unknown, so NHC
 cannot be applied without estimating it first. `MountingEstimator` does that from
-a GNSS-aided drive, but this pipeline does not use it yet, and it needs a phone
+a GNSS-aided drive, but this pipeline does not use it, and it needs a phone
 that stays put in its holder. The EqF's symmetry group estimates exactly that kind
 of extrinsic, which makes this a natural place to compare the two estimators.
 
@@ -132,9 +130,8 @@ GNSS *outages*, which this trace does not contain.
 
 ## Posterior tuning of the IMU process noise
 
-`--imu-scale` multiplies the datasheet IMU noise densities, and for a long time
-its value here was hand-picked at 300. `drifters tune` replaces that with a
-measurement: mean NIS equals the measurement dimension, 3, when the assumed
+`--imu-scale` multiplies the datasheet IMU noise densities. `drifters tune` sets
+it by measurement: mean NIS equals the measurement dimension, 3, when the assumed
 noise explains the observed innovations. Below that the filter is overconfident;
 above it, it discounts its own propagation.
 
@@ -161,20 +158,16 @@ between the two scales either side of it, so where the sweep puts its points
 moves it by a few, and each crossing here is a point of the sweep for that
 reason. (The command prints ×99 and ×38.)
 
-The EqF columns have been re-measured twice. When its replay moved onto the
-engine its crossing went from ×74 to ×57; what moved and why is in
-[eqf.md](eqf.md#what-moved-when-the-eqf-moved-onto-the-engine). When its GCU
-update was corrected to the paper's, which counts the inflation as measurement
-noise and so leaves the covariance larger, its NIS fell at every scale and the
-crossing went to ×36 — see
-[eqf.md](eqf.md#gcu-measured-on-four-traces). Its error stays between 4.12 and
-4.76 m from ×10 to ×130, lowest at ×14. The ESKF columns are unchanged to the last digit
-through both.
+The EqF's GCU counts its inflation as measurement noise, which leaves the
+covariance larger and the NIS lower at every scale; see
+[eqf.md](eqf.md#gcu-measured-on-four-traces). How its replay gates velocity is in
+[eqf.md](eqf.md#the-velocity-gate). Its error stays between 4.12 and 4.76 m from
+×10 to ×130, lowest at ×14.
 
 ### Held out: the fitted tuning does not transfer
 
 Fitting and reporting on one trace is fitting to the test set, so the tuning
-above was carried unchanged onto three held-out traces from the same phone
+above is carried unchanged onto three held-out traces from the same phone
 (routes and conditions vary, hardware does not). Horizontal RMS in metres:
 
 | | A *(fitted)* | B | C | D |
@@ -194,7 +187,7 @@ either tuning.
 **For the ESKF, the hand-picked ×300 generalises better than the consistent
 tuning**, helping on three traces against two, despite a mean NIS of 0.47:
 consistency and accuracy disagree, in the same direction on every trace. For
-the EqF they no longer do in any consistent way — ×300 is better on B and C
+the EqF they do not in any consistent way — ×300 is better on B and C
 and worse on A and D — so its consistent tuning is as good a choice as any.
 
 **The EqF's lead over the ESKF generalises** at the A-fitted tuning — ahead on
@@ -202,15 +195,12 @@ all four traces, by 21 %, 37 %, 40 % and 14 %. At ×300, the ESKF's own tuning,
 the EqF is ahead on the three held-out traces, by 26 %, 12 % and 3 %, and
 behind on A by 21 %.
 
-These EqF rows were 4.90, 4.25, 2.47, 3.10 at ×57 and 5.45, 3.17, 2.27, 3.81
-at ×300 before its GCU update was corrected.
-
 ### The heavy-tail hypothesis, tested and rejected
 
-Two explanations were on the table for consistency and accuracy disagreeing:
-unmodelled error that extra process noise absorbs, or multipath giving
-heavy-tailed innovations that drag a *mean* NIS around. `drifters tune` now
-reports a median crossing alongside the mean one, which separates them.
+Two explanations fit consistency and accuracy disagreeing: unmodelled error that
+extra process noise absorbs, or multipath giving heavy-tailed innovations that
+drag a *mean* NIS around. `drifters tune` reports a median crossing alongside the
+mean one, which separates them.
 
 A consistent filter on a 3-D measurement has mean NIS 3 and **median NIS
 2.366** — the two differ because the chi-squared distribution is right-skewed,
@@ -228,13 +218,12 @@ tail is real and substantial.
 **It does not explain the ESKF's gap.** Correcting for it moves the ESKF's
 consistency point the wrong way: the median crossing sits *below* the mean one,
 so the distance to its accuracy optimum roughly doubles, ×59 against ×300. The
-hypothesis predicted the gap would close and it widened.
+hypothesis predicts that the gap closes, and it widens.
 
-For the EqF the question has gone away. Through the old loop it behaved as the
-ESKF does, ×25 against ×130. Now its median crossing and its lowest error
-nearly coincide, ×17 and ×14, which is what the hypothesis predicts for a
-filter whose remaining gap is the tail; its mean crossing sits above both, as
-a heavy tail drags a mean.
+For the EqF the question does not arise. Its median crossing and its lowest error
+nearly coincide, ×17 and ×14, which is what the hypothesis predicts for a filter
+whose remaining gap is the tail; its mean crossing sits above both, as a heavy
+tail drags a mean.
 
 That leaves unmodelled error as the surviving explanation for the ESKF, and it
 is a large one: it wants five times more process noise than either consistency
@@ -242,7 +231,7 @@ criterion supports. The phone's mount flexing and its
 uncalibrated scale factors are the obvious candidates, and neither is in the
 model.
 
-The tails being real has a separate consequence, and it has been followed.
+The tails being real has a separate consequence.
 Heavy tails are what innovation *rejection* exists for; the ESKF has a χ² gate,
 and the EqF's GCU never rejects but discounts. Measured on all four traces, the
 discounting is what the EqF's lead is built on: with GCU off it loses 4 to 36 %
@@ -274,13 +263,17 @@ diagnostic flags `--imu-scale`, `--gyro-scale` and `--gnss-lag` are the ones
 used for the sweeps above. The replay prints the measured per-axis GNSS error
 next to the table; that is what the sigmas should be, and printing it is how
 staleness gets noticed.
+The reader takes the Android sensor frame as the body frame, so the phone's unknown
+mounting is absorbed into the initial attitude and Euler angles from a run describe
+that mounting. It integrates the IMU on the nanosecond boot clock, because the
+millisecond UTC column is 10 % of a 100 Hz interval, and maps the other files onto
+that clock with a constant offset.
 
 `--raw-ranges` solves each epoch's position from the pseudoranges instead of
 taking the file's `WlsPosition*` columns, and is worth −22 % on the competition
-score by itself. **The sweeps on this page predate it** and were run against the
-file's solution, with `--sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale
-300`; they are correct for that configuration and are left as measured. The
-refit that the better GNSS forced, and the four-trace holdout under it, are in
+score by itself. **The sweeps on this page do not use it.** They run against the
+file's solution, with `--sigma-n 5.7 --sigma-e 2.5 --sigma-v 18 --imu-scale 300`.
+The refit the better GNSS calls for, and the four-trace holdout under it, are in
 [gsdc-observables.md](gsdc-observables.md#in-the-rust-replay-and-what-it-does-to-the-filters).
 
 ## RTS smoothing, and why it loses here
@@ -325,9 +318,8 @@ For this dataset, at the tuning that scores best, the answer is not to smooth.
 [`range`](../crates/drifters-filter/src/range.rs) feeds the filter per-satellite
 pseudoranges instead of a position fix. It differences them within each
 constellation rather than estimating receiver-clock states, which keeps the
-21-state filter and its footprint exactly as they were — see
-[adr/0009](adr/0009-local-first-architecture.md) for why that trade was made
-against the ADR's original proposal.
+21-state filter and its footprint unchanged; see
+[adr/0009](adr/0009-local-first-architecture.md) for that trade.
 
 **On the four traces as delivered it is worse**: 2.729 → 4.198 out of sample,
 54 % worse. That result is real and is not the whole story.
@@ -355,11 +347,11 @@ unaided for long stretches and **diverges to 1 450 m**; the tight filter holds
 10 m. The crossover is around twenty satellites and the ordering is consistent
 on the held-out trace.
 
-Two things had to be right before any of that worked, and both are worth
-recording because neither is about tight coupling as such.
+Two things have to be right for any of that to work, and neither is about tight
+coupling as such.
 
 **The batch solver's weights are the wrong weights for a filter.** A
-least-squares fit is scale-invariant, so `wls` only ever needed the *relative*
+least-squares fit is scale-invariant, so `wls` only needs the *relative*
 sizes right; `σ = 0.3 + 16/sin(el)` is fine there and tells a filter that a
 zenith pseudorange is good to 16 m. Used directly it reads NIS 1.4 while barely
 correcting anything. Refitting the absolute scale on trace A gives

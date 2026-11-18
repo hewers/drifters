@@ -172,9 +172,9 @@ pub fn read_gnss(path: &Path, week: u32) -> Result<Vec<GnssFix>, DataError> {
 ///
 /// The file uses a small, fixed subset — flat `key: value` and
 /// `key: [a, b, c]` — and this reads exactly that. Pulling in a general YAML
-/// crate for one known file would add a dependency (and, at the time of
-/// writing, an unmaintained one) far larger than the thing it parses. The cost
-/// is that anything outside the subset is ignored rather than diagnosed, which
+/// crate for one known file would add a dependency far larger than the thing
+/// it parses. The cost is that anything outside the subset is ignored rather
+/// than diagnosed, which
 /// is acceptable for a replay tool and would not be for a user-facing config
 /// format.
 #[derive(Clone, Debug)]

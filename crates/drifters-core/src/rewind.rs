@@ -22,8 +22,7 @@
 //!
 //! # One layer, two engines
 //!
-//! This was written for the ESKF's engine and lived in `drifters-filter`. It is
-//! here because the equivariant filter's engine needed exactly the same thing,
+//! This is here because both estimators' engines need exactly the same thing,
 //! and none of it is about either filter. What it asks of an engine is
 //! [`Rewindable`]: that it is an [`Estimator`], that a copy of it is a
 //! snapshot, and that its aiding calls can be recorded and repeated. Each
@@ -81,7 +80,7 @@
 //! time, so that every fix is on time when its interval is reached, and
 //! integrate the last `W` samples forward from the filtered state for output.
 //! Its cost is flat. Its output is a prediction, with a covariance the filter
-//! does not carry. Rewind was built first because of a property the horizon
+//! does not carry. This module rewinds because of a property the horizon
 //! cannot have: the output is the filter's own, and whether it is right is
 //! checkable bit for bit against on-time delivery.
 //!

@@ -1,15 +1,15 @@
 //! Ground-truth trajectories and true position error.
 //!
-//! Every accuracy number this project reports so far is a **prediction
-//! residual**: the filter's predicted antenna position against the GNSS fix it
-//! is about to consume. That is a valid open-loop check but not error against
-//! truth: the fixes carry their own error, so a filter tracking them perfectly
-//! would report zero residual while being wrong by whatever the fixes were.
+//! The KF-GINS accuracy figure is a **prediction residual**: the filter's
+//! predicted antenna position against the GNSS fix it is about to consume. That
+//! is a valid open-loop check but not error against truth: the fixes carry
+//! their own error, so a filter tracking them perfectly would report zero
+//! residual while being wrong by whatever the fixes were.
 //!
-//! This module closes that gap. It is deliberately **not** tied to any one
-//! dataset: a truth trajectory is a time-ordered sequence of geodetic positions,
-//! whether it came from a Kaggle competition, post-processed RTK, a total
-//! station or a simulator.
+//! This module measures against truth instead. It is deliberately **not** tied
+//! to any one dataset: a truth trajectory is a time-ordered sequence of
+//! geodetic positions, whether it came from a Kaggle competition, post-processed
+//! RTK, a total station or a simulator.
 //!
 //! # Interpolation, and refusing to extrapolate
 //!

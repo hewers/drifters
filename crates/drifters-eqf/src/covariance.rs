@@ -4,9 +4,7 @@
 //! two forms:
 //!
 //! - **[`StateMatrix`]**, a dense `21 × 21` in `f64`. The default, and the form
-//!   every result in docs/eqf.md was measured with. Its arithmetic is the
-//!   filter's original in-place code, unchanged, so results through it are
-//!   bit-identical to what they were before this module existed.
+//!   docs/eqf.md reports unless it says otherwise.
 //! - **[`Ud<S>`]**, `Σ = U D Uᵀ` with `U` unit upper triangular and `D`
 //!   diagonal, held in `S` — `f32` or `f64`. 231 scalars where the dense form
 //!   has 441, and conditioned as the square root of `Σ`, which is what puts
@@ -31,10 +29,7 @@
 //!   GNSS fix have a dense noise covariance — GCU's `R'` is dense even when
 //!   the sensor's `R` is not — so they are whitened by its Cholesky factor
 //!   first. Bierman applies the optimal gain for the noise it is given, which
-//!   is exactly the paper's GCU update, `(I − KC*)Σ` with `S'`; the form this
-//!   filter used before it was corrected, a Joseph update with a gain that
-//!   was not optimal for the noise in it, would have had no factored
-//!   counterpart.
+//!   is exactly the paper's GCU update, `(I − KC*)Σ` with `S'`.
 //! - **The reset's transport**, `T Σ Tᵀ` with `T = I + ½ ad_Δ`, is a second
 //!   Gram–Schmidt pass over `T U`, with no noise columns.
 //!
@@ -261,10 +256,10 @@ fn mul_transpose_in_place(m: &mut StateMatrix, b: &StateMatrix) {
 /// # Two buffers, and why it is written this way
 ///
 /// As one expression this is `phi.matmul(&sigma).mul_transpose(&phi)` over
-/// a `Φ` built from `identity() + a_dt + a_dt.matmul(&a_dt) * 0.5`, and
-/// that is how it was first written. Every operator in it returns a
-/// `21 × 21` by value, 3 528 bytes each, and on Cortex-M4 the step peaked
-/// at 28 852 bytes of stack: more than the ESKF has ever been allowed.
+/// a `Φ` built from `identity() + a_dt + a_dt.matmul(&a_dt) * 0.5`. Every
+/// operator in that returns a `21 × 21` by value, 3 528 bytes each, and on
+/// Cortex-M4 the step would peak at 28 852 bytes of stack, over the 20 KiB CI
+/// allows.
 ///
 /// The same arithmetic needs two matrices. `A dt` is scaled in place, its
 /// square goes into the second buffer, `Φ` is assembled over the square,
@@ -375,7 +370,7 @@ fn dense_joseph(
 ///
 /// With `ε_new = log(exp(ε) exp(−Δ))`, the Jacobian at `ε = Δ` is
 /// `Ad_{exp(Δ)} J_r(Δ)`, whose first-order expansion is `I + ½ ad_Δ`.
-/// Omitting it cost about 14 % of NEES, concentrated in the rotational
+/// Omitting it costs about 14 % of NEES, concentrated in the rotational
 /// states — see `drifters nees` and docs/eqf.md.
 #[inline(never)]
 fn dense_transport(sigma: &StateMatrix, work: &mut StateMatrix, step: Algebra) {

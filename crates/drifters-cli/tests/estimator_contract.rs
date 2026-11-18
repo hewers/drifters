@@ -311,9 +311,8 @@ fn a_fix_pulls_the_antenna_towards_it_and_tightens_the_position<F: Fixture>() {
     // fix's 0.1 m. The EqF's falls by about 1/√2: GCU's β doubles at most
     // the state's share of the innovation covariance, and the paper's update
     // counts that as measurement noise — so a fix far sharper than the prior
-    // takes away at least half the variance, and no more is promised. It went
-    // 5.03 -> 3.51 m. Before the update was the paper's it reported 0.5x,
-    // having applied half the correction and claimed all of it.
+    // takes away at least half the variance, and no more is promised. It goes
+    // 5.03 -> 3.51 m.
     let sigma_after = e.pva_std().position;
     for axis in 0..3 {
         assert!(

@@ -37,10 +37,9 @@ conventions are exactly where sign errors hide.
 transport-rate and Coriolis terms change; the vertical channel's `2g/R`
 instability term moves; the `[f×]` tilt coupling changes sign; NHC and odometer
 select different body axes; the height measurement becomes an up-error rather
-than a down-error; the M6 accelerometer-bias/tilt analysis is re-derived from
-scratch. The risk is not that it fails to compile — it is a sign error that
-looks fine and diverges slowly, which is precisely the M6 failure mode that took
-a five-run ablation to distinguish from a physics limitation.
+than a down-error; the accelerometer-bias/tilt analysis in
+[state-model.md](../state-model.md) is re-derived from scratch. The risk is not that
+it fails to compile — it is a sign error that looks fine and diverges slowly.
 
 **The benefit is interop, and interop is a boundary concern.** ENU↔NED and
 FLU↔FRD are fixed permutations with sign flips:

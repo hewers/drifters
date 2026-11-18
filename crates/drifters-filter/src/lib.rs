@@ -58,7 +58,7 @@
 //! - `defmt`: `defmt::Format` on every public type that implements `Debug`.
 //! - `serde`: `Serialize` and `Deserialize` on [`GinsOptions`] and
 //!   [`StationarityConfig`], for configuration read on a host.
-//! - `std`: `std::error::Error` and friends.
+//! - `std`: links `std` and adds no API; see `docs/adr/0004-linear-algebra.md`.
 
 #![cfg_attr(drifters_nightly_simd, feature(portable_simd))]
 #![no_std]

@@ -5,9 +5,7 @@
 //! ESKF and the equivariant filter are compared on a dataset, the comparison is
 //! between two engines fed by the same code, sample for sample and fix for fix,
 //! and not between two replay loops that each made their own small decisions
-//! about when a fix is applied. They used to be two loops, and they did differ:
-//! the EqF's applied each fix at the end of the sample it fell in, where the
-//! ESKF's engine splits the sample at the fix's epoch.
+//! about when a fix is applied.
 //!
 //! [`ReplayEngine`] is what a replay needs of an engine beyond the shared
 //! [`Estimator`] interface: what to call it, the lever arm it is using, a row

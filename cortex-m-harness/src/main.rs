@@ -207,10 +207,9 @@ fn ticks(syst: &mut SYST, work: impl FnOnce()) -> Option<u32> {
 /// `-icount shift=0` advances QEMU's virtual clock by one nanosecond per
 /// instruction. SysTick does not count nanoseconds. It counts the core clock,
 /// which on this board is 25 MHz, so one tick is 40 ns and **forty
-/// instructions**. This harness reported ticks under the label
-/// `INSTRUCTIONS` from the day it had the line.
+/// instructions**.
 ///
-/// So the unit is measured rather than assumed a second time: a loop of two
+/// So the unit is measured rather than assumed: a loop of two
 /// instructions, a million times round, timed by the same counter. It reads
 /// 50 000.
 fn calibrate(syst: &mut SYST) -> Option<u32> {
@@ -244,11 +243,8 @@ const COUNTED_STEPS: u32 = 200;
 /// # Each step is timed on its own
 ///
 /// The counter is 24 bits, and a 21-state `add_imu` in software `f64` is
-/// about 88 000 ticks, so a batch of five hundred runs it round more than
-/// twice. That is how this was first written: one interval around the whole
-/// batch, the difference masked to 24 bits and divided by five hundred. It
-/// reported 21 398 where the truth was 88 507, and nothing about 21 398 looked
-/// wrong. See docs/testing.md, Layer 9, for what was built on it.
+/// about 98 600 ticks, so a batch of five hundred runs it round more than
+/// twice, and timing the batch would report the remainder.
 ///
 /// One step is nowhere near the counter's range, and [`ticks`] refuses to
 /// return an interval that wrapped rather than trusting that.
@@ -277,8 +273,7 @@ fn ticks_per_step<E: Estimator>(syst: &mut SYST, engine: &mut E) -> Option<u32> 
 /// FPU's latencies, so it will not tell you how long anything takes. What it
 /// does measure exactly is how much *work* a change removes, which is what
 /// distinguishes soft-float from hardware: an `__aeabi_dmul` is tens of
-/// instructions and a `vmul.f32` is one. That is the question M9 could not
-/// answer without a board, and this answers the useful half of it.
+/// instructions and a `vmul.f32` is one.
 fn report_instructions(label: &str, step: Option<u32>, calibration: Option<u32>) {
     report_call(label, "add_imu", step, calibration);
 }

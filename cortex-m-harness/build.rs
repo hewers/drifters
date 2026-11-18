@@ -1,13 +1,12 @@
 //! Put the linker script where `RUSTFLAGS` cannot take it away.
 //!
-//! `-C link-arg=-Tlink.x` used to live in `.cargo/config.toml` under
-//! `target.thumbv7em-none-eabihf.rustflags`. Cargo lets the `RUSTFLAGS`
-//! environment variable *replace* that key rather than add to it, so any
-//! caller who sets `RUSTFLAGS` — CI sets `-D warnings` for the whole
-//! workflow — silently linked the firmware without its linker script. The
-//! result still builds: it warns `cannot find entry symbol _start`, produces
-//! an ELF with no vector table at the reset address, and locks the core up
-//! the instant QEMU starts it, with `can't escalate 3 to HardFault`.
+//! `-C link-arg=-Tlink.x` is not in `.cargo/config.toml` under
+//! `target.thumbv7em-none-eabihf.rustflags`, because Cargo lets the `RUSTFLAGS`
+//! environment variable *replace* that key rather than add to it, and CI sets
+//! `-D warnings` for the whole workflow. Firmware linked without its script
+//! still builds: it warns `cannot find entry symbol _start`, produces an ELF
+//! with no vector table at the reset address, and locks the core up the instant
+//! QEMU starts it, with `can't escalate 3 to HardFault`.
 //!
 //! A build script emits link arguments through a different channel, which
 //! `RUSTFLAGS` does not override.

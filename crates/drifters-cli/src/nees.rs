@@ -5,9 +5,8 @@
 //! Every consistency number this project reports from real data is a NIS,
 //! computed from innovations. NIS conflates two things it cannot separate: a
 //! filter whose covariance is wrong, and a filter whose covariance is right
-//! about a model that does not match the data. On the GSDC traces those two
-//! explanations were still competing after a mean sweep, a median sweep and a
-//! measurement-noise sweep.
+//! about a model that does not match the data. On the GSDC traces a mean sweep,
+//! a median sweep and a measurement-noise sweep leave both explanations open.
 //!
 //! NEES separates them, by removing the second. The trajectory here is
 //! synthetic, so the true state is known exactly, and the noise is drawn from
@@ -106,7 +105,7 @@ impl Rng {
 
 /// `∂(physical error) / ∂ε`, evaluated at the estimate.
 ///
-/// [`drifters_eqf::physical::jacobian`], which is where this now lives: the
+/// [`drifters_eqf::physical::jacobian`], which is where this lives: the
 /// engine needs the same map to turn its configured sigmas into a covariance,
 /// and two copies of a sign convention eventually disagree. The relations,
 /// and the numerical Jacobian that checks them, are documented there.
@@ -332,11 +331,10 @@ fn initial_sigma() -> [f64; DIM] {
 /// ε₁,ρ = δp + p̂^ δφ        ε₄ = Ê δS + δφ
 /// ```
 ///
-/// This harness used to write the matrix out itself, with `−I`, `−I` and `I`
-/// on the last three blocks where the exact map has `−Ad_B̂`, `−Â` and `Ê`.
-/// The first is not close: `Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s
-/// the truth moves here `v̂^ δb_ω` is as large as the accelerometer-bias sigma
-/// it was being left out of. See docs/eqf.md.
+/// The last three blocks are `−Ad_B̂`, `−Â` and `Ê`, not `−I`, `−I` and `I`. The
+/// first is not close: `Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s the truth
+/// moves here `v̂^ δb_ω` is as large as the accelerometer-bias sigma. See
+/// docs/eqf.md.
 fn initial_covariance_scaled(strength: f64, estimate: &State) -> Matrix<DIM, DIM> {
     let s = initial_sigma().map(|v| v * strength);
     drifters_eqf::physical::covariance_from_std(
@@ -501,9 +499,9 @@ pub fn run_nees_turning<C: drifters_eqf::Covariance>(
             // A first-order stepper here is not good enough, and the reason is
             // worth stating: its disagreement with the filter's midpoint scheme
             // is a fixed error that does not scale with the injected noise, so
-            // it dominates NEES as the noise is reduced. Measured with the old
-            // stepper, NEES ran 23.9, 26.4, 47.5, 287 as `strength` fell from 1
-            // to 0.03 — the harness measuring itself.
+            // it dominates NEES as the noise is reduced. With such a stepper
+            // NEES runs 23.9, 26.4, 47.5, 287 as `strength` falls from 1 to
+            // 0.03 — the harness measuring itself.
             //
             // A turning world is stepped through the frame that does not turn
             // and coincides with it at the start of the step. There the group
@@ -724,10 +722,7 @@ mod tests {
             // caught in `smoother.rs` instead, by requiring the covariance to
             // actually shrink.
             //
-            // Both passes sit near nine. An earlier version asserted that the
-            // smoother was *more* consistent than the filter, which was true
-            // only because this harness had the attitude and bias error signs
-            // backwards and so scored the filter at two to four times nine.
+            // Both passes sit near nine.
             for (what, nees) in [("filtered", r.filtered_nees), ("smoothed", r.smoothed_nees)] {
                 assert!(
                     (4.5..18.0).contains(&nees),
@@ -834,10 +829,11 @@ mod tests {
     /// Over data generated from exactly the model the filter assumes, a
     /// consistent filter scores the state dimension, 21. It does.
     ///
-    /// It read about 24 until the prior this harness hands the filter was
-    /// corrected: the errors are drawn independently in physical coordinates
-    /// and the filter's covariance lives in ε, which are the same thing only at
-    /// the anchor with no velocity. See `initial_covariance_scaled`.
+    /// The prior has to be mapped for that to hold: the errors are drawn
+    /// independently in physical coordinates and the filter's covariance lives
+    /// in ε, which are the same thing only at the anchor with no velocity.
+    /// Handing the filter `diag(σ²)` reads about 24. See
+    /// `initial_covariance_scaled`.
     #[test]
     fn the_covariance_is_consistent() {
         // Twenty runs over 120 s. Twelve over 90 s reads 22.3: the campaign's
@@ -885,11 +881,11 @@ mod tests {
     /// leaves the error-to-covariance ratio unchanged, so NEES should not move
     /// either. Across `s` from 1 down to 0.01 it does not.
     ///
-    /// That flatness only appeared once the truth propagator was given Simpson
-    /// quadrature. With a first-order stepper the same sweep ran 23.9, 26.4,
-    /// 47.5, 287: the harness's own discretisation error, fixed in magnitude and
-    /// so dominating as the injected noise fell. A step-dependent NEES means the
-    /// harness is measuring itself.
+    /// That flatness depends on Simpson quadrature in the truth propagator.
+    /// With a first-order stepper the same sweep runs 23.9, 26.4, 47.5, 287: the
+    /// harness's own discretisation error, fixed in magnitude and so dominating
+    /// as the injected noise falls. A step-dependent NEES means the harness is
+    /// measuring itself.
     #[test]
     fn nees_does_not_depend_on_the_step() {
         let coarse = run_nees_at(8, 60.0, 4242, 0.02).overall.mean();
@@ -1328,14 +1324,10 @@ pub mod eskf {
                 // state does not use one convention — position and velocity are
                 // estimate minus truth, the IMU errors are truth minus estimate
                 // because feedback *adds* them, and attitude is multiplicative
-                // because it lives on SO(3). This harness previously wrote out
-                // all five blocks itself and took two of them backwards, which
-                // read as the filter being 2.5x overconfident for a long time:
-                // a *mixed* sign error leaves every marginal untouched and
-                // flips only the cross terms. `error_between` is the inverse of
-                // `apply_correction` and `error_state_round_trips` pins the
-                // pair as an identity, so there is now one place to get it
-                // wrong instead of two.
+                // because it lives on SO(3). A *mixed* sign error would leave
+                // every marginal untouched and flip only the cross terms.
+                // `error_between` is the inverse of `apply_correction` and
+                // `error_state_round_trips` pins the pair as an identity.
                 let truth_state = drifters_core::types::NavState {
                     time: nav.time,
                     pva: drifters_core::types::Pva {
@@ -1361,9 +1353,8 @@ pub mod eskf {
                 // The scale factors are excluded rather than zeroed. The truth
                 // here has no scale error at all while the filter carries a
                 // prior for it, so including them feeds the quadratic form a
-                // state the model says is impossible — with the full 21 that
-                // read 57.6 while every marginal block was consistent, which is
-                // the signature of exactly this mistake.
+                // state the model says is impossible. That inflates the score
+                // while every marginal block stays consistent.
                 let p = engine.covariance().block::<15, 15>(0, 0);
                 let Some(chol) = Cholesky::new(&p) else {
                     report.singular += 1;

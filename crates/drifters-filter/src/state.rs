@@ -173,12 +173,6 @@ mod size_tests {
         // rest of the engine, so it is behind `smoothing` and a default build
         // does not have the field at all. A regression that puts it in
         // unconditionally shows up here as the larger number.
-        //
-        // Was 4 944 until `GpsTime` became a single `u64`, then 4 920, then
-        // 3 240 once the covariance became `U D Uᵀ` — a third off, and the
-        // largest single saving the engine has had — then 3 232 when the epoch
-        // tolerance stopped being a field and came from the last interval, then
-        // 3 272 when the options gained the vehicle mounting.
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (

@@ -49,8 +49,8 @@ pub struct GinsEngine {
     stale_fixes: u32,
     /// Smoothing state, present only while recording.
     ///
-    /// Behind `alloc` because it is three 21×21 matrices — four times the rest
-    /// of the engine. A default `no_std` build does not have the field at all,
+    /// Behind `smoothing` because it is three 21×21 matrices, several times the
+    /// rest of the engine. A default `no_std` build does not have the field at all,
     /// which the size test in `state.rs` pins; a build that asked for
     /// smoothing pays for it. Not boxed, because [`GinsEngine`] is `Copy` and
     /// a feature that silently removed a trait impl would be worse than the
@@ -289,8 +289,7 @@ impl GinsEngine {
             }
             Some((Placement::Inside, fix)) => {
                 // The fix comes with its placement, so there is nothing to
-                // look up again and nothing to assert. This was an `expect`
-                // that only the optimiser kept off the data path.
+                // look up again and nothing to assert.
                 let (before, after) = imu.split_at(fix.time);
                 let first = before.map_or(Ok(()), |before| self.propagate(&before));
                 if first.is_ok() {
@@ -919,11 +918,10 @@ pub fn apply_correction(state: &mut NavState, dx: &StateVector) {
 /// velocity and attitude are *estimate relative to truth*, while the IMU errors
 /// are corrections to the compensation and are fed back by addition, and
 /// attitude is multiplicative because it lives on `SO(3)` rather than in a
-/// vector space. A Monte-Carlo harness built the error state by hand, took two
-/// of the five blocks the wrong way round, and reported the filter 2.5× more
-/// confident than it is — for a long time, and across five documents, because
-/// a *mixed* sign error leaves every marginal untouched and flips only the
-/// cross terms. See [M15](../../../docs/milestones.md).
+/// vector space. A harness that builds the error state by hand and takes two of
+/// the five blocks the wrong way round reports the filter 2.5× more confident
+/// than it is, and a *mixed* sign error leaves every marginal untouched and
+/// flips only the cross terms.
 ///
 /// So: anything comparing a filter state against a reference should call this
 /// rather than write the five blocks out.
@@ -955,9 +953,8 @@ pub fn error_between(truth: &NavState, estimate: &NavState) -> StateVector {
     );
 
     // Attitude: `q_true = exp(φ) ⊗ q_est`, so φ takes the estimate to the
-    // truth and is read off the navigation-frame rotation between them. This
-    // is the block that was taken backwards, and the one no sign convention
-    // can turn into an addition.
+    // truth and is read off the navigation-frame rotation between them. No
+    // sign convention turns this block into an addition.
     let phi = Quat::from_dcm(
         &truth
             .pva
@@ -1263,8 +1260,7 @@ mod tests {
     ///
     /// `apply_correction(estimate, error_between(truth, estimate)) == truth`,
     /// every block. A sign taken the wrong way round in either function fails
-    /// here, which is the check that was missing when a harness took two of
-    /// them backwards and cost this project a long detour — see M15.
+    /// here.
     #[test]
     fn error_state_round_trips() {
         let truth = NavState {
@@ -1362,7 +1358,7 @@ mod tests {
         }
     }
 
-    // --- auxiliary measurements (M6) ------------------------------------
+    // --- auxiliary measurements -----------------------------------------
 
     fn options_with(velocity: Ned, euler: Euler) -> GinsOptions {
         GinsOptions::default().with_initial_state(origin(), velocity, euler)
@@ -1664,9 +1660,9 @@ mod tests {
 
     #[test]
     fn zupt_bounds_drift_through_a_gnss_outage() {
-        // The headline result for M6, over a realistic stop: a vehicle waiting
-        // at a light for half a minute. A 0.02 m/s^2 accelerometer bias with no
-        // aiding integrates twice, 0.5*a*t^2, to about 9 m in 30 s.
+        // A realistic stop: a vehicle waiting at a light for half a minute. A
+        // 0.02 m/s^2 accelerometer bias with no aiding integrates twice,
+        // 0.5*a*t^2, to about 9 m in 30 s.
         let (free, _) = outage_drift(false, 30.0);
         assert!(
             free > 5.0,
@@ -1711,10 +1707,9 @@ mod tests {
 
     #[test]
     fn holding_attitude_keeps_a_long_stationary_run_stable() {
-        // The M6 follow-up, delivered. Holding attitude sends the whole ZUPT
-        // correction to the accelerometer bias — the state ZUPT can actually
-        // pin down — instead of splitting it along a direction neither state
-        // can be resolved in.
+        // Holding attitude sends the whole ZUPT correction to the accelerometer
+        // bias — the state ZUPT can actually pin down — instead of splitting it
+        // along a direction neither state can be resolved in.
         let held = run_stationary_with_zupt(options(), 300.0);
         assert!(
             held < 0.05,

@@ -21,9 +21,9 @@ Implement the linear algebra directly in `drifters-core`, depending only on
 - **Dependency weight.** `nalgebra` is a large crate with a long compile time,
   for a use that touches maybe fifteen operations. The brief asked for minimum
   dependencies.
-- **Version fragmentation in this ecosystem.** `nav-types` pins 0.32,
-  `gnss-rtk` uses 0.33, current is 0.34. Any of those in the graph and we carry
-  two copies of a large crate.
+- **Version fragmentation in this ecosystem.** `nav-types` pins 0.32 and
+  `gnss-rtk` uses 0.33. Any of those in the graph and we carry two copies of a
+  large crate.
 - **`no_std` sharp edges.** The `libm` feature works, but the interaction with
   `default-features = false` and downstream crates re-enabling `std` is a class
   of problem that shows up at integration time, not build time.
@@ -34,8 +34,8 @@ Implement the linear algebra directly in `drifters-core`, depending only on
 Owning it also buys things a general-purpose library will not do:
 
 - A **zero-skipping multiply**. The transition matrix is extremely sparse — most
-  of a 21×21 is structurally zero — and skipping zero elements is the single
-  largest win in `predict`. A general library cannot assume that.
+  of a 21×21 is structurally zero — and skipping zero elements is what makes
+  multiplying by it cheap. A general library cannot assume that.
 - `Cholesky::new` returning `Option` rather than panicking, because a failed
   factorisation is the canonical signal that a filter has diverged and the
   caller must be able to handle it.
@@ -64,22 +64,20 @@ when first encountered.
 `std` defines **inherent** methods on `f64` — `sin`, `sqrt`, `atan2` — and
 inherent methods take precedence over trait methods at resolution time. So in any
 compilation where `std` is linked, `x.sin()` reaches the platform libm rather
-than the `libm` crate. Two things cause that:
+than the `libm` crate. Three things cause that:
 
 1. **The `#[test]` harness**, which injects `extern crate std` even into a
-   `no_std` crate. This is how the behaviour was first noticed: the
-   `use ... Real;` imports started being reported as unused under `cargo test`
-   but not under `cargo build`.
+   `no_std` crate. The `use ... Real;` imports are then reported as unused under
+   `cargo test` but not under `cargo build`.
 2. **This project's own `std` feature**, where `drifters-filter` declares
-   `extern crate std` to get `std::error::Error` impls. Found later, when
-   `clippy --all-features` reported the same unused import against the library
-   target rather than the test target.
+   `extern crate std`. `clippy --all-features` reports the same unused import
+   against the library target rather than the test target.
 3. **A dependency that links `std`**, which brings in `std` as surely as
    declaring it does. The `serde` feature is the one this project offers. The
    crates enable `serde` without its `std` feature, but any host program that
    also uses `serde_json`, or almost any other format crate, turns `serde/std`
    on through feature unification, and from then on `x.sin()` in the filter is
-   the platform's. This one was found the first time the serde tests ran.
+   the platform's.
 
 The affected imports therefore carry
 `#[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]`
@@ -112,18 +110,18 @@ of target. Making the whole stack generic over the scalar would add a type
 parameter to every signature to benefit only the states where `f32` is
 acceptable.
 
-Centralising the alias means a future change is one edit plus its fallout, rather
-than an API-wide redesign. Evaluating a mixed-precision split (`f64` position,
-`f32` elsewhere) is milestone M8.
+Centralising the alias means a change of scalar is one edit plus its fallout,
+rather than an API-wide redesign. The one split made is `f32-covariance`, in
+[adr/0005](0005-scalar-type.md).
 
 ## Consequences
 
 - We own correctness. Mitigated by testing the algebra against identities rather
   than against captured outputs: Cholesky must reconstruct its input, the solve
   must match the explicit inverse, transposition must be an involution.
-- No eigendecomposition, SVD or QR. Nothing in the current design needs them. If
-  a square-root filter (UD or Carlson) is ever wanted for numerical robustness,
-  that is a new module, not a dependency.
+- No eigendecomposition, SVD or QR. Nothing in the design needs them. The
+  square-root filter is `U D Uᵀ`, in `drifters_filter::ud`, written here rather
+  than taken from a dependency.
 - One real ergonomic wart: the inherent `Matrix::matmul` is deliberately **not**
   named `mul`, because an `impl Mul<F> for Matrix` shadows an inherent `mul` at
   method-resolution time and produces a baffling type error. `Quat`'s Hamilton

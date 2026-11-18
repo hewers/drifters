@@ -49,9 +49,9 @@ handling. That is the opposite of the "minimum dependencies" requirement.
 
 2. **`drifters-interop` provides adapters**, and is never a dependency of the
    core or the filter:
-   - `nav-types` conversions behind a `nav-types` feature (**off by default**).
-     MIT, so no licensing concern — only a `std` one.
-   - `gnss-rtk` PVT → `GnssFix` behind a `gnss-rtk` feature (**off by default**,
+   - `nav-types` conversions behind a `nav-types-interop` feature (**off by
+     default**). MIT, so no licensing concern — only a `std` one.
+   - `gnss-rtk` PVT → `GnssFix` behind a `gnss-rtk-interop` feature (**off by default**,
      `std` only), with the AGPL implication stated in the feature's
      documentation, in the crate README, and in a `compile_error!`-adjacent doc
      warning so it cannot be enabled unknowingly.

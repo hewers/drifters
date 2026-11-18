@@ -87,19 +87,24 @@ instruction, and the harness times `add_imu` against it with SysTick:
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 3697080 (92427 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4480560 (112014 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 866480 (21662 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 3943160 (98579 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4505880 (112647 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 889600 (22240 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH add_imu = 4719600 (117990 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH_F32 add_imu = 910680 (22767 ticks; only under -icount shift=0)
+INSTRUCTIONS_ALIGN add_imu = 28880 (722 ticks; only under -icount shift=0)
+INSTRUCTIONS_ALIGN_WORST add_imu = 383080 (9577 ticks; only under -icount shift=0)
+INSTRUCTIONS_ALIGN_WORST add_gnss = 58960 (1474 ticks; only under -icount shift=0)
 ```
 
-Three things about that output are there because their absence was a bug:
+Three things about that output matter:
 
 - **The calibration line.** SysTick counts the 25 MHz core clock, so a tick is
   forty instructions, not one. The harness times a loop of exactly two million
   instructions and scales by what it reads, rather than assuming the unit.
 - **Each step is timed separately.** The counter is 24 bits, and a batch of
-  five hundred 21-state steps runs it round more than twice. The original
-  harness timed the batch, and reported the remainder.
+  five hundred 21-state steps runs it round more than twice, so timing the batch
+  would report the remainder.
 - **An interval that wrapped is refused**, and printed as `unmeasured`.
 
 A count is not a time. On a Cortex-M4 it is a floor on one, since that core

@@ -7,8 +7,7 @@
 //! and a covariance in the chart its symmetry induces. What they share is how
 //! an application drives them, and that is what is here.
 //!
-//! It was extracted after both engines existed, not designed ahead of them,
-//! so everything below is something both were already doing:
+//! Everything below is something both engines do:
 //!
 //! - [`Estimator`] — push IMU samples and GNSS fixes, pull a [`NavState`].
 //! - [`place`] — where a GNSS epoch falls inside an IMU interval. Both engines
@@ -54,11 +53,10 @@ use crate::F;
 /// buys nothing the sample itself can resolve. What a sample resolves is set
 /// by its own length, so the tolerance is a fraction of that length.
 ///
-/// It was a fixed 100 µs. That is a hundredth of a 100 Hz interval, so the
-/// value there is unchanged; at 200 Hz it is now 50 µs. At high rates a fixed
-/// value is wrong, not merely loose: at 5 kHz the two edge windows meet, and
-/// faster than that an epoch most of the way through an interval was applied
-/// at its *start*, the farther edge.
+/// A fixed tolerance is wrong at high rates, not merely loose: at 5 kHz the two
+/// edge windows of a 100 µs tolerance meet, and faster than that an epoch most
+/// of the way through an interval would be applied at its *start*, the farther
+/// edge.
 ///
 /// A hundredth moves no fix by more than 1 % of a sample, keeps the two
 /// windows 98 % of the interval apart, and at 100 Hz and 30 m/s is 3 mm of
@@ -397,8 +395,8 @@ mod tests {
     /// Whatever the rate, an epoch is only ever moved to the edge it is
     /// nearer, and only from within a hundredth of the interval.
     ///
-    /// The fixed tolerance failed this from 5 kHz: at 8 kHz an epoch 90 µs
-    /// into a 125 µs interval, 35 µs from its end, was applied at its start.
+    /// A fixed 100 µs tolerance fails this from 5 kHz: at 8 kHz an epoch 90 µs
+    /// into a 125 µs interval, 35 µs from its end, would be applied at its start.
     #[test]
     fn an_epoch_is_never_moved_to_the_farther_edge() {
         for hz in [10_u64, 100, 200, 1_000, 4_000, 8_000, 10_000] {

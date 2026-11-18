@@ -36,19 +36,16 @@ which makes it a good thing to be *comparable to* — see
 - **Orbital and high-dynamics regimes.** The blocker is the mechanization, not
   the arithmetic: a local-level NED frame carried by transport rate is a
   surface parameterisation, and the gravity model is WGS-84 normal gravity on
-  the ellipsoid with no harmonic terms. The IMU error models are Gauss-Markov
-  processes with terrestrial correlation times. (Bowring is *not* the limit and
-  used to be named here as though it were — `lla_ecef_round_trips` holds it to
-  0.1 mm at 36 km altitude.)
+the ellipsoid with no harmonic terms. The IMU error models are Gauss-Markov
+  processes with terrestrial correlation times. Bowring's geodetic conversion is
+  *not* the limit: `lla_ecef_round_trips` holds it to 0.1 mm at 36 km altitude.
 - **Factor graphs and full batch non-linear optimisation.** There is smoothing,
   below, and a banded linear batch fit in `drifters-gnss`; neither is a general
   back-end, and building one is not intended.
 - **GNSS attitude determination** from multiple antennas. One antenna, with a
   configurable lever arm.
 
-**No longer non-goals.** Both of the following were listed here and have since
-been built, under [M14](milestones.md#m14--local-first-architecture--in-progress):
-
+**In scope, though filters of this kind often leave them out:**
 - **Tightly-coupled GNSS.** [`range`](../crates/drifters-filter/src/range.rs)
   takes per-satellite pseudoranges, single-differenced within each constellation
   so no receiver-clock states are needed and the filter's footprint is
@@ -59,8 +56,10 @@ been built, under [M14](milestones.md#m14--local-first-architecture--in-progress
 - **Smoothing.** [`smoother`](../crates/drifters-filter/src/smoother.rs) is a
   Rauch–Tung–Striebel backward pass, always compiled and allocation-free — it
   writes into a caller-provided slice, so a bounded window is a fixed-lag
-  smoother that runs on the target. The filter itself is still causal and
-  forward-only; the smoother is a second pass over what the first recorded.
+  smoother that runs on the target. The filter itself is causal and
+  forward-only; the smoother is a second pass over what the first recorded. The
+  `smoothing` feature adds the recorder to `GinsEngine`. It allocates nothing and
+  costs space: three `21 × 21` matrices.
 
 ## Crate layout
 
@@ -93,11 +92,10 @@ protobuf codecs   gnss-rtk adapters    WLS, TDCP, RINEX,  and validation
                                        DGNSS, batch fit
 ```
 
-`drifters-filter::anchor` and `drifters-core::local` are also present, holding
-the local-frame and re-anchoring transforms. Nothing calls them: the state
-representation change they exist for is
-[parked](milestones.md#m14--local-first-architecture--in-progress) on
-measurements that said it would not pay.
+`drifters-filter::anchor` and `drifters-core::local` hold the local-frame and
+re-anchoring transforms. Nothing calls them: the state representation change they
+exist for is [parked](milestones.md#local-frame-state), because the measurements
+say it would not pay.
 
 `drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are the
 firmware side: `no_std`, no allocator, and CI fails if any of them so much as
@@ -166,8 +164,7 @@ The diagram assumes the fix is in hand before the interval that contains it is
 pushed. In replay it is. On a device it is not: a receiver reports a fix tens to
 hundreds of milliseconds after the epoch it describes, and by then the IMU
 stream has passed it. `add_gnss` refuses such a fix as `GnssQueued::Stale` and
-counts it. It used to accept it into the pending slot and never apply it, with
-nothing to say so, which on hardware would have been every fix.
+counts it.
 
 [`drifters_core::rewind`](../crates/drifters-core/src/rewind.rs) is how a late
 fix gets applied, to either estimator: `RewindEngine` in `drifters-filter` and
@@ -178,10 +175,9 @@ the older one. A late fix
 restores the snapshot before its epoch, queues the fix where it belonged, and
 pushes the ring through again, so the diagram above runs exactly as it would
 have on time, split interval included. The result is bit-identical to on-time
-delivery. That is the property the tests hold it to, and the reason it was
-built before the alternative: a filter run a fixed delay behind real time with
-a predictor for output, whose cost is flat but whose output is no longer the
-filter's own.
+delivery, and the tests hold it to that. The alternative is a filter run a fixed
+delay behind real time with a predictor for output, whose cost is flat but whose
+output is not the filter's own.
 
 The cost is a burst. A fix `L` samples late pushes between `L` and `L + W − 1`
 samples again, where `W` is the lateness the ring is sized to always cover; in
@@ -270,14 +266,12 @@ fn step<E: Estimator>(estimator: &mut E, sample: ImuSample, fix: Option<GnssFix>
 }
 ```
 
-The trait was extracted after the second engine existed, not written before
-it, and the difference shows in what it contains. It is the things both were
-already doing: ingest, the navigation solution, the antenna position a fix is
-compared against, the health counters. Beside it in `drifters-core` are the
-pieces of *implementation* the two turned out to share — `place`, the rule for
-where a GNSS epoch falls in an IMU interval, `GnssQueued`, `FilterError` and
-the chi-squared thresholds. The engines differ in everything numerical, and
-they place a fix by calling the same function.
+The trait holds what both engines do: ingest, the navigation solution, the
+antenna position a fix is compared against, the health counters. Beside it in
+`drifters-core` are the pieces of *implementation* they share — `place`, the rule
+for where a GNSS epoch falls in an IMU interval, `GnssQueued`, `FilterError` and
+the chi-squared thresholds. The engines differ in everything numerical, and they
+place a fix by calling the same function.
 
 Three things are deliberately not in it.
 
@@ -302,15 +296,13 @@ over `Estimator`, run against each engine: which fixes are refused at ingest
 and how they are counted, which sample consumes a fix, that a fix placed at
 `antenna_position` has no innovation, that a ten-sigma velocity is gated out.
 
-The rewind layer was the first thing built on top of the trait, and it is
-where the aiding question was settled. It needs nothing from an engine's
+The rewind layer is built on top of the trait. It needs nothing from an engine's
 aids except to record one and repeat it, so
 [`Rewindable`](../crates/drifters-core/src/rewind.rs) asks each engine for an
-`Aid` type and an `apply_aid` that takes one; the ESKF's has five variants and
-the EqF's one. `Estimator` itself still says nothing about aiding, for the
-reason above, and the rewind layer did not need it to. The last contract test
-runs the shared `Rewind` over each engine and requires a late fix to land
-exactly where it would have on time.
+`Aid` type and an `apply_aid` that takes one; the ESKF's has six variants and
+the EqF's one. `Estimator` itself says nothing about aiding, for the reason
+above. The last contract test runs the shared `Rewind` over each engine and
+requires a late fix to land exactly where it would have on time.
 
 ## Resource budget
 
@@ -326,8 +318,7 @@ Sizes for the 21-state configuration:
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
-both columns. The engine was 4 944 bytes before `GpsTime` became a single `u64`
-and before the covariance was factored.
+both columns.
 
 Asserted by `state::size_tests::types_have_their_documented_footprint`, so the
 table and the code cannot drift apart silently.
@@ -354,24 +345,17 @@ identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
 
-On the host a rewind costs what the samples it replays cost and nothing
-measurable besides: 356 µs for a fix 60 samples late, 80 samples replayed at
-4.45 µs each against an `add_imu` of 4.47. In steady state the layer adds less
-than the run-to-run noise.
+A rewind costs what the samples it replays cost. In steady state the layer copies
+and does not propagate.
 
 Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
-`add_gnss`, in place on the live engine, and it costs what it was expected to:
-no engine-sized temporary, and a frame of its own of **152 bytes**. A late fix
-reaches the depth of the time update it replays and goes no further: 17 088
-bytes, 13 124 with `f32-covariance` and 10 360 at 15 states. The EqF's late fix
-measures 15 800 dense and 14 392 factored, no deeper than its own fix step in
-either. All are inside their CI ceilings, and all are part of the peak CI
-checks.
-
-It was unmeasured for a while, with a sentence here saying that it *should*
-add only a small frame. That was correct this time. It is still how the
-11 000-byte estimate in the next section was arrived at.
+`add_gnss`, in place on the live engine, with no engine-sized temporary. A late
+fix reaches the depth of the time update it replays and goes no further: 17 088
+bytes, 13 124 with `f32-covariance`, 10 360 at 15 states and 7 956 with both. The
+EqF's late fix measures 15 800 dense and 14 392 factored, no deeper than its own
+fix step in either. All are inside their CI ceilings, and all are part of the peak
+CI checks.
 
 ### The equivariant filter
 
@@ -384,9 +368,8 @@ add only a small frame. That was correct this time. It is still how the
 
 Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
 `rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
-the default and what every accuracy figure was first measured with; the
-factored one, `EqfEngine::<Ud<f32>>::with_covariance`, is the ESKF's
-factorisation applied to this filter, and is the one for a microcontroller.
+the default. The factored one, `EqfEngine::<Ud<f32>>::with_covariance`, is the
+ESKF's factorisation applied to this filter, and is the one for a microcontroller.
 
 Peak stack on Cortex-M4, by the same generic harness code that measures the
 ESKF:
@@ -400,19 +383,16 @@ ESKF:
 
 These are the same with the Earth's rotation in the filter's group.
 
-Under the ESKF's own 17 088, and both under a 20 KiB ceiling in CI. A
-late fix through `EqfRewindEngine` measures the same as each form's own fix
-step. The dense form was 28 852 as first measured; [testing.md](testing.md),
-Layer 9, has how it got here, and [eqf.md](eqf.md#the-stack-and-one-figure-not-yet-explained)
-the 1.9 KB its update paths have gained since, which is not yet explained.
+Both are under the default ESKF's 17 088 and under a 20 KiB ceiling in CI. A late
+fix through `EqfRewindEngine` measures the same as each form's own fix step.
 
-On a small part the constraint was never stack. It was work: the dense form
-is 4.51 million instructions per `add_imu` on a Cortex-M4, soft-float
-throughout on a core whose FPU is single precision, and at an instruction per
-cycle that is at least 26.8 ms a sample at 168 MHz. The factored form is 0.89
-million, a floor of 5.3 ms — inside a 100 Hz IMU's interval with about half of
-it to spare, and just over a 200 Hz one's — against 486 thousand for the
-ESKF with `f32-covariance`. See [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
+On a small part the constraint is work and not stack. The dense form is 4.51
+million instructions per `add_imu` on a Cortex-M4, soft-float throughout on a core
+whose FPU is single precision, and at an instruction per cycle that is at least
+26.8 ms a sample at 168 MHz. The factored form is 0.89 million, a floor of 5.3 ms —
+inside a 100 Hz IMU's interval with about half of it to spare, and just over a
+200 Hz one's — against 487 thousand for the ESKF with `f32-covariance`. See
+[eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4
 
@@ -421,43 +401,29 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 
 | operation | bytes |
 |---|---|
-| `add_imu` (mechanize + predict) | 16 480 |
-| `apply_zupt` (3-dim update) | 13 796 |
-| `apply_height` (1-dim update) | 11 500 |
-| **peak** | **16 480** |
+| `add_imu` (mechanize + predict) | 17 088 |
+| `apply_zupt` (3-dim update) | 7 216 |
+| `apply_height` (1-dim update) | 4 672 |
+| `apply_magnetometer` | 7 600 |
+| **peak** | **17 088** |
 
-Firmware for the whole harness — filter, semihosting and panic handler —
-links to about 48 KiB of `.text` and 1.7 KiB of `.rodata`, with 8 bytes of
-`.bss`.
+The harness firmware, holding both engines, the aligner, semihosting and the panic
+handler, links to 204 160 bytes of `.text` and 4 084 of `.rodata`.
 
-### What measuring changed
+### How the stack is kept down
 
-This table previously carried an **estimate of ~11 000 bytes**, reasoned from
-"about three live temporaries". The first measurement on real Cortex-M came back
-at **35 328 bytes** — over three times the estimate — because the expression-chained
-form of `predict` keeps about a dozen 21×21 temporaries alive at once, not
-three. The estimate was wrong in the direction that matters: it said the filter
-fit in a 16 KiB stack when it needed 35 KiB.
-
-Three changes brought it to 16 480:
+A `21 × 21` matrix is 3 528 bytes, so what matters is how many are alive at once.
+Written as chained expressions, `predict` would keep about a dozen.
 
 1. **`Q = G Qc Gᵀ` is built as 3×3 blocks.** `Qc` is diagonal by construction
-   and `G` is block structured, so the product is block diagonal. Forming the
-   21×18 mapping and multiplying it out allocated two 21×18 matrices and did
-   roughly 15 000 multiplies, nearly all against zeros. `eskf::process_noise`
-   now writes the six non-zero blocks directly, and
+   and `G` is block structured, so the product is block diagonal.
+   `eskf::process_noise` writes the six non-zero blocks directly, and
    `block_form_matches_the_reference_product` pins it against the explicit
    `G Qc Gᵀ` so the fast path cannot drift from the model it came from.
 2. **In-place products.** `Matrix::matmul_into` and `mul_transpose_into` write
-   into a caller-supplied buffer, so `predict` and the Joseph update held four
-   and three live 21×21 matrices respectively instead of a dozen. Both paths
-   were later replaced by the factored covariance below.
+   into a caller-supplied buffer.
 3. **Borrowing accumulation.** `AddAssign for Matrix` takes `Self` *by value*,
-   copying 3 528 bytes per `+=`. The `&Matrix` variants avoid that; using them
-   on the hot path alone was worth 2.2 KiB.
-
-The dataset regression produces **bit-identical** results before and after, which
-is what makes this a restructuring rather than a change to the filter.
+   copying 3 528 bytes per `+=`. The hot path uses the `&Matrix` variants.
 
 ### The 15-state configuration
 
@@ -469,13 +435,11 @@ filter to 15 states. Every matrix halves, and so does the stack:
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
 | `GinsEngine` | 3 272 B | 2 336 B |
-| peak stack | 16 480 B | **9 504 B** |
+| peak stack | 17 088 B | **10 360 B** |
 
 Both halve again under `f32-covariance`: 480, 608 and 1 856 bytes.
 
-The peak-stack figures above are M8's. Re-measured under QEMU after the
-covariance was factored, and again when the equivariant filter's engine joined
-the harness:
+Peak stack by operation, in bytes:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
@@ -490,19 +454,14 @@ table.
 `f32-covariance` takes 23 % off `add_imu`, because Thornton's working array is
 the largest single object on that frame and it halves.
 
-The peak is the **time update**. It was the held-state update, at 20 808 bytes
-with `apply_zupt` at 20 656, while that path materialised `P` from the factors,
-applied the Joseph form and factored it back. Bierman's recursion assumes an
-optimal gain and a held state is a non-optimal one, but the difference between
-the two covariances is a sum of rank-one terms in quantities the recursion has
-already computed, so the update now adds them to the factors;
-[state-model.md](state-model.md) has the derivation. That took 13 088 bytes off
-`apply_zupt` and 3 720 off the peak, and 7 700 off the peak of the `f32` build,
-which could not benefit while this path worked in `f64`.
+The peak is the **time update**. A held-state update stays in the factors:
+Bierman's recursion assumes an optimal gain and a held state is a non-optimal one,
+but the difference between the two covariances is a sum of rank-one terms in
+quantities the recursion has already computed, so the update adds them to the
+factors. [state-model.md](state-model.md) has the derivation.
 
-That is the difference between needing a 32 KiB task stack and fitting in
-16 KiB, which is what makes it the most useful lever available on a small part —
-it changes no numerics at all, it simply estimates fewer things.
+Fifteen states is the most useful stack lever on a small part. It takes the peak
+from 17 088 to 10 360 bytes and changes no numerics: it estimates fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 
@@ -520,15 +479,6 @@ driving in a straight line at constant speed observes neither.
 The feature is **not additive** — it removes states and changes `N_STATE` — so
 it must be chosen deliberately rather than acquired through feature
 unification.
-
-### Remaining headroom
-
-The floor for this formulation was four live `N_STATE`-square matrices in
-`predict`: 14 112 bytes at 21 states, 7 200 at 15. Going below that needed a
-different algorithm rather than tidier code, and that is what
-[`ud`](../crates/drifters-filter/src/ud.rs) is — sequential scalar measurement
-updates and a factored covariance, which were the two candidates named here and
-turned out to be the same piece of work.
 
 ## Auxiliary sensors ("+ other")
 
@@ -560,7 +510,9 @@ implemented, in `drifters-filter::measurement`:
 ZUPT and NHC matter more than their simplicity suggests: they are what keeps a
 low-cost MEMS system usable through a GNSS outage. Measured on a stationary
 30 s outage with a 0.02 m/s² accelerometer bias, ZUPT holds drift to 0.012 m
-against 9.0 m for dead reckoning.
+against 9.0 m for dead reckoning. `zupt_holds_attitude`, on by default, sends the
+whole correction to the accelerometer bias so that a long stop stays stable; the
+reason is in [state-model.md](state-model.md).
 
 The magnetometer takes a field with hard and soft iron already removed, by one of
 the two fits in `drifters_core::magnetometer`. Its innovation is the angle between
@@ -605,6 +557,31 @@ reviewable step. See [adr/0002](adr/0002-protobuf.md).
 
 Schemas live in `proto/drifters/v1/`.
 
+`double` is a fixed64 on the wire, so position and velocity round-trip bit-exactly,
+and the tests assert equality. A geodetic latitude carries about 10⁻⁹ rad of
+meaning, so anything looser would be millimetres of silent error.
+
+Decoding is a trust boundary. Proto3 has no required fields, so an absent message
+decodes to zeros, and a zero `dt`, a zero position sigma or a zero quaternion would
+each break the filter later with nothing left to point at the cause. Every
+`TryFrom` validates and returns `ConvertError` instead. A fuzz target, a
+deterministic proptest sweep and a hostile-input corpus check that malformed input
+never panics; the last two need no nightly toolchain.
+
+## Interop
+
+`drifters-interop` adapts other crates' types at the boundary.
+
+The `nav-types` adapter doubles as a cross-check. `nav-types` is an independent
+implementation of the geodetic conversions, and the assertions in
+`crates/drifters-interop/src/nav_types.rs` hold `drifters-core` to it, to the
+millimetre, in both directions.
+
+`gnss-rtk` exposes DOP and no covariance, and DOP is pure constellation geometry,
+so its adapter takes a UERE from the caller. Only the caller knows whether the
+solution is single-point, differential or RTK, and the filter weights every fix by
+the resulting sigmas.
+
 ## Error handling
 
 No panics on the data path. Everything that can fail at runtime returns a
@@ -616,12 +593,13 @@ No panics on the data path. Everything that can fail at runtime returns a
 - `FilterError::SingularInnovation` — the innovation covariance was not positive
   definite, so the measurement could not be applied. Almost always
   mis-specified measurement noise, or a covariance that had already diverged.
-- `FilterError::Diverged` — the covariance contains a non-finite element.
+- `FilterError::Diverged` — the step would have left a non-finite or out-of-range
+  state or covariance, so it was refused and both keep their last good values.
 - `SmootherError::OutputTooShort` / `Singular(epoch)` — from the backward pass.
   The second carries the epoch index, because which one it was is the first
   thing worth knowing.
 
-All three implement `core::error::Error` unconditionally, so a `no_std` caller
+Each implements `core::error::Error` unconditionally, so a `no_std` caller
 gets the trait without enabling a feature.
 
 Malformed samples (`dt <= 0`, non-finite fields, zero GNSS sigmas) are rejected
@@ -633,9 +611,7 @@ at the ingest boundary rather than allowed to poison the state.
   and updated by the Bierman and Thornton recursions. Symmetry is not
   maintained, it is unrepresentable; positive-definiteness needs no repair
   because no step subtracts two nearly-equal matrices to produce a small one.
-  Neither recursion takes a square root. This replaced a Joseph-form update
-  and was both smaller and faster than it, which is unusual for a numerical
-  improvement and is why the timings are recorded in `ud`'s tests.
+  Neither recursion takes a square root.
 - **Held states stay factored.** The Schmidt update adds one rank-one term per
   measurement row after Bierman's, and is pinned to the Joseph form written out
   densely, which remains only in the tests.
@@ -650,6 +626,10 @@ at the ingest boundary rather than allowed to poison the state.
 - **`libm` for all transcendentals**, so a shipped build uses one implementation
   on every target. See [adr/0004](adr/0004-linear-algebra.md) for the one place
   this does not hold (host test binaries).
+- **Integer time.** `GpsTime` is a private `u64` of nanoseconds since the GPS epoch,
+  so `dt` comes from an integer difference. `week()` and `tow()` are accessors, and
+  the wire format is unchanged by them. Each constructor names its epoch and scale,
+  and a Unix time cannot be converted without stating a leap-second count.
 
 ## References
 

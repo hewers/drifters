@@ -62,7 +62,7 @@ use crate::Report;
 /// is a different claim. Keeping them apart is the reason this is an enum
 /// rather than a boolean.
 ///
-/// # Not implementable in covariance form, and currently refused
+/// # Not implementable in covariance form, and refused
 ///
 /// `Calibration` and `Full` are rejected by the CLI. The reverse pass they need
 /// cannot be built by running this filter with a negative `dt`, and the reason
@@ -83,20 +83,16 @@ use crate::Report;
 ///
 /// The gain goes to zero, the updates stop correcting, and the filter
 /// free-runs. Turning Earth compensation off makes it worse, not better, and
-/// freezes the bias estimate outright — so the earlier guess that Earth
-/// compensation was the cause is also wrong.
+/// freezes the bias estimate outright.
 ///
 /// The backward arm of a two-filter smoother is an **information** filter for
 /// this reason: `Y = Σ⁻¹` transforms correctly under time reversal where `Σ`
 /// does not. Implementing one for the 21-state EqF, with the process-noise
 /// update via the matrix inversion lemma, is what this needs.
 ///
-/// The reverse pass that produced the table drove `EqFilter` directly with a
-/// negative `dt`, which the engine every replay now goes through does not
-/// offer. It was removed when the replays moved onto the engine; it is at
-/// commit `96d9598` (`reverse_pass` in this file), seeded from the closing
-/// fixes' course over ground, and is the place to start once an information
-/// filter exists.
+/// That table comes from driving `EqFilter` directly with a negative `dt`,
+/// which the engine every replay goes through does not offer, so there is no
+/// reverse pass in this crate.
 ///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WarmStart {
@@ -301,8 +297,7 @@ pub fn gsdc_options(
     );
     options.initial_position_std = Vec3::splat(5.0);
     options.initial_velocity_std = Vec3::splat(2.0);
-    // 5.1°, 5.1° and 31° — the variances the replay used before it moved
-    // onto the engine, now stated as the sigmas they are.
+    // 5.1°, 5.1° and 31°, as sigmas.
     options.initial_attitude_std = Vec3::new(0.008_f64.sqrt(), 0.008_f64.sqrt(), 0.30_f64.sqrt());
     options.initial_gyro_bias_std = Vec3::splat(1e-3);
     options.initial_accel_bias_std = Vec3::splat(0.1);

@@ -966,8 +966,9 @@ fn phones_align_from_nothing() {
                 &score,
             );
 
-            // The old start: coarse attitude from the first seconds, generic
-            // sigmas, at the same instant so both are scored on the same span.
+            // The start without the aligner: coarse attitude from the first
+            // seconds, generic sigmas, at the same instant so both are scored
+            // on the same span.
             let attitude = gsdc::coarse_align(&imu, &gnss, 2.0);
             let mut baseline = GinsOptions::default()
                 .with_imu_noise(noise)

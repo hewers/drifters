@@ -95,8 +95,7 @@ pub type OutputMatrix = Matrix<3, DIM>;
 /// the *bias-corrected* rate; a `₂A` built from the raw input applies no such
 /// correction, and one filter cannot hold both conventions at once. The
 /// numerical Jacobian agrees with the corrected form and disagrees with the
-/// printed one by exactly `ad_γ̂`, which is how this was found rather than
-/// assumed.
+/// printed one by exactly `ad_γ̂`.
 ///
 /// # In a rotating frame
 ///
@@ -269,18 +268,14 @@ pub fn position_output_matrix(origin: Vec3, transported: Vec3) -> OutputMatrix {
 ///
 /// which is the same missing `Â`, in the same place, for the same reason.
 ///
-/// # This one was found by a test having a hole in it
+/// # Why the test differentiates away from the identity
 ///
-/// Worth recording. The first version of
-/// `the_velocity_output_matrix_matches_a_numerical_jacobian` differentiated the
-/// output map at the **identity** observer, where `Â = I` and the two readings
-/// are indistinguishable — so it passed on the printed form and the error only
-/// showed up in the closed loop, as a lever arm that converged ten times slower
-/// than its own covariance claimed.
-///
-/// The tests now differentiate the measurement a real sensor would produce,
-/// as a function of the true state, at a **non-identity** `X̂`. That is a
-/// harder thing to satisfy and it is the definition the filter actually needs:
+/// `the_velocity_output_matrix_matches_a_numerical_jacobian` differentiates the
+/// measurement a real sensor would produce, as a function of the true state, at
+/// a **non-identity** `X̂`. At the identity `Â = I` and the two readings are
+/// indistinguishable, so the printed form would pass and the error would show
+/// only in the closed loop, as a lever arm converging ten times slower than its
+/// own covariance claims. This is the definition the filter needs:
 /// `C* = −∂y/∂ε`, since the innovation is `transported − y`.
 pub fn velocity_output_matrix(origin: Vec3, transported: Vec3, rate: Vec3) -> OutputMatrix {
     let mut m = OutputMatrix::zeros();
@@ -515,8 +510,9 @@ mod tests {
     ///
     /// The observer is deliberately **not** the identity. At the identity a
     /// body-frame rate and a global-frame rate are the same thing, and a
-    /// version of this test that used `Symmetry::IDENTITY` passed on a `C*_v`
-    /// with `ᴵω^` where `(Â ᴵω)^` was needed.
+    /// body-frame rate and a global-frame rate are the same thing, and a
+    /// version of this test using `Symmetry::IDENTITY` would pass a `C*_v`
+    /// with `ᴵω^` where `(Â ᴵω)^` is needed.
     fn assert_innovation_jacobian<M: Fn(&State) -> Vec3>(
         analytic: &OutputMatrix,
         innovation: M,

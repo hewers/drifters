@@ -1,9 +1,9 @@
 # What the GSDC raw observables actually contain
 
 Measured against survey-grade truth on trace A, 55 588 usable observations over
-1 229 epochs. The method is in the commit that added this file: predicted range
-from the supplied satellite position, corrected pseudorange, then a robust
-per-constellation receiver clock removed by median.
+1 229 epochs. The method: predicted range from the supplied satellite position,
+corrected pseudorange, then a robust per-constellation receiver clock removed by
+median.
 
 ## The dataset supplies almost everything a solver needs
 
@@ -44,7 +44,7 @@ needs a clock state per constellation rather than one.
 
 ## What this changes
 
-**Carrier smoothing is not the lever, and that was the wrong instinct.** Hatch
+**Carrier smoothing is not the lever.** Hatch
 smoothing attacks measurement *noise*, and these residuals are not
 noise-dominated. They are dominated by multipath bias on low-elevation
 satellites, and smoothing a biased measurement preserves the bias. It would
@@ -52,25 +52,22 @@ improve the 2.89 m high-elevation population and leave the 34 m one alone.
 
 **The levers, in order of value per effort:**
 
-1. **Solve the position rather than accepting Google's.** Everything reported on
-   this dataset so far uses `WlsPosition*EcefMeters` from the file, unweighted
-   by satellite. The 6.21 m baseline is that solution.
-2. **Elevation and `C/N₀` weighting**, `σ = a + b/sin(el)`. A twelve-fold quality
-   spread is currently being ignored entirely.
+1. **Solve the position rather than accepting Google's.** The file's
+   `WlsPosition*EcefMeters` is unweighted by satellite, and the 6.21 m baseline
+   is that solution.
+2. **Elevation and `C/N₀` weighting**, `σ = a + b/sin(el)`. The file's solution
+   makes no use of the twelve-fold quality spread.
 3. **Robust estimation** — IRLS with a Huber or Student-t cost. The residual
    distribution has p99 at 72 m and a maximum of 829 m; those are NLOS and must
    be down-weighted rather than averaged in.
 4. Carrier smoothing, afterwards, for the satellites that are already good.
 
-That ordering is the opposite of where this investigation started, which is why
-it was worth measuring before implementing.
-
 ## Measured: a robust weighted solve beats Google's WLS on all four traces
 
 Built from the ordering above — own position solve, elevation weighting,
 robust IRLS — and validated on the three held-out traces. Nothing is tuned per
-trace: `σ = 0.6 + 8/sin(el)` metres and a Huber threshold of 1.5 were chosen
-from the elevation table above, not fitted.
+trace: `σ = 0.6 + 8/sin(el)` metres and a Huber threshold of 1.5 are chosen from
+the elevation table above, not fitted.
 
 Horizontal / vertical RMS against survey truth, metres:
 
@@ -105,7 +102,7 @@ improving the estimator on this dataset, which is consistent with everything
 [gsdc.md](gsdc.md) records about how little the phone IMU contributes.
 
 Prototype in [`../prototypes/gsdc_robust_wls.py`](../prototypes/gsdc_robust_wls.py);
-the Rust implementation is next.
+the Rust implementation is in `drifters-gnss`, behind `--raw-ranges` in the replay.
 
 ## Tuned, on trace A only
 
@@ -154,17 +151,17 @@ better almost everywhere but has one bad epoch loses on RMS and wins on the
 score, and the score is the one that describes what a navigation user
 experiences. Both are reported.
 
-Wiring it in made the filter tuning stale, in a way worth spelling out because
-it is the ordinary consequence of improving a measurement. `--sigma-v 18` was
-fitted when the vertical GNSS error *was* 18 m. With the raw-range solve it is
-5–8 m, so the filters were under-trusting GNSS by a factor of two to three, and
-fusion had become **worse than raw GNSS** on traces A and B — the filter was
-dragging a good measurement toward a badly-weighted prediction.
+A better measurement makes the filter tuning stale, which is the ordinary
+consequence of improving one. `--sigma-v 18` fits a vertical GNSS error of 18 m.
+With the raw-range solve that error is 5–8 m, so under that tuning the filters
+under-trust GNSS by a factor of two to three, and fusion is **worse than raw
+GNSS** on traces A and B: the filter drags a good measurement toward a
+badly-weighted prediction.
 
 Refitting, on trace A only:
 
 - sigmas set from trace A's measured per-axis GNSS error, N 3.79 / E 1.99 /
-  D 7.96 m. The replay now prints this line, which turns setting them from a
+  D 7.96 m. The replay prints this line, which turns setting them from a
   fit into a measurement and makes staleness visible.
 - process-noise scale swept on trace A: the ESKF wants ×600, the EqF ×60.
 
@@ -187,22 +184,14 @@ Trace A's tuning applied unchanged to B, C and D:
 Competition score, metres. Trace A is in-sample; the honest figure is the
 B/C/D row, where fusion is worth −18.6 % over the raw-range GNSS solution.
 
-Both filters now beat GNSS alone on every trace, which was not true before —
-under the stale tuning the ESKF lost to raw GNSS on two of the four. End to
-end the chain runs 4.99 → 2.99 m, −40 %, of which the solver is worth −22 %
-and the refit the rest.
+Both filters beat GNSS alone on every trace; under the file-solution tuning the
+ESKF loses to raw GNSS on two of the four. End to end the chain runs
+4.99 → 2.99 m, −40 %, of which the solver is worth −22 % and the refit the rest.
 
 The two filters are level out of sample, to the third decimal, which is inside
 the spread between traces and is not a result. What is not weak is the
-sensitivity difference: the ESKF needed ten times the process noise to work at
+sensitivity difference: the ESKF needs ten times the process noise to work at
 all.
-
-The EqF columns on this page were re-measured on 2026-11-17, after its GCU
-covariance update was corrected to the paper's
-([eqf.md](eqf.md#gcu-measured-on-four-traces)); its optimum on trace A moved
-from ×200 to ×60 and the rows moved with it. The ESKF's Doppler rows are
-unchanged. Its carrier rows had drifted from what was first recorded before
-that change, by up to 0.1, and are the current figures too.
 
 ## Carrier phase: the other observable in the same file
 
@@ -234,11 +223,10 @@ carrying the geometry.
 
 ### A delta is not a velocity at either endpoint
 
-The first attempt handed the filter `delta / dt` as the velocity at the later
-epoch. It made both filters worse and diverged the EqF, and the reason is not
-subtle once measured: a delta is the *average* velocity over its interval, so
-it belongs to the interval's midpoint. Used half a second late it lags by
-`a·dt/2`, and on a driving trace that is most of a metre per second.
+Handing the filter `delta / dt` as the velocity at the later epoch makes both
+filters worse and diverges the EqF. A delta is the *average* velocity over its
+interval, so it belongs to the interval's midpoint. Used half a second late it
+lags by `a·dt/2`, and on a driving trace that is most of a metre per second.
 
 | one-second horizontal error | p95 |
 |---|---|
@@ -246,14 +234,14 @@ it belongs to the interval's midpoint. Used half a second late it lags by
 | the same delta, scored as the velocity at the later epoch | 0.499 m |
 | Doppler, scored the same way | 0.567 m |
 
-So the naive integration threw away the entire advantage — the lagged carrier
+So naive integration throws away the entire advantage — the lagged carrier
 velocity is no better than the Doppler it replaced, and worse vertically. What
 recovers it is averaging the two deltas that meet at an epoch, which is a
 central difference and has no lag. That costs one epoch of latency: the
 velocity at *t* needs the observation at *t+1*, so this is a smoothed estimate
 and not a real-time one. A causal system would instead timestamp the forward
 difference at the midpoint, which needs velocity-only fixes that
-[`GnssFix`](../crates/drifters-core/src/types.rs) does not currently express.
+[`GnssFix`](../crates/drifters-core/src/types.rs) does not express.
 
 Against truth, per axis, one-second velocity:
 
@@ -267,19 +255,19 @@ error of 0.011 m/s against the Doppler's 0.178 — sixteen times better.
 
 ### A solve cannot always tell that it has failed
 
-About one epoch in a hundred still came out badly wrong, by hundreds of m/s.
+About one epoch in a hundred comes out badly wrong, by hundreds of m/s.
 Not from a large slip — the screen catches those — but from an epoch left with
 barely more satellites than unknowns. Four constellations means seven unknowns,
-and every bad epoch on trace A had eight to ten satellites holding up seven
+and every bad epoch on trace A has eight to ten satellites holding up seven
 states. The geometry then multiplies sub-screen residuals into hundreds of
 metres, and the solve's residuals are small *because* it has no redundancy.
 
-Two ways of asking the solve about itself were tried, and both failed:
+Two ways of asking the solve about itself fail:
 
-- **Scaling the reported uncertainty by the residual scatter** changed the
+- **Scaling the reported uncertainty by the residual scatter** changes the
   four-trace score by 0.3 %, in the wrong direction. The surviving satellites
   agree with each other on the wrong answer, so the scatter is small.
-- **A dilution-of-precision threshold**, aimed straight at the geometry, made
+- **A dilution-of-precision threshold**, aimed straight at the geometry, makes
   it monotonically worse at every value from 2 to 15. Most weak-geometry epochs
   are perfectly good, and discarding them costs more than the few bad ones do.
 
@@ -303,11 +291,11 @@ Trace A's tuning applied unchanged to B, C and D, competition score in metres:
 | **mean, B/C/D** | 3.675 | 2.992 | 2.813 | 2.992 | **2.586** |
 
 Carrier velocity is worth −6.0 % to the ESKF and −13.6 % to the EqF out of
-sample. End to end the chain now runs **4.99 → 2.69 m, −46 %**.
+sample. End to end the chain runs **4.99 → 2.69 m, −46 %**.
 
 ## Fitting the two observables together, instead of choosing
 
-Everything above still treats the pseudorange position as *the* answer and the
+Everything above treats the pseudorange position as *the* answer and the
 carrier phase as a way to help a filter along. That gets the relationship
 backwards. The file contains two measurements of different things: where the
 receiver was, good to metres, and how far it moved, good to centimetres.
@@ -320,18 +308,18 @@ is three scalar solves of length `n`, each strictly diagonally dominant, in
 is to average the pseudorange error over as many epochs as the deltas hold
 together, which here is the whole trace.
 
-Two things had to be added before it worked.
+Two things are needed for it to work.
 
 **Robust reweighting**, for the same reason every other solver here has it. A
 bad anchor pulls one epoch; a bad *link* bends every epoch downstream until the
-anchors drag it back. The unweighted fit reached 251 m of horizontal error
-while its median stayed under two.
+anchors drag it back. The unweighted fit reaches 251 m of horizontal error
+while its median stays under two.
 
 **Screening every delta, not every epoch.** The carrier velocity is a central
 difference, so checking *it* against the Doppler leaves the deltas at the edges
 of a gap unexamined — and those are the deltas either side of a loss of lock,
 the likeliest to be wrong. Checking each delta on its own against the same
-Doppler removed the last excursion: horizontal RMS 10.49 → 2.93 m, maximum
+Doppler removes the last excursion: horizontal RMS 10.49 → 2.93 m, maximum
 251.8 → 17.8 m.
 
 Competition score, trace A's tuning applied unchanged to B, C and D:
@@ -353,8 +341,8 @@ is a shape the carrier phase already measures directly and far better.
 
 It is also non-causal — it uses the whole trace at once — so it is not a
 competitor to the filters so much as a different product. What it does settle
-is where the remaining error lives. Both filters were being asked to recover
-trajectory shape from a bad IMU when the shape was in the file all along.
+is where the remaining error lives. Both filters are asked to recover trajectory
+shape from a bad IMU when the shape is in the file.
 
 ### Weighting the anchors by what the solve knew
 
@@ -382,12 +370,12 @@ exists.
 
 End to end the chain runs **4.99 → 2.47 m, −50 %**.
 
-## Two things that were measured and not built
+## Two things measured and not built
 
 With the trajectory shape known to centimetres, the pseudorange residuals can
-be examined against a good reference rather than against each other. Two
-obvious uses of that were investigated. Neither pays, and both are recorded
-because they are the natural next things to try.
+be examined against a good reference rather than against each other. Two obvious
+uses of that do not pay, and both are here because they are the natural next
+things to try.
 
 ### Estimating each satellite's multipath bias is circular
 
@@ -422,8 +410,7 @@ separable part of a multipath bias is the part that does no harm.
 
 Rejection is not circular in the same way — the trajectory is held by carrier
 deltas that owe nothing to the pseudoranges, so dropping a pseudorange cannot
-pull the fit toward what was assumed. It was built, tested, and measured on
-trace A:
+pull the fit toward what was assumed. Measured on trace A:
 
 | rejection threshold | score | horiz RMS | dropped |
 |---|---|---|---|
@@ -434,13 +421,12 @@ trace A:
 | none | 2.799 | 2.534 | 0 |
 
 Every setting either hurts the competition score or does nothing, and at the
-3 σ default it was worse on all four traces. The RMS does improve, which says
+3 σ it is worse on all four traces. The RMS does improve, which says
 what is happening: dropping observations shortens the tail and costs the
 typical epoch its geometry. On a metric that weights the median equally with
 the 95th percentile, that is a bad trade.
 
-The code was deleted rather than left switched off. Both results are worth more
-than the code would have been.
+Neither is in the code. The measurements are worth more than the code would be.
 
 ## Where the remaining error is, and why it stops here
 
@@ -514,14 +500,14 @@ remaining route to sub-metre from here. This module is the groundwork for it —
 reader, matching, alignment and geometry all validated against a surveyed
 answer — rather than a substitute for it.
 
-Three wrong turns on the way, each caught by measurement rather than argument:
+Three mistakes this module avoids, each visible in measurement:
 
 - **Shifting the satellite by a full travel time** instead of the base–rover
-  difference. 66 ms of orbital motion is 200 m; the score went to 25 m.
+  difference. 66 ms of orbital motion is 200 m, and the score goes to 25 m.
 - **Correcting across bands.** 49 % of the phone's Galileo and 28 % of its GPS
   are on the lower band, and an L1 correction is wrong for them.
 - **Replacing the atmospheric models rather than correcting them.** A
   correction that carries the whole 20 m delay has to survive interpolation and
-  an 11 km transfer; one that carries only what the model got wrong is a
-  fraction of a metre. The base self-check is what separated these: 18 m
-  without the models, 1.87 m with them.
+  an 11 km transfer; one that carries only what the model gets wrong is a
+  fraction of a metre. The base self-check separates the two: 18 m without the
+  models, 1.87 m with them.

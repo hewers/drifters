@@ -249,10 +249,7 @@ pub fn gyrocompass_accuracy(gyro_bias_stability: F, latitude: F) -> F {
 ///
 /// With GCU above α = 0 the uncompensated filter diverges as `t³`, to `10⁶ m`:
 /// the inflation discounts the corrections that bound a forcing which never
-/// stops. Compensated, every α converges. The compensated filter's own
-/// divergences, once also blamed on the Earth, were an accelerometer scale
-/// factor outside its bias prior and a GCU covariance update that was not the
-/// paper's; see docs/eqf.md.
+/// stops. Compensated, every α converges.
 ///
 /// # Two costs
 ///

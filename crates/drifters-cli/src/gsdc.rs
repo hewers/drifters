@@ -652,11 +652,7 @@ pub fn read_gnss(path: &Path, lag: f64, options: &GnssOptions) -> Result<GnssTra
     // measured, so the two must not both be in the pseudorange.
     let mut corrected = 0usize;
     if let Some((base, set)) = differential.as_ref() {
-        // The same conversion the fixes get. Before the readers used real GPS
-        // time this needed `ArrivalTimeNanosSinceGpsEpoch` — the one column in
-        // the file that was already GPS time — because the pipeline's own
-        // timestamps were seconds since the phone booted and could not be
-        // matched against an archive.
+        // The same conversion the fixes get.
         let times: Vec<f64> = epochs
             .iter()
             .map(|e| GpsTime::from_unix_seconds(e.utc * 1.0e-3, LEAP_SECONDS_2017).tow())
@@ -786,7 +782,7 @@ pub fn read_gnss(path: &Path, lag: f64, options: &GnssOptions) -> Result<GnssTra
         let position = positions[i];
         let mut fix = GnssFix {
             // `lag` is the diagnostic sweep, not a clock offset: the readers
-            // all convert from UTC on their own now, so nothing has to be
+            // all convert from UTC on their own, so nothing has to be
             // aligned by hand and a shift here means a shift.
             time: GpsTime::from_unix_seconds(e.utc * 1.0e-3 - lag, LEAP_SECONDS_2017),
             position,
@@ -824,7 +820,7 @@ pub fn read_gnss(path: &Path, lag: f64, options: &GnssOptions) -> Result<GnssTra
             // pinned down from all sides.
             //
             // Flat rather than scaled by what each solve reports about its own
-            // residuals: that was tried and is worth nothing, because the
+            // residuals: that is worth nothing, because the
             // epochs that need catching are the ones whose surviving
             // satellites agree with each other on a wrong answer.
             fix.velocity_std = Vec3::new(0.05, 0.05, 0.27);
