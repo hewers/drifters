@@ -27,7 +27,6 @@ drifters-core = { version = "0.1.0", path = "crates/drifters-core", default-feat
 drifters-eqf = { version = "0.1.0", path = "crates/drifters-eqf", default-features = false }
 drifters-gnss = { version = "0.1.0", path = "crates/drifters-gnss" }
 drifters-filter = { version = "0.1.0", path = "crates/drifters-filter", default-features = false }
-drifters-proto = { version = "0.1.0", path = "crates/drifters-proto", default-features = false }
 
 # The only required non-dev dependency in the no_std core stack.
 libm = "0.2"

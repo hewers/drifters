@@ -366,8 +366,8 @@ mod tests {
                 let mut scratch = StateMatrix::zeros();
                 phi.matmul_into(&p, &mut scratch);
                 scratch.mul_transpose_into(&phi, &mut p);
-                for i in 0..N_STATE {
-                    p.data[i][i] += Q_SCALE;
+                for (i, row) in p.data.iter_mut().enumerate() {
+                    row[i] += Q_SCALE;
                 }
                 p.symmetrize();
             }

@@ -371,7 +371,9 @@ fn measure_eqf<C: Covariance>(
         Err(e) => {
             hprintln!("configuration rejected: {}", e.as_str());
             debug::exit(debug::EXIT_FAILURE);
-            loop {}
+            loop {
+                core::hint::spin_loop();
+            }
         }
     };
     let _ = eqf.add_imu(sample(0.005));
@@ -479,7 +481,9 @@ fn main() -> ! {
         Err(e) => {
             hprintln!("configuration rejected: {}", e.as_str());
             debug::exit(debug::EXIT_FAILURE);
-            loop {}
+            loop {
+                core::hint::spin_loop();
+            }
         }
     };
 
@@ -570,5 +574,7 @@ fn main() -> ! {
     } else {
         debug::exit(debug::EXIT_FAILURE);
     }
-    loop {}
+    loop {
+        core::hint::spin_loop();
+    }
 }

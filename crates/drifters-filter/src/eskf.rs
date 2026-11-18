@@ -450,11 +450,11 @@ impl Eskf {
         // which measured at 35.3 KiB of stack on Cortex-M4 — see
         // docs/design.md.
         let mut phi = transition_matrix(state, imu, noise);
-        for i in 0..N_STATE {
-            for j in 0..N_STATE {
-                phi.data[i][j] *= dt;
+        for (i, row) in phi.data.iter_mut().enumerate() {
+            for x in row.iter_mut() {
+                *x *= dt;
             }
-            phi.data[i][i] += 1.0;
+            row[i] += 1.0;
         }
 
         // Thornton, with the process noise integrated over the interval as
@@ -694,9 +694,9 @@ impl Eskf {
         }
 
         let mut k = chol.solve(&hp).transpose();
-        for i in 0..N_STATE {
+        for (i, row) in k.data.iter_mut().enumerate() {
             if held.contains(i) {
-                k.data[i] = [0.0; M];
+                *row = [0.0; M];
             }
         }
 

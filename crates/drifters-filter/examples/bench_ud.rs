@@ -45,11 +45,11 @@ fn main() {
     };
 
     let mut phi = transition_matrix(&pva, &imu, &noise);
-    for i in 0..N_STATE {
-        for j in 0..N_STATE {
-            phi.data[i][j] *= imu.dt;
+    for (i, row) in phi.data.iter_mut().enumerate() {
+        for x in row.iter_mut() {
+            *x *= imu.dt;
         }
-        phi.data[i][i] += 1.0;
+        row[i] += 1.0;
     }
     let g: NoiseMatrix = noise_mapping(&pva);
     let q = process_noise(&pva, &noise);

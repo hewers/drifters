@@ -272,10 +272,10 @@ fn dense_process_noise(
 fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>, noise: &Mat3) {
     let mut ikc = StateMatrix::zeros();
     gain.matmul_into(c, &mut ikc);
-    for i in 0..DIM {
-        for j in 0..DIM {
+    for (i, row) in ikc.data.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
             let unit = if i == j { 1.0 } else { 0.0 };
-            ikc.data[i][j] = unit - ikc.data[i][j];
+            *x = unit - *x;
         }
     }
     let mut work = StateMatrix::zeros();
@@ -307,10 +307,10 @@ fn dense_joseph(sigma: &mut StateMatrix, c: &OutputMatrix, gain: &Matrix<DIM, 3>
 #[inline(never)]
 fn dense_transport(sigma: &mut StateMatrix, step: Algebra) {
     let mut reset = step.ad();
-    for i in 0..DIM {
-        for j in 0..DIM {
+    for (i, row) in reset.data.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
             let unit = if i == j { 1.0 } else { 0.0 };
-            reset.data[i][j] = unit + reset.data[i][j] * 0.5;
+            *x = unit + *x * 0.5;
         }
     }
     let mut work = StateMatrix::zeros();
@@ -666,9 +666,9 @@ impl<S: FactorScalar> Covariance for Ud<S> {
                 if let Some(slot) = ud.column_mut(j).get_mut(i) {
                     *slot = S::narrow(u);
                 }
-                for k in 0..=i {
-                    let v = work.data[k][j];
-                    work.data[k][i] -= u * v;
+                for row in work.data.iter_mut().take(i + 1) {
+                    let v = row[j];
+                    row[i] -= u * v;
                 }
             }
         }
