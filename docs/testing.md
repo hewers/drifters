@@ -322,17 +322,17 @@ cd cortex-m-harness && cargo run --release
 
 Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
 CI runs it on every push and fails if any estimator's peak exceeds its
-ceiling: 18 KiB for `PEAK`, the ESKF (14 KiB with `f32-covariance`, 11 KiB and
+ceiling: 15 KiB for `PEAK`, the ESKF (13 KiB with `f32-covariance`, 10 KiB and
 9 KiB at 15 states), and 20 KiB for `PEAK_EQF`, the equivariant filter's engine with its dense covariance,
 `PEAK_EQF_F32`, with the factored single-precision one, and `PEAK_EQF_EARTH` and
 `PEAK_EQF_EARTH_F32`, the same two with the Earth's rotation in the filter's group.
 
 | | peak stack, bytes |
 |---|---|
-| ESKF, 21-state | 17 088 |
-| ESKF, 21-state, `f32-covariance` | 13 124 |
-| ESKF, 15-state (`reduced-state`) | 10 360 |
-| ESKF, 15-state, `f32-covariance` | 7 956 |
+| ESKF, 21-state | 13 520 |
+| ESKF, 21-state, `f32-covariance` | 11 880 |
+| ESKF, 15-state (`reduced-state`) | 8 888 |
+| ESKF, 15-state, `f32-covariance` | 7 704 |
 | EqF engine, dense `f64` | **15 800** |
 | EqF engine, factored `f32` | **14 392** |
 | EqF engine, either form, Earth in the group | the same as without |
@@ -423,7 +423,7 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 3943160 (98579 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 1597560 (39939 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF add_imu = 4505880 (112647 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_F32 add_imu = 889600 (22240 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_EARTH add_imu = 4719600 (117990 ticks; only under -icount shift=0)
@@ -444,20 +444,20 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 
 | configuration | instructions | SysTick ticks |
 |---|---|---|
-| ESKF, 21-state, `f64` | **3 943 160** | 98 579 |
-| ESKF, 21-state, `f32-covariance` | **486 920** | 12 173 |
-| ESKF, 15-state (`reduced-state`) | **1 707 920** | 42 698 |
-| ESKF, 15-state, `f32-covariance` | **279 960** | 6 999 |
+| ESKF, 21-state, `f64` | **1 597 560** | 39 939 |
+| ESKF, 21-state, `f32-covariance` | **348 120** | 8 703 |
+| ESKF, 15-state (`reduced-state`) | **884 000** | 22 100 |
+| ESKF, 15-state, `f32-covariance` | **230 560** | 5 764 |
 | EqF engine, dense `f64` | **4 505 880** | 112 647 |
 | EqF engine, factored `f32` | **889 600** | 22 240 |
 | EqF engine, dense, Earth in the group | **4 719 600** | 117 990 |
 | EqF engine, factored, Earth in the group | **910 680** | 22 767 |
 
-The single-precision covariance removes **88 %** of the work at 21 states and
-84 % at 15, at no measurable cost in accuracy. Dropping the six scale-factor
-states removes 57 %. For the equivariant filter, factoring the covariance and
+The single-precision covariance removes **78 %** of the work at 21 states and
+74 % at 15, at no measurable cost in accuracy. Dropping the six scale-factor
+states removes 45 %. For the equivariant filter, factoring the covariance and
 holding it in `f32` removes **80 %**, also at no measurable cost in accuracy; it
-lands at 1.83 times the ESKF with `f32-covariance`, where the dense form is 1.14
+lands at 2.56 times the ESKF with `f32-covariance`, where the dense form is 2.82
 times the ESKF in `f64`. Carrying the Earth's rotation in the group adds 4.7 % to
 the dense form and 2.4 % to the factored one.
 
@@ -471,14 +471,14 @@ run:
 
 | configuration | at best | against a 200 Hz IMU's 5 ms |
 |---|---|---|
-| ESKF, 21-state, `f64` | 23.5 ms | cannot keep up, nor at 50 Hz |
-| ESKF, 21-state, `f32-covariance` | 2.90 ms | fits, if the real figure is within 1.7× of the floor |
-| ESKF, 15-state | 10.2 ms | cannot at 200 Hz or at 100 Hz |
-| ESKF, 15-state, `f32-covariance` | 1.67 ms | fits with a factor of three to spare |
+| ESKF, 21-state, `f64` | 9.51 ms | cannot at 200 Hz; fits 100 Hz only within 5 % of the floor |
+| ESKF, 21-state, `f32-covariance` | 2.07 ms | fits, if the real figure is within 2.4× of the floor |
+| ESKF, 15-state | 5.26 ms | cannot at 200 Hz, by 5 %; fits 100 Hz with about half the interval to spare |
+| ESKF, 15-state, `f32-covariance` | 1.37 ms | fits with a factor of 3.6 to spare |
 | EqF engine, dense `f64` | 26.8 ms | cannot keep up, nor at 50 Hz |
 | EqF engine, factored `f32` | 5.30 ms | cannot at 200 Hz, by 6 %; fits 100 Hz with about half the interval to spare |
 
-So on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
+So at 200 Hz on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
 configuration that runs, and for the equivariant filter the factored `f32`
 covariance is the same thing. The default builds of both need a part with a
 double-precision FPU — [a Cortex-M7 built for it](#the-cortex-m7-with-f64-in-hardware),
@@ -490,7 +490,7 @@ an application processor — or an IMU rate set by what the filter can sustain.
 SysTick counts the core clock, which on `mps2-an386` is 25 MHz, so one tick is
 40 ns: **forty instructions**, and that is the resolution of every count here.
 
-SysTick is 24 bits, and a 21-state `add_imu` in software `f64` is about 99 000
+SysTick is 24 bits, and a 21-state `add_imu` in software `f64` is about 40 000
 ticks, so a batch of a few hundred steps would wrap it. The harness therefore times
 each step on its own, refuses to report an interval in which the wrap flag was
 raised, and measures its unit with a calibration loop of a known two million
@@ -508,17 +508,17 @@ early, and the apparent saving is a measurement of the filter giving up.
 
 ### Where the work goes
 
-**The mechanization** is 18 % of `add_imu` with `f32-covariance`, measured by
+**The mechanization** is 25 % of `add_imu` with `f32-covariance`, measured by
 stubbing it. The local-frame rewrite targets it. Converting it as well as the
-covariance converted would be worth about **16 %** of `add_imu` and would spend
+covariance converted would be worth about **22 %** of `add_imu` and would spend
 accuracy, so that rewrite is [parked](milestones.md#local-frame-state).
 
 **The earth model is evaluated once per point.** `Wgs84::radii`, `gravity`,
 `omega_ie_n`, `omega_en_n` and `dr_inv` each compute their own `sin`/`cos`, and
 the mechanization needs them about twelve times per sample at two distinct
 latitudes. [`Local`](../crates/drifters-core/src/earth.rs) evaluates once and
-answers all of them, which is worth about 10 % of `add_imu` with `f32-covariance`
-and about 1 % without. Results are bit-identical, and
+answers all of them, which is worth about 50 thousand instructions per `add_imu`,
+14 % of it with `f32-covariance`. Results are bit-identical, and
 `local_agrees_with_the_free_functions_exactly` holds it to that.
 
 **`core::simd`** expresses the lane-split dot products as `Simd<Scalar, 8>` rather
@@ -527,12 +527,13 @@ Cortex-M4, with nightly Rust 1.102, whose scalar counts equal the stable ones ab
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 3 943 160 | 3 899 280 | −1.1 % |
-| `f32-covariance` | 486 920 | **394 360** | **−19.0 %** |
+| `f64` | 1 597 560 | 1 594 200 | −0.2 % |
+| `f32-covariance` | 348 120 | 343 080 | −1.4 % |
 
-This is on a part with no SIMD unit at all: eight lanes lower to eight independent
-FPU operations, without the iterator machinery the hand-written form leaves for the
-optimiser to undo. It needs nightly, so it is behind `--cfg drifters_nightly_simd`
+This is on a part with no SIMD unit at all, so eight lanes lower to eight
+independent FPU operations. The scalar path gets nearly all of that by itself,
+because it names its eight partial sums and leaves the optimiser no iterator
+machinery to undo. `core::simd` needs nightly, so it is behind `--cfg drifters_nightly_simd`
 — a cfg rather than a cargo feature, so that `--all-features` on stable cannot
 reach a nightly-only attribute — with a non-blocking CI job so it cannot rot.
 
@@ -547,9 +548,9 @@ Three things are left alone on purpose:
   shape, so the workaround costs a comment and nothing else.
 - **Building the transition matrix in `f32`.** It is narrowed for Thornton
   immediately, so under the default build nothing would lose precision. It is about
-  8 % of `add_imu`, of which single precision might return half. Paying for that
+  11 % of `add_imu`, of which single precision might return half. Paying for that
   with a second copy of the Jacobian — the most subtle code in the filter — or a
-  lower-precision Φ recorded for the smoother is not worth 4 %.
+  lower-precision Φ recorded for the smoother is not worth 6 %.
 
 ### The Cortex-M7, with `f64` in hardware
 
@@ -574,32 +575,31 @@ Instructions per `add_imu`, the mean of 200 steps:
 
 | configuration | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
 |---|---|---|---|
-| ESKF, 21-state, `f64` | 3 943 160 | **302 760** | 146 920 |
-| ESKF, 21-state, `f32-covariance` | 486 920 | **297 800** | 136 480 |
-| ESKF, 15-state (`reduced-state`) | 1 707 920 | **137 760** | |
-| ESKF, 15-state, `f32-covariance` | 279 960 | **133 080** | |
+| ESKF, 21-state, `f64` | 1 597 560 | **88 200** | 61 400 |
+| ESKF, 21-state, `f32-covariance` | 348 120 | **86 120** | 61 160 |
+| ESKF, 15-state (`reduced-state`) | 884 000 | **55 360** | 32 520 |
+| ESKF, 15-state, `f32-covariance` | 230 560 | **53 360** | 31 760 |
 | EqF engine, dense `f64` | 4 505 880 | **277 120** | 110 360 |
 | EqF engine, factored `f32` | 889 600 | **333 640** | 149 480 |
 | EqF engine, dense, Earth in the group | 4 719 600 | **284 520** | 113 480 |
 | EqF engine, factored, Earth in the group | 910 680 | **336 280** | 150 000 |
 
-Hardware `f64` removes 92 % of the ESKF's instructions and 94 % of the dense
-equivariant filter's, and it changes which configuration to choose:
+Hardware `f64` removes 94 % of the instructions of both the ESKF and the dense
+equivariant filter, and it changes which configuration to choose:
 
-- **`f32-covariance` stops mattering.** It saves 1.6 % at 21 states and 3.4 % at
-  15, where it saves 88 % and 84 % on the Cortex-M4. What it saves there is the
+- **`f32-covariance` stops mattering.** It saves 2.4 % at 21 states and 3.6 % at
+  15, where it saves 78 % and 74 % on the Cortex-M4. What it saves there is the
   soft-float, and here there is none.
 - **The factored `f32` equivariant filter costs more than the dense one**, by
-  20 %. On the Cortex-M4 it is 80 % cheaper. The dense form is the cheapest
-  21-state configuration measured, 8 % under the ESKF in `f64`.
-- **`opt-level = 3` is the larger lever.** It halves the instructions, 51 % fewer
-  for the ESKF and 60 % for the dense filter. It takes code from 140 KB to 241 KB
-  and the ESKF's peak stack from 16 668 bytes to 18 804, past the 18 KiB ceiling
-  CI holds the shipped `opt-level = "s"` build to.
+  20 %. On the Cortex-M4 it is 80 % cheaper. The ESKF is the cheapest 21-state
+  configuration measured, at about a third of the dense form.
+- **`opt-level = 3` helps the dense filter most.** It removes 60 % of that filter's
+  instructions and 30 % of the ESKF's. It takes code from 142 KB to 245 KB, and the
+  ESKF's peak stack from 13 220 bytes to 12 364.
 
-Peak stack is 16 668 bytes for the ESKF (9 996 at 15 states), 14 692 for the
+Peak stack is 13 220 bytes for the ESKF (8 644 at 15 states), 14 692 for the
 dense equivariant filter and 13 436 for the factored one. Code is 31 % smaller
-than the Cortex-M4 build, 140 276 bytes against 204 160, because the call
+than the Cortex-M4 build, 142 172 bytes against 206 408, because the call
 sequences are gone.
 
 **These are still instruction counts, and two things stop them being read as
@@ -609,7 +609,7 @@ all for division and square root. The counts say the `f32` builds do not do less
 *work*. They do not say the `f32` builds are not faster, and the cycle counter is
 what will settle that. The second is that the Cortex-M4 floor above does not
 carry over. A Cortex-M7 can issue two instructions in a cycle, so the most a count
-supports is half a cycle per instruction: 0.38 ms for the ESKF at 400 MHz, 0.35 ms
+supports is half a cycle per instruction: 0.11 ms for the ESKF at 400 MHz, 0.35 ms
 for the dense filter and 0.42 ms for the factored one. All are far inside a 200 Hz
 IMU's 5 ms, so the floor rules nothing out, and it rules nothing in, since FPU
 latency, cache misses and flash wait states all push the other way.
@@ -641,12 +641,12 @@ eight reports:
 |---|---|---|
 | Cortex-M4 against Cortex-M7, same configuration | identical to the bit | identical, 288 values |
 | equivariant filter across the ESKF's features, which do not apply to it | identical to the bit | identical, 384 values |
-| ESKF, `f32` against `f64`: position, velocity, attitude | within 0.005 of the filter's sigma | 2.5 × 10⁻⁴ sigma at 21 states, 1.9 × 10⁻⁴ at 15 |
-| ESKF, `f32` against `f64`: reported sigma | within 0.5 % | 0.02 % |
-| ESKF, `f32` against `f64`: biases | 10⁻⁶ rad/s and 10⁻³ m/s² | 2.8 × 10⁻⁸ rad/s and 3.7 × 10⁻⁵ m/s² |
+| ESKF, `f32` against `f64`: position, velocity, attitude | within 0.005 of the filter's sigma | with the next two rows, at most 8.9 % of tolerance at 21 states and 10.3 % at 15 |
+| ESKF, `f32` against `f64`: reported sigma | within 0.5 % | as above |
+| ESKF, `f32` against `f64`: biases | 10⁻⁶ rad/s and 10⁻³ m/s² | as above |
 | equivariant filter, factored `f32` against dense `f64` | the same tolerances | 0.6 % of tolerance |
 
-The largest difference uses 5 % of its tolerance. The check was tested by
+The largest difference uses 10.3 % of its tolerance. The check was tested by
 breaking things on purpose. It failed on one flipped bit in one printed value on
 the Cortex-M7, on a single gyro sample changed by one part in 10¹², and on fixes
 5 % noisier in the `f32` ESKF alone. It refused a missing report, a truncated

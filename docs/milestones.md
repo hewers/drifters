@@ -96,8 +96,8 @@ emulation. This repository claims nothing about time until these items run.
 ### Local-frame state
 
 Position as local Cartesian metres about an explicit anchor, geodetic only at the
-I/O boundary, is **parked**. The mechanization is 18 % of `add_imu` with
-`f32-covariance`, so converting it would save about 16 % and would spend accuracy to
+I/O boundary, is **parked**. The mechanization is 25 % of `add_imu` with
+`f32-covariance`, so converting it would save about 22 % and would spend accuracy to
 do so. [ADR 0009](adr/0009-local-first-architecture.md) has the argument and the
 measurements.
 

@@ -29,7 +29,7 @@ the ESKF's peak stack, `PEAK_EQF` the equivariant filter's with its dense
 covariance and `PEAK_EQF_F32` with the factored single-precision one, and
 `PEAK_EQF_EARTH` and `PEAK_EQF_EARTH_F32` are those two with the Earth's rotation
 in the filter's group; CI holds
-the ESKF under 18 KiB (14 KiB with `f32-covariance`, 11 and 9 KiB at 15 states)
+the ESKF under 15 KiB (13 KiB with `f32-covariance`, 10 and 9 KiB at 15 states)
 and all four EqF figures under 20 KiB. `PEAK_ALIGN` is the
 initial alignment's deepest call, over a velocity, a position-only and a
 gyrocompass alignment that must each reach the right answer; CI holds it under
@@ -87,7 +87,7 @@ instruction, and the harness times `add_imu` against it with SysTick:
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 3943160 (98579 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 1597560 (39939 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF add_imu = 4505880 (112647 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_F32 add_imu = 889600 (22240 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_EARTH add_imu = 4719600 (117990 ticks; only under -icount shift=0)

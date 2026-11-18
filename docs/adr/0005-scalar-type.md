@@ -91,9 +91,9 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
 - On `thumbv7em-none-eabihf` the UD routines compile to `vmul.f32`, `vdiv.f32`
   and `vmla.f32` under `f32-covariance`, and to `bl __aeabi_dmul`,
   `__aeabi_dadd` and `__aeabi_ddiv` without it. Measured over a full `add_imu`,
-  that is 3.94 million instructions retired against **487 thousand**: 88 % of
+  that is 1.60 million instructions retired against **348 thousand**: 78 % of
   the work gone. See [testing.md](../testing.md), Layer 9.
-- The covariance halves, 1 848 bytes to 924, and the engine goes 3 272 to 2 352.
+- The covariance halves, 1 848 bytes to 924, and the engine goes 3 328 to 2 408.
 - Position stays `f64` on every target, so the remaining soft-float cost is the
   mechanization's. [adr/0009](0009-local-first-architecture.md) records why
   moving it is not worth the accuracy it would spend.
@@ -103,8 +103,8 @@ module's storage and arithmetic; everything crossing its boundary is `f64`.
   it removes work and memory without touching numerics.
 - **On a Cortex-M7 with a double-precision FPU, built with
   `-C target-cpu=cortex-m7`, `f32-covariance` buys almost no instructions:**
-  298 thousand instructions per `add_imu` against 303 thousand, 1.6 %, where the
-  Cortex-M4F saves 88 %. The equivariant filter's factored `f32` form costs 20 %
+  86 thousand instructions per `add_imu` against 88 thousand, 2.4 %, where the
+  Cortex-M4F saves 78 %. The equivariant filter's factored `f32` form costs 20 %
   *more* than its dense `f64` one there. The decision stands, since the feature costs no
   accuracy and halves the covariance, but its reason is specific to parts whose
   `f64` is in software. Whether `f32` still wins in cycles on the Cortex-M7, where
