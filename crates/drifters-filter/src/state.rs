@@ -203,10 +203,10 @@ mod size_tests {
                 cfg!(feature = "smoothing"),
                 cfg!(feature = "f32-covariance")
             ) {
-                (true, false) => 21_552,
-                (true, true) => 20_632,
-                (false, false) => 3_304,
-                (false, true) => 2_384,
+                (true, false) => 21_576,
+                (true, true) => 20_656,
+                (false, false) => 3_328,
+                (false, true) => 2_408,
             },
             "whole engine"
         );
@@ -238,8 +238,8 @@ mod size_tests {
             match (cfg!(feature = "smoothing"), f32_covariance) {
                 (true, false) => 11_848,
                 (true, true) => 11_368,
-                (false, false) => 2_368,
-                (false, true) => 1_888,
+                (false, false) => 2_392,
+                (false, true) => 1_912,
             },
             "whole engine"
         );

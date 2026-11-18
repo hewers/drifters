@@ -347,6 +347,7 @@ fn write_figure(path: &str, svg: &str) -> std::io::Result<()> {
 ///   --wheel <sigma>        CAN speed as wheel-speed aiding, m/s
 ///   --nhc <lat[,vert]>     non-holonomic constraints, m/s
 ///   --per-kind-rejections  count gate rejections separately for each aid
+///   --zaru <sigma>         zero-angular-rate updates while CAN speed reads zero, rad/s
 ///   --outage <start,len>   withhold fixes, seconds after the filter starts
 ///   --settle <s>           unscored seconds after the start (default 10)
 ///   --uncalibrated-gyro    the gyro without Android's bias correction
@@ -396,6 +397,7 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 }
             },
             per_kind_rejections: args.iter().any(|a| a == "--per-kind-rejections"),
+            zaru_sigma: flag(args, "--zaru").map(str::parse).transpose()?,
             outage: pair("--outage")?,
             settle: flag(args, "--settle")
                 .map(str::parse)
