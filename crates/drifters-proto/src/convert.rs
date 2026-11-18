@@ -505,6 +505,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
     fn from(o: &GinsOptions) -> Self {
         let mut msg = Self {
             r#max_consecutive_rejections: o.max_consecutive_rejections,
+            r#count_rejections_per_kind: o.count_rejections_per_kind,
             r#rejection_inflation: o.rejection_inflation,
 
             ..Default::default()
@@ -579,6 +580,7 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
             options.vehicle_mounting = mounting.try_into()?;
         }
         options.max_consecutive_rejections = msg.r#max_consecutive_rejections;
+        options.count_rejections_per_kind = msg.r#count_rejections_per_kind;
         options.rejection_inflation = msg.r#rejection_inflation;
         // Absent means "the recommended default", not false. A message
         // written before this field existed must not silently decode to
@@ -1167,6 +1169,7 @@ mod option_defaults {
             "antenna_lever_arm",
             "vehicle_mounting",
             "max_consecutive_rejections",
+            "count_rejections_per_kind",
             "zupt_holds_attitude",
             "rejection_inflation",
         ];
@@ -1174,6 +1177,15 @@ mod option_defaults {
             fields, carried,
             "GinsOptions's fields changed; update both conversions and this list"
         );
+    }
+
+    #[test]
+    fn counting_rejections_per_kind_survives_the_round_trip() {
+        let mut options = GinsOptions::default();
+        assert!(!options.count_rejections_per_kind);
+        options.count_rejections_per_kind = true;
+        let decoded = GinsOptions::try_from(&pb::GinsOptions::from(&options)).expect("valid");
+        assert!(decoded.count_rejections_per_kind);
     }
 
     #[test]

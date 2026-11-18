@@ -95,13 +95,13 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 272 | **21 408** |
-//! | `f32-covariance` | 2 352 | 18 648 |
-//! | `reduced-state` | 2 336 | 18 600 |
-//! | both | 1 856 | 17 160 |
-//! | `smoothing` | 21 520 | 76 152 |
+//! | default | 3 304 | **21 504** |
+//! | `f32-covariance` | 2 384 | 18 744 |
+//! | `reduced-state` | 2 368 | 18 696 |
+//! | both | 1 888 | 17 256 |
+//! | `smoothing` | 21 552 | 76 248 |
 //!
-//! The default row is 3 × 3 272 for the engines, 120 × 64 for the samples,
+//! The default row is 3 × 3 304 for the engines, 120 × 64 for the samples,
 //! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!
@@ -352,6 +352,12 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     #[inline]
     pub fn consecutive_rejections(&self) -> u32 {
         self.engine().consecutive_rejections()
+    }
+
+    /// See [`GinsEngine::consecutive_rejections_of`].
+    #[inline]
+    pub fn consecutive_rejections_of(&self, kind: crate::measurement::Kind) -> u32 {
+        self.engine().consecutive_rejections_of(kind)
     }
 
     /// See [`GinsEngine::inflation_count`].
@@ -991,7 +997,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_408);
+            assert_eq!(size_of::<Representative>(), 21_504);
         }
     }
 

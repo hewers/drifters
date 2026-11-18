@@ -132,4 +132,9 @@ message GinsOptions {
   // wheel-speed updates. Absent means the two are aligned, which is what a
   // configuration written before this field meant.
   VehicleMounting vehicle_mounting = 17;
+
+  // Count gate rejections separately for each kind of measurement, so that an
+  // accepted one does not restart the count of another. Absent means false,
+  // which is what a configuration written before this field meant.
+  bool count_rejections_per_kind = 18;
 }

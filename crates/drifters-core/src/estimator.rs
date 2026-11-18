@@ -310,7 +310,8 @@ pub trait Estimator {
     fn last_nis(&self) -> Option<F>;
 
     /// How many gated measurements have been rejected since the last accepted
-    /// one.
+    /// one. An engine set to count each sensor separately reports its
+    /// longest run.
     fn consecutive_rejections(&self) -> u32;
 
     /// How many times the covariance has been inflated to recover from

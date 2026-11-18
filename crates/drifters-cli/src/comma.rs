@@ -415,8 +415,13 @@ pub struct ReplayOptions {
     /// A tight lateral sigma leans on the engine's lockout recovery: at 28 m/s
     /// a degree of heading error is 0.5 m/s of lateral body velocity, which at
     /// 0.1 m/s fails the gate, so the measurement that would correct the
-    /// heading is refused once the heading needs correcting.
+    /// heading is refused once the heading needs correcting. Accepted wheel
+    /// speeds keep that recovery from running unless
+    /// [`Self::per_kind_rejections`] is set.
     pub nhc_sigma: Option<(F, F)>,
+    /// Count gate rejections separately for each kind of measurement. See
+    /// [`GinsOptions::count_rejections_per_kind`].
+    pub per_kind_rejections: bool,
     /// Withhold fixes for `(start, length)` seconds after the filter starts.
     pub outage: Option<(F, F)>,
     /// Seconds after the filter starts that are not scored.
@@ -429,6 +434,7 @@ impl Default for ReplayOptions {
             imu_scale: 3.0,
             wheel_sigma: None,
             nhc_sigma: None,
+            per_kind_rejections: false,
             outage: None,
             settle: 10.0,
         }
@@ -515,6 +521,7 @@ pub fn replay(
     );
     gins.imu_noise = crate::gsdc_imu_noise(options.imu_scale);
     gins.vehicle_mounting = segment.mounting;
+    gins.count_rejections_per_kind = options.per_kind_rejections;
     gins.initial_position_std = first.position_std;
     gins.initial_velocity_std = Vec3::splat(0.5);
     gins.initial_attitude_std = Vec3::new(2.0 * DEG_TO_RAD, 2.0 * DEG_TO_RAD, 5.0 * DEG_TO_RAD);

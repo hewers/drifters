@@ -17,7 +17,7 @@ use drifters_core::F;
 
 use crate::config::{initial_std_vector, ConfigError, GinsOptions};
 use crate::eskf::{Eskf, FilterError};
-use crate::measurement::{self, Measurement};
+use crate::measurement::{self, Kind, Measurement};
 use crate::mechanization::mechanize;
 use crate::rewind::Aid;
 #[cfg(feature = "smoothing")]
@@ -43,7 +43,8 @@ pub struct GinsEngine {
     previous_imu: ImuSample,
     pending_gnss: Option<GnssFix>,
     initialised: bool,
-    consecutive_rejections: u32,
+    /// Gate rejections since each [`Kind`]'s last acceptance.
+    consecutive_rejections: [u32; Kind::COUNT],
     inflations: u32,
     /// Fixes refused for arriving after the engine had passed their epoch.
     stale_fixes: u32,
@@ -110,7 +111,7 @@ impl GinsEngine {
             previous_imu: ImuSample::default(),
             pending_gnss: None,
             initialised: false,
-            consecutive_rejections: 0,
+            consecutive_rejections: [0; Kind::COUNT],
             inflations: 0,
             stale_fixes: 0,
             #[cfg(feature = "smoothing")]
@@ -474,7 +475,7 @@ impl GinsEngine {
                 velocity,
                 fix.velocity_std,
             );
-            self.apply_inner(&m)?;
+            self.apply_inner(&m, Kind::GnssVelocity)?;
         }
         self.seal_checkpoint();
         Ok(())
@@ -486,8 +487,20 @@ impl GinsEngine {
     /// discarded, leaving the filter untouched, and also when it is not
     /// [finite](Measurement::is_finite), which does not count as a rejection.
     /// Constructors for the supported sensors are in [`crate::measurement`].
+    ///
+    /// Its rejections are counted as [`Kind::Other`]. The `apply_*` methods
+    /// count each sensor separately.
     pub fn apply<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
-        let accepted = self.apply_inner(m)?;
+        self.apply_as(m, Kind::Other)
+    }
+
+    /// [`GinsEngine::apply`], counting rejections against `kind`.
+    fn apply_as<const M: usize>(
+        &mut self,
+        m: &Measurement<M>,
+        kind: Kind,
+    ) -> Result<bool, FilterError> {
+        let accepted = self.apply_inner(m, kind)?;
         self.seal_checkpoint();
         Ok(accepted)
     }
@@ -495,7 +508,11 @@ impl GinsEngine {
     /// [`GinsEngine::apply`] without sealing a checkpoint, so a caller that
     /// applies several measurements at one epoch produces one checkpoint
     /// rather than one per measurement.
-    fn apply_inner<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
+    fn apply_inner<const M: usize>(
+        &mut self,
+        m: &Measurement<M>,
+        kind: Kind,
+    ) -> Result<bool, FilterError> {
         // Before anything is recorded or counted. Repeated rejection inflates
         // the covariance, on the grounds that good measurements are being
         // turned away, and a stream of NaN says nothing of the kind.
@@ -504,15 +521,22 @@ impl GinsEngine {
         }
         let accepted = self.update_filter(m)?;
         if accepted {
-            self.consecutive_rejections = 0;
+            if self.options.count_rejections_per_kind {
+                self.consecutive_rejections[kind as usize] = 0;
+            } else {
+                self.consecutive_rejections = [0; Kind::COUNT];
+            }
             self.feedback()?;
         } else {
-            self.consecutive_rejections = self.consecutive_rejections.saturating_add(1);
+            let count = &mut self.consecutive_rejections[kind as usize];
+            *count = count.saturating_add(1);
             let limit = self.options.max_consecutive_rejections;
-            if limit > 0 && self.consecutive_rejections >= limit {
+            if limit > 0 && self.consecutive_rejections() >= limit {
                 // The measurements are not the problem; the covariance is.
+                // Inflating it changes what every kind would see, so every
+                // count starts again.
                 self.filter.inflate(self.options.rejection_inflation);
-                self.consecutive_rejections = 0;
+                self.consecutive_rejections = [0; Kind::COUNT];
                 self.inflations = self.inflations.saturating_add(1);
             }
         }
@@ -535,11 +559,34 @@ impl GinsEngine {
         self.filter.last_nis()
     }
 
-    /// How many gated measurements have been rejected since the last accepted
-    /// one.
+    /// The count the lockout recovery compares with
+    /// [`GinsOptions::max_consecutive_rejections`].
+    ///
+    /// Rejections of any kind since any measurement was accepted or, under
+    /// [`GinsOptions::count_rejections_per_kind`], the longest run of one
+    /// [`Kind`].
     #[inline]
     pub fn consecutive_rejections(&self) -> u32 {
+        let counts = self.consecutive_rejections.iter().copied();
+        if self.options.count_rejections_per_kind {
+            counts.max().unwrap_or(0)
+        } else {
+            counts.fold(0, u32::saturating_add)
+        }
+    }
+
+    /// How many measurements of `kind` are in
+    /// [`consecutive_rejections`](Self::consecutive_rejections)'s count.
+    ///
+    /// Which sensor a lockout is coming from, in either counting mode. Under
+    /// [`GinsOptions::count_rejections_per_kind`] it is the run since `kind` was
+    /// last accepted; otherwise the rejections of `kind` since anything was.
+    #[inline]
+    pub fn consecutive_rejections_of(&self, kind: Kind) -> u32 {
         self.consecutive_rejections
+            .get(kind as usize)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// How many times the covariance has been inflated to recover from
@@ -599,7 +646,7 @@ impl GinsEngine {
         if self.options.zupt_holds_attitude {
             m = m.holding(crate::eskf::HeldStates::ATTITUDE);
         }
-        self.apply(&m)
+        self.apply_as(&m, Kind::ZeroVelocity)
     }
 
     /// Apply non-holonomic constraints at the current state.
@@ -620,7 +667,7 @@ impl GinsEngine {
             &self.options.vehicle_mounting,
             sigma,
         );
-        self.apply(&m)
+        self.apply_as(&m, Kind::Nonholonomic)
     }
 
     /// Apply an odometer / wheel-speed update, m/s along the vehicle's forward
@@ -636,7 +683,7 @@ impl GinsEngine {
             speed,
             sigma,
         );
-        self.apply(&m)
+        self.apply_as(&m, Kind::WheelSpeed)
     }
 
     /// Apply a height update. `height` is above the WGS-84 **ellipsoid**.
@@ -645,7 +692,7 @@ impl GinsEngine {
             return Ok(false);
         }
         let m = measurement::height(&self.state.pva, height, sigma);
-        self.apply(&m)
+        self.apply_as(&m, Kind::Height)
     }
 
     /// Apply a tightly-coupled GNSS update from per-satellite pseudoranges.
@@ -678,7 +725,7 @@ impl GinsEngine {
         // tight coupling does without. Without this the filter averages
         // non-line-of-sight returns straight into the state.
         self.filter.robustify(&mut m, huber);
-        self.apply(&m)
+        self.apply_as(&m, Kind::Pseudoranges)
     }
 
     /// Apply a heading update. `heading` is **true** heading in radians,
@@ -694,7 +741,7 @@ impl GinsEngine {
             return Ok(false);
         }
         let m = measurement::magnetic_heading(&self.state.pva, heading, sigma);
-        self.apply(&m)
+        self.apply_as(&m, Kind::Heading)
     }
 
     /// Apply a three-axis magnetometer reading.
@@ -1943,6 +1990,199 @@ mod tests {
         }
         assert_eq!(e.inflation_count(), 0);
         assert_relative_eq!(e.std_deviations()[P_ID + 2], sigma, epsilon = 1e-12);
+    }
+
+    // --- rejection counting, per kind ---------------------------------------
+
+    fn counting_per_kind() -> GinsOptions {
+        let mut o = options();
+        o.count_rejections_per_kind = true;
+        o
+    }
+
+    #[test]
+    fn by_default_any_acceptance_restarts_the_count() {
+        // A constraint that is simply wrong, a mounting left aligned on a sensor
+        // that is not, is refused every time while other aids are accepted. Its
+        // rejections must not build up to an inflation that would let it in.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 0..50 {
+            assert!(e.apply_wheel_speed(0.0, 0.1).unwrap(), "wheel speed {i}");
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap(), "height {i}");
+            assert_eq!(e.consecutive_rejections(), 1);
+        }
+        assert_eq!(e.inflation_count(), 0);
+    }
+
+    #[test]
+    fn by_default_rejections_of_different_kinds_add_up() {
+        // With nothing accepted, the filter is locked out whichever sensors it
+        // is refusing.
+        let mut e = GinsEngine::new(options()).unwrap();
+        for _ in 0..5 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        }
+        for _ in 0..4 {
+            assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections(), 9);
+        assert_eq!(e.consecutive_rejections_of(Kind::Height), 5);
+        assert_eq!(e.consecutive_rejections_of(Kind::Heading), 4);
+        assert_eq!(e.inflation_count(), 0);
+        assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        assert_eq!(e.inflation_count(), 1, "the tenth rejection must inflate");
+        assert_eq!(e.consecutive_rejections(), 0);
+    }
+
+    #[test]
+    fn counted_per_kind_an_acceptance_does_not_hide_a_lockout() {
+        // A wheel speed the gate accepts every time, between height updates it
+        // rejects every time. On a real drive this is an accepted wheel speed
+        // hiding a non-holonomic constraint the gate has locked out.
+        let mut e = GinsEngine::new(counting_per_kind()).unwrap();
+        for i in 0..9 {
+            assert!(e.apply_wheel_speed(0.0, 0.1).unwrap(), "wheel speed {i}");
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap(), "height {i}");
+        }
+        assert_eq!(e.consecutive_rejections_of(Kind::Height), 9);
+        assert_eq!(e.inflation_count(), 0);
+        assert!(e.apply_wheel_speed(0.0, 0.1).unwrap());
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_eq!(
+            e.inflation_count(),
+            1,
+            "the tenth height rejection must inflate"
+        );
+        assert_eq!(
+            e.consecutive_rejections(),
+            0,
+            "inflating restarts every count"
+        );
+    }
+
+    #[test]
+    fn counted_per_kind_rejections_of_different_kinds_do_not_add_up() {
+        let mut e = GinsEngine::new(counting_per_kind()).unwrap();
+        for _ in 0..9 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+            assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        }
+        assert_eq!(e.consecutive_rejections(), 9, "the longest run of any kind");
+        assert_eq!(e.inflation_count(), 0);
+    }
+
+    #[test]
+    fn inflating_restarts_the_count_of_every_kind() {
+        // The inflation changes what every kind would see, so a run in progress
+        // on another kind was measured against a covariance that is now gone.
+        let mut e = GinsEngine::new(counting_per_kind()).unwrap();
+        assert!(!e.apply_wheel_speed(500.0, 0.001).unwrap());
+        for _ in 0..10 {
+            assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        }
+        assert_eq!(e.inflation_count(), 1);
+        assert_eq!(e.consecutive_rejections_of(Kind::WheelSpeed), 0);
+    }
+
+    #[test]
+    fn rejections_are_counted_by_kind() {
+        let mut e = GinsEngine::new(counting_per_kind()).unwrap();
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        assert!(e.apply_wheel_speed(0.0, 0.1).unwrap());
+        assert_eq!(e.consecutive_rejections_of(Kind::Height), 2);
+        assert_eq!(e.consecutive_rejections_of(Kind::Heading), 1);
+        assert_eq!(e.consecutive_rejections_of(Kind::WheelSpeed), 0);
+        assert_eq!(e.consecutive_rejections(), 2, "the longest run of any kind");
+        // An acceptance clears its own kind only.
+        assert!(e.apply_height(25.0, 0.5).unwrap());
+        assert_eq!(e.consecutive_rejections_of(Kind::Height), 0);
+        assert_eq!(e.consecutive_rejections_of(Kind::Heading), 1);
+    }
+
+    /// The one kind holding a count, and that the count is one.
+    fn assert_counted_only_as(e: &GinsEngine, kind: Kind) {
+        assert_eq!(e.consecutive_rejections_of(kind), 1, "{kind:?}");
+        assert_eq!(e.consecutive_rejections(), 1, "{kind:?}");
+        let total: u32 = e.consecutive_rejections.iter().sum();
+        assert_eq!(total, 1, "{kind:?} was not the only kind counted");
+    }
+
+    #[test]
+    fn each_aid_counts_against_its_own_kind() {
+        let wild = Ned::new(0.0, 500.0, 0.0);
+        let level = Euler::default();
+
+        let mut e = GinsEngine::new(options_with(wild, level)).unwrap();
+        assert!(!e.apply_zupt(Vec3::splat(0.001)).unwrap());
+        assert_counted_only_as(&e, Kind::ZeroVelocity);
+
+        // All of the speed is sideways, which the constraint forbids.
+        let mut e = GinsEngine::new(options_with(wild, level)).unwrap();
+        assert!(!e.apply_nonholonomic((0.001, 0.001), 0.1).unwrap());
+        assert_counted_only_as(&e, Kind::Nonholonomic);
+
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_wheel_speed(500.0, 0.001).unwrap());
+        assert_counted_only_as(&e, Kind::WheelSpeed);
+
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_height(5_000.0, 0.5).unwrap());
+        assert_counted_only_as(&e, Kind::Height);
+
+        let mut e = GinsEngine::new(options()).unwrap();
+        assert!(!e.apply_heading(3.0, 0.001).unwrap());
+        assert_counted_only_as(&e, Kind::Heading);
+    }
+
+    #[test]
+    fn a_rejected_gnss_velocity_counts_as_gnss_velocity() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        for i in 1..=10 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        let mut fix = GnssFix::position_only(GpsTime::from_tow(0.105), origin(), Vec3::splat(1.0));
+        fix.velocity = Some(Ned::new(500.0, 0.0, 0.0));
+        fix.velocity_std = Vec3::splat(0.001);
+        assert_eq!(e.add_gnss(fix), GnssQueued::Queued);
+        e.add_imu(stationary_sample(&e, 0.01, 0.11)).unwrap();
+        assert_counted_only_as(&e, Kind::GnssVelocity);
+    }
+
+    #[test]
+    fn rejected_pseudoranges_count_as_pseudoranges() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let receiver = origin().to_ecef();
+        let receiver = Vec3::new(receiver.x, receiver.y, receiver.z);
+        let satellite = |offset: Vec3| {
+            let toward = receiver + offset;
+            toward * (26_560_000.0 / toward.norm())
+        };
+        let range = |at: Vec3, error: F| crate::range::RangeObservation {
+            constellation: 0,
+            satellite: at,
+            pseudorange: (at - receiver).norm() + error,
+            sigma: 0.1,
+        };
+        let (a, b) = (
+            satellite(Vec3::new(3.0e6, 0.0, 0.0)),
+            satellite(Vec3::new(0.0, 3.0e6, 0.0)),
+        );
+        // No Huber weighting, so the gate sees the whole 100 km.
+        let sky = [range(a, 0.0), range(b, 100_000.0)];
+        assert!(!e.apply_pseudoranges::<1>(&sky, F::INFINITY).unwrap());
+        assert_counted_only_as(&e, Kind::Pseudoranges);
+    }
+
+    #[test]
+    fn a_measurement_the_caller_built_counts_as_other() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        let m = measurement::height(&e.nav_state().pva, 5_000.0, 0.5);
+        assert!(!e.apply(&m).unwrap());
+        assert_eq!(e.consecutive_rejections_of(Kind::Other), 1);
+        assert_eq!(e.consecutive_rejections_of(Kind::Height), 0);
     }
 
     #[test]
