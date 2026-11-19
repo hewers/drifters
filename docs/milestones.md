@@ -17,7 +17,7 @@ What the library does, what checks it, and what is open. The reasoning is in
 | Sensor calibration | hard and soft iron fits, IMU-to-vehicle mounting estimation | `drifters_core::magnetometer`, `drifters_core::mounting` |
 | Late fixes | a fix delivered after its epoch is applied by rewinding, bit-identically to on-time delivery, for either estimator | `drifters_core::rewind` |
 | Smoothing | Rauch–Tung–Striebel backward pass into a caller's slice; the `smoothing` feature adds the engine's recorder | `drifters_filter::smoother` |
-| Equivariant filter | `SE₂(3)` filter with lever-arm and magnetometer self-calibration, GCU, dense or factored covariance, Earth compensation or the Earth's rotation in the group | `drifters-eqf` |
+| Equivariant filter | `SE₂(3)` filter with lever-arm and magnetometer self-calibration, GCU, dense or factored covariance, Earth compensation, or the Earth's rotation in the group with an optional horizontal gravity gradient | `drifters-eqf` |
 | Common interface | `Estimator`, the epoch placement rule, gates and errors shared by both engines; one contract test runs against each | `drifters_core::estimator` |
 | Initial alignment | levelling, biases at rest, gyrocompass or heading from motion, with a sigma for each output | `drifters_core::align` |
 | Serialization | protobuf schemas and validated conversions, no allocator, generated code checked in | `drifters-proto` |
@@ -76,6 +76,10 @@ emulation. This repository claims nothing about time until these items run.
 - **Notice a gap in the IMU stream.** Neither engine checks a sample's time against
   the previous sample's. A dropped sample is integrated as one interval, and GNSS
   then pulls the velocity away from the truth.
+- **Localisation without GNSS.** Terrain-referenced navigation and lidar intensity
+  matching need a general map-derived position update on both engines, with a full
+  covariance, its own gate and protection against a wrong map match. Neither engine has
+  one; `add_gnss` is the nearest thing and it assumes a GNSS antenna.
 - **Align from a start already in motion.** The aligner needs a stationary interval.
 - **Phone Doppler.** The ESKF sits at its rejection and inflation limit on these
   traces, so starts a few millimetres apart give horizontal errors of 4.18 to 7.99 m

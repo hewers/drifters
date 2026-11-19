@@ -339,8 +339,8 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 704 bytes** with
-the dense covariance and 17 904 with the factored `f32` one: the rings are
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 728 bytes** with
+the dense covariance and 17 928 with the factored `f32` one: the rings are
 identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
@@ -353,7 +353,7 @@ late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, with no engine-sized temporary. A late
 fix reaches the depth of the time update it replays and goes no further: 13 520
 bytes, 11 880 with `f32-covariance`, 8 888 at 15 states and 7 704 with both. The
-EqF's late fix measures 15 800 dense and 14 392 factored, no deeper than its own
+EqF's late fix measures 15 808 dense and 14 400 factored, no deeper than its own
 fix step in either. All are inside their CI ceilings, and all are part of the peak
 CI checks.
 
@@ -362,9 +362,9 @@ CI checks.
 | item | dense `f64` | factored `f32` |
 |---|---|---|
 | `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
-| `EqFilter<C>` (observer state + `Σ` + gravity and Earth rate + GCU rate) | 3 856 | 1 256 |
+| `EqFilter<C>` (observer state + `Σ` + gravity, Earth rate and gravity gradient + GCU rate) | 3 864 | 1 264 |
 | `EqfOptions` | 648 | 648 |
-| `EqfEngine<C>` total | **4 704** | **2 104** |
+| `EqfEngine<C>` total | **4 712** | **2 112** |
 
 Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
 `rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
@@ -377,9 +377,9 @@ ESKF:
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
 | `add_imu` (propagate) | 14 160 | 10 564 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 800 | 14 392 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 808 | 14 400 |
 | `apply_magnetometer` | 14 480 | 13 096 |
-| **peak** | **15 800** | **14 392** |
+| **peak** | **15 808** | **14 400** |
 
 These are the same with the Earth's rotation in the filter's group.
 

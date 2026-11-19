@@ -59,8 +59,28 @@
 //! group affine and (6)–(9) stand with `G` read this way. [`GlobalFrame`] holds
 //! the two constants. `the_lift_reproduces_the_physics_of_a_rotating_frame`
 //! checks the result against the first set of equations, in `v`.
+//!
+//! # The gravity gradient, and Schuler's oscillation
+//!
+//! `g₀` is right only at the origin. Move a distance `x` over the Earth and
+//! gravitation leans back towards the start by `x/R`, which is a horizontal
+//! acceleration of `−(g/R) x`. That restoring term is what makes the horizontal
+//! errors of an inertial system oscillate with the Schuler period
+//! `2π√(R/g)`, 84.4 minutes, and without it they grow as `t²` from a tilt.
+//! [`GlobalFrame::gravity_gradient`] adds it:
+//!
+//! ```text
+//! v̇' = R(ᴵa − b_a) + g₀ + Γp − ω×v',    Γ = (g/R) diag(−1, −1, 0)
+//! ```
+//!
+//! The term depends on the state, so a filter with it is **not group affine**
+//! and its error dynamics are no longer exactly autonomous. What is lost is of
+//! the order of `g/R`, about `1.5 × 10⁻⁶ s⁻²`. The vertical gradient, `+2g/R`,
+//! is left out on purpose: it is an instability, and it needs a height aid to
+//! hold it.
 
 use drifters_core::math::{Matrix, Vec3};
+use drifters_core::F;
 
 use crate::group::{Algebra, State};
 use crate::lie::Se23Tangent;
@@ -100,6 +120,9 @@ pub struct GlobalFrame {
     pub gravity: Vec3,
     /// The frame's rotation rate `ω` in its own axes, rad/s.
     pub earth_rate: Vec3,
+    /// The horizontal gravity gradient `g/R`, s⁻². Zero holds gravity constant
+    /// and keeps the system group affine. See the [module documentation](self).
+    pub gravity_gradient: F,
 }
 
 impl GlobalFrame {
@@ -109,6 +132,7 @@ impl GlobalFrame {
         Self {
             gravity,
             earth_rate: Vec3::ZERO,
+            gravity_gradient: 0.0,
         }
     }
 
@@ -118,7 +142,31 @@ impl GlobalFrame {
         Self {
             gravity,
             earth_rate,
+            gravity_gradient: 0.0,
         }
+    }
+
+    /// This frame with a horizontal gravity gradient `g/R`, s⁻².
+    #[inline]
+    pub const fn with_gravity_gradient(mut self, gradient: F) -> Self {
+        self.gravity_gradient = gradient;
+        self
+    }
+
+    /// `Γ p`, what the gravity gradient adds to gravity at `position`.
+    #[inline]
+    pub fn gradient_acceleration(&self, position: Vec3) -> Vec3 {
+        Vec3::new(
+            -self.gravity_gradient * position.x,
+            -self.gravity_gradient * position.y,
+            0.0,
+        )
+    }
+
+    /// Gravity at `position`: `g₀ + Γ p`.
+    #[inline]
+    pub fn gravity_at(&self, position: Vec3) -> Vec3 {
+        self.gravity + self.gradient_acceleration(position)
     }
 
     /// Whether the frame turns at all.
@@ -155,10 +203,9 @@ impl From<Vec3> for GlobalFrame {
 /// the paper's flat, non-rotating Earth. See the crate docs for why gravity is
 /// constant here and not in the ESKF.
 pub fn lift(xi: &State, u: &Input, frame: impl Into<GlobalFrame>) -> Algebra {
-    let GlobalFrame {
-        gravity,
-        earth_rate,
-    } = frame.into();
+    let frame = frame.into();
+    let earth_rate = frame.earth_rate;
+    let gravity = frame.gravity_at(xi.pose.position);
     // (6), in closed form. The 5×5 product T⁻¹(G − N)T collapses because G − N
     // is non-zero only in the columns that meet T's identity corner:
     //
@@ -199,7 +246,12 @@ pub fn lambda1_literal(xi: &State, u: &Input, frame: impl Into<GlobalFrame>) -> 
     let frame = frame.into();
     let w = Se23Tangent::new(u.omega, u.accel, Vec3::ZERO).wedge();
     let b = Se23Tangent::new(xi.bias.omega, xi.bias.nu, Vec3::ZERO).wedge();
-    let g = Se23Tangent::new(-frame.earth_rate, frame.gravity, Vec3::ZERO).wedge();
+    let g = Se23Tangent::new(
+        -frame.earth_rate,
+        frame.gravity_at(xi.pose.position),
+        Vec3::ZERO,
+    )
+    .wedge();
 
     // N is not in se₂(3): its single 1 sits at (3, 4), below the wedge's block.
     // It supplies ṗ = v, which no se₂(3) element can, and cancels out of Λ₁.
@@ -218,7 +270,6 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use drifters_core::math::{Mat3, Quat};
-    use drifters_core::F;
 
     use crate::group::{act_state, curve, Symmetry};
     use crate::lie::Se23;

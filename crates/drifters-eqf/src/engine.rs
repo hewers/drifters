@@ -115,19 +115,29 @@ impl<C: Covariance> EqfEngine<C> {
             return Err(e);
         }
         let anchor = Anchor::new(options.anchor_or_initial());
-        let frame = if options.earth_in_group {
+        let frame = if options.gravity_gradient {
+            anchor
+                .rotating_frame()
+                .with_gravity_gradient(anchor.gravity_gradient())
+        } else if options.earth_in_group {
             anchor.rotating_frame()
         } else {
             GlobalFrame::flat(anchor.gravity)
         };
         let initial = options.initial_state;
         let position = anchor.to_local(initial.position);
+        // What the caller gave is in the local axes at the start.
+        let (attitude, velocity) = if options.gravity_gradient {
+            let axes = anchor.axes_at(position);
+            (
+                axes.matmul(&initial.attitude.dcm),
+                axes * initial.velocity.to_vec3(),
+            )
+        } else {
+            (initial.attitude.dcm, initial.velocity.to_vec3())
+        };
         let start = State {
-            pose: Se23::new(
-                initial.attitude.dcm,
-                frame.group_velocity(initial.velocity.to_vec3(), position),
-                position,
-            ),
+            pose: Se23::new(attitude, frame.group_velocity(velocity, position), position),
             bias: Se3Tangent::new(options.initial_gyro_bias, options.initial_accel_bias),
             lever: options.initial_lever_arm,
             // The paper starts the calibration at the identity and lets it
@@ -162,7 +172,8 @@ impl<C: Covariance> EqfEngine<C> {
     /// The current navigation solution, geodetic.
     ///
     /// Position through the anchor, velocity over the ground and attitude in
-    /// the anchor's NED axes. The IMU error carries the two biases; the scale
+    /// the anchor's NED axes, or in the local ones at the vehicle with
+    /// [`EqfOptions::gravity_gradient`]. The IMU error carries the two biases; the scale
     /// factors are zero because this filter does not estimate them, not
     /// because they were found to be.
     pub fn nav_state(&self) -> NavState {
@@ -171,12 +182,19 @@ impl<C: Covariance> EqfEngine<C> {
             .filter
             .frame
             .ground_velocity(state.pose.velocity, state.pose.position);
+        let (velocity, rotation) = match self.local_axes(state.pose.position) {
+            Some(axes) => {
+                let back = axes.transpose();
+                (back * velocity, back.matmul(&state.pose.rotation))
+            }
+            None => (velocity, state.pose.rotation),
+        };
         NavState {
             time: self.time,
             pva: Pva {
                 position: self.anchor.to_geodetic(state.pose.position),
                 velocity: Ned::from_vec3(velocity),
-                attitude: Attitude::from_quat(Quat::from_dcm(&state.pose.rotation)),
+                attitude: Attitude::from_quat(Quat::from_dcm(&rotation)),
             },
             imu_error: ImuError {
                 gyro_bias: state.bias.omega,
@@ -184,6 +202,16 @@ impl<C: Covariance> EqfEngine<C> {
                 ..ImuError::ZERO
             },
         }
+    }
+
+    /// The rotation from the local NED axes at `position` to the filter's, when
+    /// the two are told apart. Only the gravity gradient does: without it the
+    /// filter's plane and its one gravity vector stand for the local level.
+    #[inline]
+    fn local_axes(&self, position: Vec3) -> Option<Mat3> {
+        self.options
+            .gravity_gradient
+            .then(|| self.anchor.axes_at(position))
     }
 
     /// The estimate in the filter's own terms: Cartesian, about the anchor,
@@ -494,7 +522,11 @@ impl<C: Covariance> EqfEngine<C> {
             // turning of the lever arm included, and brings that position's
             // noise along.
             let frame = self.filter.frame;
-            let measured = frame.group_velocity(velocity.to_vec3(), antenna);
+            let velocity = match self.local_axes(antenna) {
+                Some(axes) => axes * velocity.to_vec3(),
+                None => velocity.to_vec3(),
+            };
+            let measured = frame.group_velocity(velocity, antenna);
             let mut r = fix.velocity_std.squared().to_diag();
             if frame.rotates() {
                 let turn = frame.earth_rate.skew();
@@ -543,6 +575,11 @@ impl<C: Covariance> EqfEngine<C> {
         if !aid.is_valid() {
             return Ok(false);
         }
+        let here = self.filter.nav_state().pose.position;
+        let reference = match self.local_axes(here) {
+            Some(axes) => axes * reference,
+            None => reference,
+        };
         let north = reference.normalized();
         let transported = transported_direction(&self.filter.x, measured.normalized());
         // The chart below is the sine of the angle, which folds over at a
@@ -901,9 +938,9 @@ mod tests {
         // The covariance is dense here, 3 528 bytes of the filter's 3 856.
         // If a change to these is intended, update the "Resource budget"
         // table in docs/design.md with them.
-        assert_eq!(size_of::<EqFilter>(), 3_856);
+        assert_eq!(size_of::<EqFilter>(), 3_864);
         assert_eq!(size_of::<EqfOptions>(), 648);
-        assert_eq!(size_of::<EqfEngine>(), 4_704);
+        assert_eq!(size_of::<EqfEngine>(), 4_712);
     }
 
     // --- the interval, and what happens to a fix -------------------------
@@ -1671,6 +1708,43 @@ mod tests {
             e.last_nis().is_some_and(|nis| nis < 1e-2),
             "{:?}",
             e.last_nis()
+        );
+    }
+
+    /// With the gradient the filter's axes are the anchor's, and a vehicle far
+    /// from it still reports the local level it is sitting at and accepts a
+    /// fix saying it is at rest.
+    #[test]
+    fn the_gravity_gradient_reports_and_aids_in_the_local_axes() {
+        let mut o = options()
+            .with_earth_in_group(true)
+            .with_gravity_gradient(true);
+        o.anchor = Some(origin().shifted(Ned::new(-40_000.0, 25_000.0, 0.0)));
+        o.velocity_gate = None;
+        let start = o.initial_state.attitude.quat;
+        let e = EqfEngine::new(o).unwrap();
+        let held = e.state().pose.rotation;
+        // The filter holds a different attitude, by the Earth's curve.
+        let apart = Quat::from_dcm(&held) * start.conjugate();
+        assert!(apart.canonicalized().to_rotation_vector().norm() > 5e-3);
+        let back = e.nav_state().pva.attitude.quat * start.conjugate();
+        assert_relative_eq!(
+            back.canonicalized().to_rotation_vector().norm(),
+            0.0,
+            epsilon = 1e-9
+        );
+        assert_relative_eq!(
+            e.nav_state().pva.velocity.to_vec3().norm(),
+            0.0,
+            epsilon = 1e-9
+        );
+    }
+
+    #[test]
+    fn the_gravity_gradient_needs_the_earth_in_the_group() {
+        assert_eq!(
+            EqfEngine::new(options().with_gravity_gradient(true)).unwrap_err(),
+            ConfigError::GravityGradientNeedsEarthInGroup
         );
     }
 

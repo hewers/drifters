@@ -394,6 +394,14 @@ pub struct Turning {
     pub world: Vec3,
     /// The rate the filter is told.
     pub filter: Vec3,
+    /// The horizontal gravity gradient the truth is simulated with, s⁻².
+    pub world_gradient: f64,
+    /// The gradient the filter is told.
+    pub filter_gradient: f64,
+    /// Seconds between position fixes; zero means one a second. The gradient
+    /// changes the covariance by about `k T²` between fixes, so a test of its
+    /// covariance terms needs `T` long enough for that to show.
+    pub fix_period: f64,
 }
 
 /// As [`run_nees_with`], in a world that turns.
@@ -411,7 +419,12 @@ pub fn run_nees_turning<C: drifters_eqf::Covariance>(
     turning: Turning,
 ) -> NeesReport {
     let settle = 10.0;
-    let gnss_every = (1.0 / dt).round() as usize; // 1 Hz, whatever dt is
+    let period = if turning.fix_period > 0.0 {
+        turning.fix_period
+    } else {
+        1.0
+    };
+    let gnss_every = (period / dt).round() as usize;
     let gnss_sigma = Vec3::new(0.5, 0.5, 1.0) * strength;
     let mut q = noise();
     let s2 = strength * strength;
@@ -470,7 +483,8 @@ pub fn run_nees_turning<C: drifters_eqf::Covariance>(
         let Some(mut filter) = EqFilter::<C>::with_covariance(
             &start,
             &initial_covariance_scaled(strength, &start),
-            GlobalFrame::rotating(GRAVITY, turning.filter),
+            GlobalFrame::rotating(GRAVITY, turning.filter)
+                .with_gravity_gradient(turning.filter_gradient),
         ) else {
             report.singular += 1;
             continue;
@@ -509,9 +523,17 @@ pub fn run_nees_turning<C: drifters_eqf::Covariance>(
             // the same quadrature applies.
             let r0 = truth.pose.rotation;
             let world = |s: f64| Quat::from_rotation_vector(turning.world * s).to_dcm();
+            // The gradient acts on the position in the world's axes at `s`. The
+            // straight-line position is enough: what it leaves out is of order
+            // `k a s²`, far below the noise at the gradients used here.
+            let (p0, v0) = (truth.pose.position, truth.pose.velocity);
+            let truth_frame =
+                GlobalFrame::flat(GRAVITY).with_gravity_gradient(turning.world_gradient);
             let force = |s: f64| {
+                let turned = world(s);
+                let here = turned.transpose() * (p0 + v0 * s);
                 r0.matmul(&Quat::from_rotation_vector(omega * s).to_dcm()) * accel
-                    + world(s) * GRAVITY
+                    + turned * truth_frame.gravity_at(here)
             };
             let simpson = |a: f64, b: f64| {
                 (force(a) + force(0.5 * (a + b)) * 4.0 + force(b)) * ((b - a) / 6.0)
@@ -787,7 +809,11 @@ mod tests {
         use drifters_eqf::linear::StateMatrix;
         let spin = Vec3::new(0.025, -0.015, 0.030);
         let run = |world, filter| {
-            let turning = Turning { world, filter };
+            let turning = Turning {
+                world,
+                filter,
+                ..Turning::default()
+            };
             run_nees_turning::<StateMatrix>(20, 120.0, 20_261_118, 0.01, 1.0, turning)
         };
         let still = run(Vec3::ZERO, Vec3::ZERO).overall.mean();
@@ -807,12 +833,65 @@ mod tests {
         let turning = Turning {
             world: spin,
             filter: spin,
+            ..Turning::default()
         };
         let nees =
             run_nees_turning::<drifters_eqf::Ud<f32>>(10, 120.0, 20_261_119, 0.01, 1.0, turning)
                 .overall
                 .mean();
         assert!((17.0..25.0).contains(&nees), "{nees}");
+    }
+
+    /// The gate on the gravity gradient. It breaks group-affineness, so this
+    /// asks whether the covariance still tells the truth, in a world with the
+    /// spin above and a gradient some 650 times the Earth's. Fixes come every
+    /// 20 s: at one a second the gradient barely reaches the covariance, and a
+    /// filter with its covariance terms missing passes.
+    #[test]
+    fn a_filter_told_the_gravity_gradient_stays_consistent() {
+        use drifters_eqf::linear::StateMatrix;
+        let spin = Vec3::new(0.025, -0.015, 0.030);
+        let k = 1.0e-3;
+        let turning = |world_gradient, filter_gradient| Turning {
+            world: spin,
+            filter: spin,
+            world_gradient,
+            filter_gradient,
+            fix_period: 20.0,
+        };
+        let run = |w, f| {
+            run_nees_turning::<StateMatrix>(100, 240.0, 20_261_120, 0.01, 1.0, turning(w, f))
+        };
+        // Paired with a run on the same noise and no gradient, which takes the
+        // sampling error out: a filter whose `A_t⁰` lacks the gradient moves
+        // the total by 1.8 and the velocity block by 0.3 here.
+        let base = run(0.0, 0.0);
+        let told = run(k, k);
+        let untold =
+            run_nees_turning::<StateMatrix>(20, 240.0, 20_261_120, 0.01, 1.0, turning(k, 0.0))
+                .overall
+                .mean();
+        let mean = told.overall.mean();
+        let shift = mean - base.overall.mean();
+        println!("NEES with gradient: told {mean:.2} (shift {shift:+.3}), untold {untold:.0}");
+        assert!((19.5..23.5).contains(&mean), "{mean}");
+        assert!(shift.abs() < 0.5, "{shift}");
+        for (with, without) in told.blocks.iter().zip(&base.blocks) {
+            let moved = with.mean() - without.mean();
+            assert!(moved.abs() < 0.12, "block moved by {moved}");
+        }
+        assert!(untold > 100.0, "{untold}");
+        let factored = run_nees_turning::<drifters_eqf::Ud<f32>>(
+            25,
+            240.0,
+            20_261_121,
+            0.01,
+            1.0,
+            turning(k, k),
+        )
+        .overall
+        .mean();
+        assert!((18.0..24.0).contains(&factored), "{factored}");
     }
 
     /// A zero error must give a zero NEES, whatever the covariance.

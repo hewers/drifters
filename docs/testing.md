@@ -333,8 +333,8 @@ ceiling: 15 KiB for `PEAK`, the ESKF (13 KiB with `f32-covariance`, 10 KiB and
 | ESKF, 21-state, `f32-covariance` | 11 880 |
 | ESKF, 15-state (`reduced-state`) | 8 888 |
 | ESKF, 15-state, `f32-covariance` | 7 704 |
-| EqF engine, dense `f64` | **15 800** |
-| EqF engine, factored `f32` | **14 392** |
+| EqF engine, dense `f64` | **15 808** |
+| EqF engine, factored `f32` | **14 400** |
 | EqF engine, either form, Earth in the group | the same as without |
 
 Measured with Rust 1.100. The ESKF's peak is the time update. The held-state ZUPT
@@ -373,7 +373,7 @@ by operation, in bytes, the same with the Earth's rotation in the group:
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
 | `add_imu` (propagate) | 14 160 | 10 564 |
-| `add_imu` with a GNSS fix | **15 800** | **14 392** |
+| `add_imu` with a GNSS fix | **15 808** | **14 400** |
 | `apply_magnetometer` | 14 480 | 13 096 |
 
 A single operation's figure moves with how the optimiser inlines under whole-program
@@ -1514,13 +1514,92 @@ compensation, so this asks only whether the model does harm where it is not need
 - A real navigation-grade IMU. The north-finding runs are simulated, and KF-GINS cannot
   show the gain, because its gyroscope's own bias limits what it could find.
 - A long journey. The frame is the anchor's tangent plane, with one Earth rate and one
-  gravity vector. Gravity's change with position, about `g/R` per metre, is left out
-  because modelling it would give up group-affineness. At 1 km that is 150 mGal, thirty
-  times this unit's accelerometer stability. The model is for a unit at or near its
-  anchor.
+  gravity vector. Gravity's change with position, about `g/R` per metre, is 150 mGal at
+  1 km, thirty times this unit's accelerometer stability. Without
+  [the gravity gradient](#layer-18--schulers-oscillation-and-the-gravity-gradient) the
+  model is for a unit at or near its anchor.
 - That limit in simulation. The run away from the anchor has the anchor's gravity and
   axes in its truth, so it tests the velocity bookkeeping and not the tangent plane.
 - Deflection of the vertical, which neither filter models.
 - Cross-core agreement in this mode. On emulated Cortex-M4 and M7 it is measured for
   stack and checked for health and panics, but the agreement firmware runs the filter
   with input compensation.
+
+## Layer 18 — Schuler's oscillation and the gravity gradient
+
+When aiding stops, a real Earth pulls an inertial system's horizontal error back: a
+position error tilts gravity, and the error swings with the
+[Schuler period](https://en.wikipedia.org/wiki/Schuler_tuning), `2π√(R/g)`, 84.4 minutes.
+The ESKF has this from its Earth model. `EqfOptions::gravity_gradient` gives it to the
+equivariant filter, at the cost of exact group-affineness, so it is tested for what it
+adds and for what it might have broken.
+
+```bash
+cargo test --release -p drifters-cli --test schuler -- --nocapture
+cargo test --release -p drifters-cli --lib a_filter_told_the_gravity_gradient -- --nocapture
+```
+
+**The oscillation.** A still unit with a perfect IMU starts 20 µrad off in pitch and is
+told nothing more. Horizontal error, metres:
+
+| after | `R φ (1 − cos ωₛt)` | `½ g φ t²` | ESKF | EqF, gradient | EqF, Earth in group only |
+|---|---:|---:|---:|---:|---:|
+| 21 min | 126.3 | 155.5 | 126.1 | 126.2 | 155.4 |
+| 42 min | 254.7 | 621.9 | 252.9 | 253.7 | 620.6 |
+| 63 min | 130.5 | 1 399 | 125.7 | 127.2 | 1 393 |
+| 84 min | 0.1 | 2 488 | 10.7 | 6.4 | 2 466 |
+
+The closed form leaves out the Earth's rate, which accounts for the few metres between it
+and the filters. The test also holds the product of the ESKF's two transition-matrix
+couplings to `−g/R`.
+
+**Every grade.** Eight seeds of a simulated drive with 1 Hz position and velocity fixes
+for 240 s and then a 60 s outage, at 0.0003 to 100 °/h. The filters start with errors
+drawn from their priors. `err²/σ²` is averaged over attitude and should be near 1.
+
+| IMU | route | EqF RMS | ESKF RMS | EqF after outage | ESKF after outage | EqF attitude `err²/σ²` |
+|---|---|---:|---:|---:|---:|---:|
+| consumer, 100 °/h | 200 m circle | 0.061 m | 0.061 m | 26.25 m | 29.15 m | 1.88 |
+| tactical, 1 °/h | 200 m circle | 0.056 m | 0.056 m | 2.37 m | 2.39 m | 0.86 |
+| navigation, 0.003 °/h | 200 m circle | 0.037 m | 0.037 m | 0.24 m | 0.24 m | 1.15 |
+| strategic, 0.0003 °/h | 200 m circle | 0.032 m | 0.031 m | 0.08 m | 0.08 m | 1.08 |
+| consumer, 100 °/h | 9 km | 0.061 m | 0.061 m | 26.04 m | 28.69 m | 0.52 |
+| tactical, 1 °/h | 9 km | 0.057 m | 0.056 m | 2.17 m | 2.16 m | 0.92 |
+| navigation, 0.003 °/h | 9 km | 0.037 m | 0.036 m | 0.16 m | 0.17 m | 0.89 |
+| strategic, 0.0003 °/h | 9 km | 0.034 m | 0.033 m | 0.10 m | 0.07 m | 1.19 |
+
+**Consistency.** The NEES harness adds a gradient of `10⁻³ s⁻²`, about 650 times the
+Earth's, to the turning world, with a position fix every 20 s so that it reaches the
+covariance. Over 300 runs of 240 s the expected value is 21:
+
+| filter | NEES, gradient | velocity block |
+|---|---:|---:|
+| none in the world | 21.41 ± 0.54 | 2.99 |
+| told it | 21.43 ± 0.54 | 2.99 |
+| `A_t⁰` without it (a mutation) | 23.23 ± 0.58 | 3.31 |
+
+The accelerometer-bias block reads 3.34 ± 0.22 with no gradient at all and 3.36 with it,
+so that excess belongs to this sparse-fix setting and not to the gradient. The test pairs
+a run with and without the gradient on the same noise, which removes the sampling error,
+and allows the total to move by 0.5 and any block by 0.12. A filter not told the gradient
+must read over 100.
+
+**The linearisation.** `A_t⁰` with the gradient is held to a numerical Jacobian entry by
+entry, including the rows it reaches through the bias.
+
+### Whether it can detect anything
+
+- Removing the gradient from `A_t⁰` moves NEES by 1.8 and the velocity block by 0.32,
+  and fails the test. At one fix a second it moves neither, which is why fixes are 20 s
+  apart here.
+- With the gradient off, the free-inertial error follows `½ g φ t²` to 3 %, and a test
+  requires it.
+
+### What this does not show
+
+- A real IMU or a real outage. Everything here is simulated.
+- The vertical channel. The gradient is horizontal, and gravity does not change with
+  height in this filter. The ESKF's unaided height diverges, as any inertial system's
+  does: by 7.8 km after two hours of this same setup.
+- Ranges beyond 9 km, level flight being the only profile tested.
+

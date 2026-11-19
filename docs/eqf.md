@@ -904,13 +904,50 @@ and no more stack. The evidence is in
 **It is for a unit at or near its anchor.** The rotation is exact, but:
 
 - Gravity is one constant vector. The real one changes by about `g/R` per metre, 150
-  mGal at 1 km, and modelling that would give up group-affineness. There is no Schuler
-  behaviour either, for the same reason.
+  mGal at 1 km. There is no Schuler behaviour, for the same reason.
 - `ω` and the axes are the anchor's, and the plane leaves the ellipsoid by `L²/2R`.
 - Deflection of the vertical is not modelled, as in the ESKF.
 
-So it suits finding north and working close to where the unit started. A
-navigation-grade unit that travels should use the ESKF.
+So on its own it suits finding north and working close to where the unit started.
+
+### The gravity gradient
+
+`EqfOptions::gravity_gradient`, on top of `earth_in_group`, removes the first of those
+limits for the horizontal channels:
+
+```text
+v̇' = R(a_m − b_a) + g₀ + Γp − ω × v',    Γ = (g/R) diag(−1, −1, 0)
+```
+
+This is the term behind [Schuler tuning](https://en.wikipedia.org/wiki/Schuler_tuning).
+A position error tilts the gravity the filter expects, the tilt drives the velocity
+error back, and a free-inertial error swings with the period `2π√(R/g)`, 84.4 minutes,
+where without it a tilt error grows as `t²`.
+
+| | Earth in the group | with the gradient |
+|---|---|---|
+| gravity in the lift and `₂A` | `g₀` | `g₀ + Γp̂` |
+| `A_t⁰`, attitude to velocity | `g₀^` | `(g₀ + Γp̂)^ − Γp̂^` |
+| `A_t⁰`, position to velocity | 0 | `Γ` |
+| `A_t⁰`, attitude and position to bias | 0 | through `b ⊙ Π(Λ₁)` |
+| the filter's axes | stand for the local level | the anchor's, fixed |
+| velocity and attitude, in and out | as they are | rotated between the local axes and the anchor's |
+
+The last two rows matter as much as the term. `Anchor::to_local` is an exact Cartesian
+map, so with gravity leaning correctly the filter's attitude is relative to the anchor,
+and it differs from the local level by the angle the Earth curves through, `L/R`. That is
+1.4 mrad at 9 km, many times the attitude sigma of a good IMU.
+
+**It is not group affine.** `Γp` depends on the state, so the error dynamics stop being
+exactly autonomous. The departure is of order `g/R`, 1.5 × 10⁻⁶ s⁻², and
+[the NEES test](testing.md#layer-18--schulers-oscillation-and-the-gravity-gradient) finds
+no change in consistency at 650 times the Earth's value.
+
+**What is left.** The vertical gradient `+2g/R` is out on purpose: it is the instability
+of the unaided vertical channel, and it needs a height aid. So gravity does not change
+with height here, about 31 µg per 100 m, and the plane's curve puts a vertical error of
+`g L²/2R²` on the model, 1 µg at 9 km and 11 µg at 30 km by that formula. Runs have gone
+to 9 km. A navigation-grade unit going further should use the ESKF.
 
 ---
 
@@ -984,9 +1021,9 @@ harness code:
 
 | | dense `f64` | factored `f32` |
 |---|---|---|
-| `EqfEngine` | 4 704 bytes | **2 104 bytes** |
-| `EqfRewindEngine<120, 32>` | 25 704 bytes | 17 904 bytes |
-| peak stack, a late fix through the rewind layer included | 15 800 bytes | **14 392 bytes** |
+| `EqfEngine` | 4 712 bytes | **2 112 bytes** |
+| `EqfRewindEngine<120, 32>` | 25 728 bytes | 17 928 bytes |
+| peak stack, a late fix through the rewind layer included | 15 808 bytes | **14 400 bytes** |
 | instructions per `add_imu` | 4.51 million | **0.89 million** |
 | at an instruction per cycle, 168 MHz | 26.8 ms | **5.3 ms** |
 | panic machinery linked | none | none |
@@ -1053,7 +1090,7 @@ into the factored buffers, so no whole `Φ` or `f64` copy of `G` sits beside the
 Gram–Schmidt rows.
 
 On a Cortex-M4 a sample alone peaks at 14 160 bytes dense and 10 564 factored, and a
-sample that consumes a fix at 15 800 and 14 392.
+sample that consumes a fix at 15 808 and 14 400.
 
 ## Implementation map
 

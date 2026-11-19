@@ -329,6 +329,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **`EqfOptions::gravity_gradient`**, on top of `earth_in_group`, adds the horizontal
+  gravity gradient to the equivariant filter, so its free-inertial errors follow the
+  84.4-minute Schuler oscillation. After 42 minutes unaided from a 20 µrad tilt the error
+  is 254 m where it was 621 m. With it on, velocity and attitude cross between the local
+  axes and the anchor's. Off by default, and bit-identical when off. It gives up exact
+  group-affineness by a term of order `g/R`; the NEES test finds no change.
+  `EqFilter` and `EqfEngine` grow by 8 bytes, to 4 712 and 2 112 for the engine and
+  25 728 and 17 928 for `EqfRewindEngine<120, 32>`, and the peak stack on a Cortex-M4 by
+  the same 8, to 15 808 dense and 14 400 factored, with the option on or off. `GlobalFrame` gains the public field
+  `gravity_gradient`, and `Turning` in the CLI's NEES harness three more.
 - **`GinsEngine::apply_zero_rate`**, a zero-angular-rate update for stops, which
   observes the yaw-rate bias a zero-velocity update cannot. Through the rewind layer
   too. On the comma2k19 holdout it takes the heading RMS from 1.29° to 1.15°.

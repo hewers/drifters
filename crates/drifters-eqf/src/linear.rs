@@ -43,7 +43,9 @@
 use drifters_core::math::{Mat3, Matrix, Vec3};
 use drifters_core::F;
 
-use crate::group::{act_direction, act_position, act_velocity, Symmetry};
+use crate::group::{
+    act_direction, act_position, act_state, act_velocity, Algebra, State, Symmetry,
+};
 use crate::lie::Se23Tangent;
 use crate::lift::{GlobalFrame, Input};
 
@@ -103,6 +105,13 @@ pub type OutputMatrix = Matrix<3, DIM>;
 /// block of `₁A`, `₂A` takes the new `G` as it stands, and `₃A` becomes the
 /// body's rate relative to the frame, `Â ᴵω + γ̂_ω − ω`. The attitude column
 /// of the magnetometer row keeps the rate without `ω`.
+///
+/// # With a gravity gradient
+///
+/// `g` becomes `g(p̂) = g₀ + Γp̂` wherever it appears, and the gradient adds
+/// `Γ δp` to the velocity row of the lift, with `δp = ε₁,ρ − p̂^ ε₁,ω`. Carried
+/// through `Ad_X̂`, that reaches the velocity row and, because the bias rides on
+/// `Λ₁`, the bias rows too.
 pub fn state_matrix(x: &Symmetry, u: &Input, frame: impl Into<GlobalFrame>) -> StateMatrix {
     let mut m = StateMatrix::zeros();
     state_matrix_entries(x, u, frame.into(), |i, j, value| m.data[i][j] = value);
@@ -121,10 +130,9 @@ pub(crate) fn state_matrix_entries(
     frame: GlobalFrame,
     mut put: impl FnMut(usize, usize, F),
 ) {
-    let GlobalFrame {
-        gravity,
-        earth_rate,
-    } = frame;
+    let earth_rate = frame.earth_rate;
+    let gravity = frame.gravity_at(x.c.position);
+    let k = frame.gravity_gradient;
     let a = x.a();
     let mut block = |r0: usize, c0: usize, b: &Mat3| {
         for i in 0..3 {
@@ -136,7 +144,9 @@ pub(crate) fn state_matrix_entries(
 
     // ₁A: gravity couples attitude into velocity, velocity integrates into
     // position. The two non-zero blocks of the extended-pose dynamics.
-    block(3, 0, &gravity.skew());
+    if k == 0.0 {
+        block(3, 0, &gravity.skew());
+    }
     block(6, 3, &Mat3::identity());
     // The frame's rotation, on each of the three. Absent rather than zero in
     // a flat frame, so the factored form's sparse square still skips them.
@@ -175,6 +185,65 @@ pub(crate) fn state_matrix_entries(
         for j in 0..6 {
             put(9 + i, 9 + j, bias[(i, j)]);
         }
+    }
+
+    if k != 0.0 {
+        gradient_entries(x, gravity, k, &mut put);
+    }
+}
+
+/// What the gravity gradient adds to [`state_matrix`], and the attitude to
+/// velocity block it changes.
+///
+/// Apart, and not inlined, so that a filter without the gradient does not carry
+/// this function's matrices on the stack of the path that sets its peak.
+///
+/// The gradient reaches the bias rows because the lift's bias component is
+/// `b ⊙ Π(Λ₁)`, and `Λ₁` now moves with position.
+#[inline(never)]
+fn gradient_entries(x: &Symmetry, gravity: Vec3, k: F, put: &mut impl FnMut(usize, usize, F)) {
+    let position = x.c.position;
+    // Γ, and what it does to an attitude error through δp = −p̂^ ε₁,ω.
+    let gamma = Mat3::from_diagonal(&[-k, -k, 0.0]);
+    let attitude = gravity.skew() - gamma.matmul(&position.skew());
+    for i in 0..3 {
+        for j in 0..3 {
+            put(3 + i, j, attitude[(i, j)]);
+            put(3 + i, 6 + j, gamma[(i, j)]);
+        }
+    }
+
+    let estimate = act_state(x, &State::default());
+    let to_body = estimate.pose.rotation.transpose();
+    let column = |push: Vec3| {
+        let c = Se23Tangent::new(Vec3::ZERO, to_body * push, Vec3::ZERO);
+        let mapped = x
+            .adjoint_apply(Algebra {
+                c,
+                gamma: estimate.bias.bracket(c.pi()),
+                ..Algebra::ZERO
+            })
+            .to_array();
+        let mut rows = [0.0; 6];
+        for (slot, value) in rows.iter_mut().zip(mapped.iter().skip(9)) {
+            *slot = *value;
+        }
+        rows
+    };
+    let north = column(Vec3::new(-k, 0.0, 0.0));
+    let east = column(Vec3::new(0.0, -k, 0.0));
+    // `δp = ε₁,ρ − p̂^ ε₁,ω`, written out for the two axes with a gradient.
+    let Vec3 {
+        x: px,
+        y: py,
+        z: pz,
+    } = position;
+    for (i, (n, e)) in north.iter().zip(&east).enumerate() {
+        put(9 + i, 0, -e * pz);
+        put(9 + i, 1, n * pz);
+        put(9 + i, 2, e * px - n * py);
+        put(9 + i, 6, *n);
+        put(9 + i, 7, *e);
     }
 }
 
@@ -426,6 +495,32 @@ mod tests {
         let turn = (-frame.earth_rate).skew();
         for block in [0, 3, 6] {
             assert_eq!(analytic.block::<3, 3>(block, block), turn);
+        }
+    }
+
+    /// The gradient makes the system state dependent, so every block it reaches
+    /// is held to the numerical Jacobian, at a gradient large enough to show.
+    #[test]
+    fn the_state_matrix_matches_a_numerical_jacobian_with_a_gravity_gradient() {
+        let (x, u) = (observer(), input());
+        let frame = GlobalFrame::rotating(GRAVITY, Vec3::new(0.012, -0.007, 0.021))
+            .with_gravity_gradient(2.0e-3);
+        let analytic = state_matrix(&x, &u, frame);
+
+        for k in 0..DIM {
+            let e = basis(k);
+            let fwd = lift(&at(&e, H, &x), &u, frame).to_array();
+            let back = lift(&at(&e, -H, &x), &u, frame).to_array();
+
+            let mut d = [0.0; DIM];
+            for i in 0..DIM {
+                d[i] = (fwd[i] - back[i]) / (2.0 * H);
+            }
+            let column = x.adjoint_apply(Algebra::from_array(&d)).to_array();
+
+            for (i, value) in column.iter().enumerate() {
+                assert_close(*value, analytic[(i, k)], "A_t0", i, k);
+            }
         }
     }
 

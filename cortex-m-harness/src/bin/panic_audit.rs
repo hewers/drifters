@@ -65,7 +65,8 @@ fn main() -> ! {
                 Ned::ZERO,
                 Euler::new(0.0, 0.0, 0.0),
             )
-            .with_earth_in_group(earth_in_group),
+            .with_earth_in_group(earth_in_group)
+            .with_gravity_gradient(earth_in_group),
     ) else {
         loop {
             core::hint::spin_loop();
@@ -83,7 +84,8 @@ fn main() -> ! {
                 Ned::ZERO,
                 Euler::new(0.0, 0.0, 0.0),
             )
-            .with_earth_in_group(earth_in_group),
+            .with_earth_in_group(earth_in_group)
+            .with_gravity_gradient(earth_in_group),
     ) else {
         loop {
             core::hint::spin_loop();

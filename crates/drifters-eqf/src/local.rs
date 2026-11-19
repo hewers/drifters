@@ -29,6 +29,8 @@
 
 use drifters_core::earth::Wgs84;
 use drifters_core::frames::{Lla, Ned};
+#[allow(unused_imports)]
+use drifters_core::math::Real;
 use drifters_core::math::{Mat3, Vec3};
 use drifters_core::F;
 
@@ -74,6 +76,26 @@ impl Anchor {
         GlobalFrame::rotating(self.gravity, Wgs84::omega_ie_n(self.origin.lat))
     }
 
+    /// The horizontal gravity gradient at the anchor, `g/R`, s⁻².
+    ///
+    /// `R` is the mean radius of curvature there, plus the height. See
+    /// [`GlobalFrame::gravity_gradient`].
+    pub fn gravity_gradient(&self) -> F {
+        let (rm, rn) = Wgs84::radii(self.origin.lat);
+        self.gravity.z / (Real::sqrt(rm * rn) + self.origin.height)
+    }
+
+    /// The rotation from the local NED axes at `local` to the anchor's.
+    ///
+    /// [`Anchor::to_local`] is an exact Cartesian map, so the two sets of axes
+    /// differ by the angle the Earth curves through between the two places.
+    pub fn axes_at(&self, local: Vec3) -> Mat3 {
+        self.origin
+            .dcm_ecef_from_ned()
+            .transpose()
+            .matmul(&self.to_geodetic(local).dcm_ecef_from_ned())
+    }
+
     /// Geodetic position to local NED metres.
     #[inline]
     pub fn to_local(&self, position: Lla) -> Vec3 {
@@ -99,8 +121,6 @@ impl Anchor {
     /// error does.
     pub fn curvature_error(&self, range: F) -> F {
         let (rm, rn) = Wgs84::radii(self.origin.lat);
-        #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
-        use drifters_core::math::Real;
         let r = Real::sqrt(rm * rn);
         range * range / (2.0 * r)
     }

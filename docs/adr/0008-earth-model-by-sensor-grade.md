@@ -95,8 +95,11 @@ In simulation, a still 0.003 °/h unit starting 3° off in heading finds north t
 the ESKF's 0.025°. Compensating the input leaves it about 4° off. See
 [Layer 17](../testing.md#layer-17--the-earth-inside-the-group).
 
-**The model is for a unit at or near its anchor,** and the ESKF remains the choice
-for a navigation-grade unit that travels: see the last alternative below.
+**The model alone is for a unit at or near its anchor.** `EqfOptions::gravity_gradient`
+adds the horizontal gravity gradient, which gives the free-inertial errors their Schuler
+oscillation and extends it to the ranges in
+[eqf.md](../eqf.md#the-gravity-gradient). Past those the ESKF is the choice for a
+navigation-grade unit that travels: see the last alternative below.
 
 For gravity, in every band: **normal gravity, held piecewise constant and
 re-evaluated outside the filter.** `Anchor::with_gravity_at` performs the
@@ -167,6 +170,13 @@ group-affineness in every frame, and group-affineness is the property the EqF ex
 to exploit. It is left out, which is what bounds the in-group model. Gravity changes by
 about `g/R` per metre, so 150 mGal at 1 km, thirty times the accelerometer stability
 of the unit simulated above. The tangent plane's curvature, `L²/2R`, adds to it.
+
+The horizontal part of that can be had at a small price. `EqfOptions::gravity_gradient`
+carries `Γp̂` in the lift and in `A_t⁰`, giving up exact group-affineness by a term of
+order `g/R`, 1.5 × 10⁻⁶ s⁻², and leaves the system otherwise as it was. It is an option
+because the exactness is what the paper's filter is for, and a unit that stays near its
+anchor loses nothing without it. The vertical part stays out: it is the unstable
+vertical channel, and it needs a height aid.
 
 **Piecewise-constant gravity keeps the structure.** Holding `g` fixed within a
 segment preserves exactness within that segment, and the error is bounded and

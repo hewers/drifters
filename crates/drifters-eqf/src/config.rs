@@ -35,7 +35,9 @@ use crate::linear::DIM;
 ///   [`anchor`](Self::anchor), and gravity is the anchor's. Earth rotation is
 ///   left out unless asked for, which is done by correcting the input
 ///   ([`compensate_earth`](Self::compensate_earth)) or by turning the frame
-///   ([`earth_in_group`](Self::earth_in_group)).
+///   ([`earth_in_group`](Self::earth_in_group)), to which
+///   [`gravity_gradient`](Self::gravity_gradient) adds gravity that leans with
+///   position.
 /// - **Robustness is inflation first, a gate second.** See
 ///   [`gcu_alpha`](Self::gcu_alpha).
 ///
@@ -129,8 +131,8 @@ pub struct EqfOptions {
     /// the gyroscopes, which input correction cannot give. See
     /// [`GlobalFrame`](crate::lift::GlobalFrame) for the model and
     /// `docs/adr/0008` for what it leaves out: the frame is still one plane
-    /// with one gravity vector, so this suits a vehicle near its anchor and
-    /// not a long journey.
+    /// with one gravity vector, so on its own this suits a vehicle near its
+    /// anchor and not a long journey.
     ///
     /// [`nav_state`](crate::engine::EqfEngine::nav_state) and
     /// [`pva_std`](crate::engine::EqfEngine::pva_std) still report velocity
@@ -138,6 +140,18 @@ pub struct EqfOptions {
     /// filter's own velocity, which is not that: see
     /// [`GlobalFrame::group_velocity`](crate::lift::GlobalFrame::group_velocity).
     pub earth_in_group: bool,
+    /// Add the horizontal gravity gradient to
+    /// [`earth_in_group`](Self::earth_in_group), which gives the free-inertial
+    /// errors their Schuler oscillation.
+    ///
+    /// Without it a tilt error grows as `t²` when aiding stops, where a real
+    /// Earth bounds it. The filter's axes are then treated as what they are,
+    /// the anchor's and fixed, so velocity and attitude cross into the local
+    /// NED axes at the vehicle on the way in and out. The cost is exact
+    /// group-affineness: see [`crate::lift`]. Height still sees one gravity, so
+    /// the vertical channel stays bounded and unaided climbs are not corrected.
+    /// Reported sigmas stay about the anchor's axes.
+    pub gravity_gradient: bool,
     /// GCU convergence rate `α ∈ [0, 1]` — the lower, the faster — or `None`
     /// for no inflation at all. See [`crate::gcu`].
     ///
@@ -204,6 +218,7 @@ impl Default for EqfOptions {
             process_noise: ProcessNoise::from_imu_noise(&ImuNoise::default()),
             compensate_earth: false,
             earth_in_group: false,
+            gravity_gradient: false,
             gcu_alpha: Some(0.0),
             position_gate: None,
             velocity_gate: Some(chi_squared::P999[3]),
@@ -290,6 +305,13 @@ impl EqfOptions {
     /// [`earth_in_group`](Self::earth_in_group).
     pub fn with_earth_in_group(mut self, on: bool) -> Self {
         self.earth_in_group = on;
+        self
+    }
+
+    /// Add the horizontal gravity gradient, or stop. See
+    /// [`gravity_gradient`](Self::gravity_gradient).
+    pub fn with_gravity_gradient(mut self, on: bool) -> Self {
+        self.gravity_gradient = on;
         self
     }
 
@@ -392,6 +414,9 @@ impl EqfOptions {
         if self.compensate_earth && self.earth_in_group {
             return Some(ConfigError::ConflictingEarthModels);
         }
+        if self.gravity_gradient && !self.earth_in_group {
+            return Some(ConfigError::GravityGradientNeedsEarthInGroup);
+        }
         if self.anchor.is_some_and(|a| !a.is_valid()) {
             return Some(ConfigError::InvalidAnchor);
         }
@@ -478,6 +503,10 @@ pub enum ConfigError {
     /// were both set. Each accounts for the whole of the Earth's rotation, so
     /// together they would remove it twice.
     ConflictingEarthModels,
+    /// [`EqfOptions::gravity_gradient`] was set without
+    /// [`EqfOptions::earth_in_group`]. The gradient assumes the filter's frame
+    /// is fixed to the Earth.
+    GravityGradientNeedsEarthInGroup,
 }
 
 impl ConfigError {
@@ -497,6 +526,9 @@ impl ConfigError {
             }
             Self::InvalidGate => "a gate threshold must be finite and > 0",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",
+            Self::GravityGradientNeedsEarthInGroup => {
+                "the gravity gradient needs the Earth's rotation in the group"
+            }
             Self::ConflictingEarthModels => {
                 "Earth rotation can be compensated or kept in the group, not both"
             }

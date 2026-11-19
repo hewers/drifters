@@ -53,8 +53,9 @@ rm -f "$reports/$core"-*
 #   `f32-covariance`, measured at 7 704 B: fitting where 21 states do not is the
 #   whole point of that configuration.
 # - 20 KiB for the equivariant filter in either covariance form, the same in
-#   every configuration, with the Earth's rotation in its group or not.
-#   Measured at 15 800 B dense and 14 392 B factored, the same either way.
+#   every configuration, with the Earth's rotation and the gravity gradient in
+#   its model or not. Measured at 15 808 B dense and 14 400 B factored, the same
+#   in each.
 # - 8 KiB for the initial alignment, which runs before an engine exists and so
 #   is not added to either figure above.
 #
@@ -114,6 +115,8 @@ for configuration in "${configurations[@]}"; do
   require_under PEAK_EQF_F32 "$(peak PEAK_EQF_F32 "$log")" "$eqf_ceiling"
   require_under PEAK_EQF_EARTH "$(peak PEAK_EQF_EARTH "$log")" "$eqf_ceiling"
   require_under PEAK_EQF_EARTH_F32 "$(peak PEAK_EQF_EARTH_F32 "$log")" "$eqf_ceiling"
+  require_under PEAK_EQF_GRADIENT "$(peak PEAK_EQF_GRADIENT "$log")" "$eqf_ceiling"
+  require_under PEAK_EQF_GRADIENT_F32 "$(peak PEAK_EQF_GRADIENT_F32 "$log")" "$eqf_ceiling"
   require_under PEAK_ALIGN "$(peak PEAK_ALIGN "$log")" "$align_ceiling"
   check_arithmetic cortex-m-harness
 

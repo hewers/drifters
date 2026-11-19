@@ -924,7 +924,37 @@ fn main() -> ! {
             peak: "PEAK_EQF_EARTH_F32",
         },
     );
-    let eqf_healthy = dense && factored && dense_turning && factored_turning;
+    // And with the gravity gradient, whose time update has more of `A_t⁰` to
+    // fill and whose fixes cross between the local axes and the anchor's.
+    let gradient = turning.with_gravity_gradient(true);
+    let dense_gradient = measure_eqf::<DenseEqf>(
+        bottom,
+        &mut syst,
+        calibration,
+        gradient,
+        &EqfRun {
+            name: "dense f64, gravity gradient",
+            instructions: "INSTRUCTIONS_EQF_GRADIENT",
+            peak: "PEAK_EQF_GRADIENT",
+        },
+    );
+    let factored_gradient = measure_eqf::<Ud<f32>>(
+        bottom,
+        &mut syst,
+        calibration,
+        gradient,
+        &EqfRun {
+            name: "factored f32, gravity gradient",
+            instructions: "INSTRUCTIONS_EQF_GRADIENT_F32",
+            peak: "PEAK_EQF_GRADIENT_F32",
+        },
+    );
+    let eqf_healthy = dense
+        && factored
+        && dense_turning
+        && factored_turning
+        && dense_gradient
+        && factored_gradient;
     // Not `PEAK` either, and for the same reason.
     let aligned = measure_aligner(bottom, &mut syst, calibration);
     let healthy = healthy && eqf_healthy && aligned;
