@@ -64,7 +64,7 @@ serde = ["dep:serde", "drifters-core/serde"]
 ## Nothing here allocates — this crate has no heap at all, and [`smoother`] is
 ## always available, writing into a caller-provided slice. What the feature
 ## costs is **space**: the recorder is three 21x21 matrices, more than five
-## times the rest of the engine, taking it from 3 328 bytes to 21 576. A filter that will
+## times the rest of the engine, taking it from 3 336 bytes to 21 584. A filter that will
 ## never smooth should not carry them.
 smoothing = []
 

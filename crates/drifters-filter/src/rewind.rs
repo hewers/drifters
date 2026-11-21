@@ -95,13 +95,13 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 328 | **21 576** |
-//! | `f32-covariance` | 2 408 | 18 816 |
-//! | `reduced-state` | 2 392 | 18 768 |
-//! | both | 1 912 | 17 328 |
-//! | `smoothing` | 21 576 | 76 320 |
+//! | default | 3 336 | **21 600** |
+//! | `f32-covariance` | 2 416 | 18 840 |
+//! | `reduced-state` | 2 400 | 18 792 |
+//! | both | 1 920 | 17 352 |
+//! | `smoothing` | 21 584 | 76 344 |
 //!
-//! The default row is 3 × 3 328 for the engines, 120 × 64 for the samples,
+//! The default row is 3 × 3 336 for the engines, 120 × 64 for the samples,
 //! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!

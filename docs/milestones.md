@@ -50,6 +50,19 @@ hand on a self-hosted runner, and it has not been run.
 
 ## Open work
 
+### Release and CI
+
+- **`cargo publish --dry-run --workspace` as a CI job.** It verifies that the
+  six crates package and resolve in dependency order before a tag does it for
+  real. It passes today and is run by hand; `releasing.md` no longer claims only
+  the root crate can dry-run.
+- **A scheduled advisory run.** Nothing runs on a schedule, so a new RUSTSEC
+  advisory surfaces only on the next push. And `cargo deny check` audits the
+  root workspace alone: `fuzz/Cargo.lock` and `examples/rtic-imu/Cargo.lock`
+  have their own dependency graphs, so an advisory that reaches only them — as
+  heapless 0.9.3 did — cannot fail the `deny` job. A nightly advisory check over
+  each lockfile would close both gaps.
+
 ### Needs a board
 
 Nothing here has run on silicon or on a physical IMU. Every result in this

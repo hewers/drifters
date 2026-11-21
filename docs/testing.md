@@ -142,7 +142,7 @@ cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
 ```
 
 The `test` profile is optimised (see the top of this document), so this takes
-about **2.5 s in a plain `cargo test` against 11 s in release**; it needs no
+about **3 s in a plain `cargo test`, and 2.3 s in release**; it needs no
 `--release` and no environment variable.
 
 ### Seeing it rather than reading it

@@ -27,14 +27,14 @@ under QEMU.
 | | measured |
 |---|---|
 | **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
-| | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 9.6 s |
+| | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 2.3 s |
 | | per-axis bias below 1 mm |
 | **Footprint** | **8.7 KiB** peak stack (15-state), 13.2 KiB (21-state), on Cortex-M4, late fixes included |
 | | 15.4 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 815 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 837 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
