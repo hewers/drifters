@@ -405,7 +405,11 @@ the list below is what the release *is* rather than what changed.
   QEMU-measured figures were re-run and move: the ESKF's peak stack is 13 576
   bytes at 21 states (11 936 with `f32-covariance`) and 8 944 at 15 (7 760), the
   EqF engine 15 880 dense and 14 464 factored, and the RTIC example's IMU
-  backlog peaks at 8 of 32, not 12.
+  backlog peaks at 8 of 32, not 12. The instruction-count tables were
+  re-measured too and move by under 1 %: the ESKF's `add_imu` is 1 598 320
+  instructions on the Cortex-M4 (348 920 with `f32-covariance`, 884 800 and
+  231 320 at 15 states), 88 360 on the Cortex-M7 (61 560 at `opt-level = 3`),
+  and the EqF's dense form 4 509 800 there.
 
 - **The KF-GINS reference solution is scored, and the dataset runs in CI.**
   `truth.nav`, KF-GINS's own 200 Hz reference trajectory, is independent of this

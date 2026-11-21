@@ -593,11 +593,11 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 1597560 (39939 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4505880 (112647 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 889600 (22240 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_EARTH add_imu = 4719600 (117990 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_EARTH_F32 add_imu = 910680 (22767 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 1598320 (39958 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4509800 (112745 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 893480 (22337 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH add_imu = 4723480 (118087 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH_F32 add_imu = 914520 (22863 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN add_imu = 28880 (722 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN_WORST add_imu = 383080 (9577 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN_WORST add_gnss = 58960 (1474 ticks; only under -icount shift=0)
@@ -614,14 +614,14 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 
 | configuration | instructions | SysTick ticks |
 |---|---|---|
-| ESKF, 21-state, `f64` | **1 597 560** | 39 939 |
-| ESKF, 21-state, `f32-covariance` | **348 120** | 8 703 |
-| ESKF, 15-state (`reduced-state`) | **884 000** | 22 100 |
-| ESKF, 15-state, `f32-covariance` | **230 560** | 5 764 |
-| EqF engine, dense `f64` | **4 505 880** | 112 647 |
-| EqF engine, factored `f32` | **889 600** | 22 240 |
-| EqF engine, dense, Earth in the group | **4 719 600** | 117 990 |
-| EqF engine, factored, Earth in the group | **910 680** | 22 767 |
+| ESKF, 21-state, `f64` | **1 598 320** | 39 958 |
+| ESKF, 21-state, `f32-covariance` | **348 920** | 8 723 |
+| ESKF, 15-state (`reduced-state`) | **884 800** | 22 120 |
+| ESKF, 15-state, `f32-covariance` | **231 320** | 5 783 |
+| EqF engine, dense `f64` | **4 509 800** | 112 745 |
+| EqF engine, factored `f32` | **893 480** | 22 337 |
+| EqF engine, dense, Earth in the group | **4 723 480** | 118 087 |
+| EqF engine, factored, Earth in the group | **914 520** | 22 863 |
 
 The single-precision covariance removes **78 %** of the work at 21 states and
 74 % at 15, at no measurable cost in accuracy. Dropping the six scale-factor
@@ -693,12 +693,13 @@ answers all of them, which is worth about 50 thousand instructions per `add_imu`
 
 **`core::simd`** expresses the lane-split dot products as `Simd<Scalar, 8>` rather
 than as a hand-written accumulator array. Instructions per `add_imu` on the
-Cortex-M4, with nightly Rust 1.102, whose scalar counts equal the stable ones above:
+Cortex-M4, with nightly Rust 1.102 (its own scalar build, which differs from the
+stable one above by about 1 %):
 
 | | scalar | `core::simd` | |
 |---|---|---|---|
-| `f64` | 1 597 560 | 1 594 200 | −0.2 % |
-| `f32-covariance` | 348 120 | 343 080 | −1.4 % |
+| `f64` | 1 580 080 | 1 576 760 | −0.2 % |
+| `f32-covariance` | 345 760 | 340 720 | −1.5 % |
 
 This is on a part with no SIMD unit at all, so eight lanes lower to eight
 independent FPU operations. The scalar path gets nearly all of that by itself,
@@ -745,14 +746,14 @@ Instructions per `add_imu`, the mean of 200 steps:
 
 | configuration | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
 |---|---|---|---|
-| ESKF, 21-state, `f64` | 1 597 560 | **88 200** | 61 400 |
-| ESKF, 21-state, `f32-covariance` | 348 120 | **86 120** | 61 160 |
-| ESKF, 15-state (`reduced-state`) | 884 000 | **55 360** | 32 520 |
-| ESKF, 15-state, `f32-covariance` | 230 560 | **53 360** | 31 760 |
-| EqF engine, dense `f64` | 4 505 880 | **277 120** | 110 360 |
-| EqF engine, factored `f32` | 889 600 | **333 640** | 149 480 |
-| EqF engine, dense, Earth in the group | 4 719 600 | **284 520** | 113 480 |
-| EqF engine, factored, Earth in the group | 910 680 | **336 280** | 150 000 |
+| ESKF, 21-state, `f64` | 1 598 320 | **88 360** | 61 560 |
+| ESKF, 21-state, `f32-covariance` | 348 920 | **86 280** | 61 320 |
+| ESKF, 15-state (`reduced-state`) | 884 800 | **55 520** | 32 680 |
+| ESKF, 15-state, `f32-covariance` | 231 320 | **53 560** | 31 920 |
+| EqF engine, dense `f64` | 4 509 800 | **277 400** | 112 160 |
+| EqF engine, factored `f32` | 893 480 | **333 920** | 150 800 |
+| EqF engine, dense, Earth in the group | 4 723 480 | **284 800** | 115 320 |
+| EqF engine, factored, Earth in the group | 914 520 | **336 520** | 151 360 |
 
 Hardware `f64` removes 94 % of the instructions of both the ESKF and the dense
 equivariant filter, and it changes which configuration to choose:
@@ -765,7 +766,7 @@ equivariant filter, and it changes which configuration to choose:
   configuration measured, at about a third of the dense form.
 - **`opt-level = 3` helps the dense filter most.** It removes 60 % of that filter's
   instructions and 30 % of the ESKF's. It takes code from 142 KB to 245 KB, and the
-  ESKF's peak stack from 13 236 bytes to 12 364.
+  ESKF's peak stack from 13 236 bytes to 12 372.
 
 Peak stack is 13 236 bytes for the ESKF (8 660 at 15 states), 14 732 for the
 dense equivariant filter and 13 476 for the factored one. Code is 31 % smaller
