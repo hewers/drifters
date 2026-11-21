@@ -231,7 +231,7 @@ enum Route {
 }
 
 impl Route {
-    /// Course, its rate and the speed at `t`.
+    /// Course, its rate, and the speed at `t`.
     fn at(self, t: f64) -> (f64, f64, f64) {
         match self {
             Route::Local => (0.05 * t, 0.05, 10.0),

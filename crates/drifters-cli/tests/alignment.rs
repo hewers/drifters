@@ -127,7 +127,7 @@ impl Scenario {
     }
 }
 
-/// The vehicle, its sensor and that sensor's errors.
+/// The vehicle, its sensor, and that sensor's errors.
 struct World {
     scenario: Scenario,
     rng: Rng,

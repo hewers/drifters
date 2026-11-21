@@ -276,7 +276,7 @@ jobs:
           key: kf-gins-${{ hashFiles('scripts/fetch-kf-gins.sh') }}
       - name: fetch the dataset, pinned and checksummed
         run: scripts/fetch-kf-gins.sh
-      # `--nocapture` puts the accuracy, heading and NEES figures in the log,
+      # `--nocapture` puts the accuracy, heading, and NEES figures in the log,
       # so a regression is readable without re-running anything.
       - run: cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
       - run: cargo test -p drifters-cli --test kf_gins_truth -- --nocapture

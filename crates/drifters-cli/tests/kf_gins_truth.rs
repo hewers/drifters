@@ -49,7 +49,7 @@ use drifters_eqf::EqfEngine;
 use drifters_filter::engine::{error_between, GinsEngine};
 use drifters_filter::state::N_STATE;
 
-/// States scored: position, velocity and attitude. The rest of the state — the
+/// States scored: position, velocity, and attitude. The rest of the state — the
 /// biases, scale factors, lever arm and magnetometer calibration — has no
 /// counterpart in `truth.nav`.
 const NAV_STATES: usize = 9;
@@ -81,7 +81,7 @@ struct Tolerances {
 /// to be, per axis, metres. For the ESKF that is zero, observed at 0.3 mm. For
 /// the EqF it is the distance between its lever arm and the configured one,
 /// observed to match within 0.4 mm. A constant in the body frame is what a
-/// lever-arm, mounting or frame fault produces, so the bound is tight.
+/// lever-arm, mounting, or frame fault produces, so the bound is tight.
 const BODY_OFFSET_M: f64 = 0.002;
 
 const ESKF_TOLERANCES: Tolerances = Tolerances {
@@ -169,7 +169,7 @@ struct Score {
     velocity: Errors,
     heading: Running,
     nees: Running,
-    /// NEES of position, velocity and attitude, each as its own marginal.
+    /// NEES of position, velocity, and attitude, each as its own marginal.
     nees_blocks: [Running; 3],
     epochs: u64,
 }

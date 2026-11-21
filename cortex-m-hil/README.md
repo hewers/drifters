@@ -8,7 +8,7 @@ each estimator in real time.
 
 > **This has not yet run on hardware.** The firmware builds for the board, and
 > its emulated form passes on QEMU's Cortex-M7 in CI, against a register-level
-> model of the sensor. The clock tree, I²C, RTT and the DWT path have never
+> model of the sensor. The clock tree, I²C, RTT, and the DWT path have never
 > executed on silicon, and this repository contains no measured cycle count.
 
 ## What to buy
@@ -19,7 +19,7 @@ each estimator in real time.
 | **X-NUCLEO-IKS01A3** | only for the IMU run: an LSM6DSO on a shield that plugs into the board's Arduino headers, no wiring |
 
 Check the FPU before substituting another board. Many Cortex-M7 parts,
-including the STM32F72x, F73x, F74x and F75x, have a single-precision FPU; the
+including the STM32F72x, F73x, F74x, and F75x, have a single-precision FPU; the
 firmware reads the core's feature register and refuses to run on those.
 
 ## Running it

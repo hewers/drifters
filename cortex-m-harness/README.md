@@ -31,7 +31,7 @@ covariance and `PEAK_EQF_F32` with the factored single-precision one, and
 in the filter's group; CI holds
 the ESKF under 15 KiB (13 KiB with `f32-covariance`, 10 and 9 KiB at 15 states)
 and all four EqF figures under 20 KiB. `PEAK_ALIGN` is the
-initial alignment's deepest call, over a velocity, a position-only and a
+initial alignment's deepest call, over a velocity, a position-only, and a
 gyrocompass alignment that must each reach the right answer; CI holds it under
 8 KiB. `src/bin/panic_audit.rs` is a second binary that links only the
 data paths — both estimators, both EqF covariance forms, both rewind layers and
@@ -70,7 +70,7 @@ do not show.
 | instructions retired | **exact** under `-icount shift=0`; meaningless without it |
 | cycle counts, wall-clock timing | **do not use** |
 
-QEMU models no pipeline, no cache, no flash wait states and no FPU latency, so
+QEMU models no pipeline, no cache, no flash wait states, and no FPU latency, so
 it cannot tell you how long anything takes. That is why this harness reports
 stack and size and deliberately reports no timing.
 

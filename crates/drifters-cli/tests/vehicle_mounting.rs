@@ -45,7 +45,7 @@ fn imu_noise() -> ImuNoise {
     }
 }
 
-/// The vehicle, its sensor and that sensor's errors.
+/// The vehicle, its sensor, and that sensor's errors.
 struct World {
     rng: Rng,
     start: f64,
