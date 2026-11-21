@@ -1216,7 +1216,7 @@ After **every** call, whatever it was given:
 | no panic | the call returned |
 | finite output | navigation state, IMU errors, antenna position, standard deviations, covariance and last NIS |
 | non-negative `D` | every covariance factor is finite and every `D` is at least zero; the dense form has no `D`, and round-off may leave a variance a hair below zero, so it is held to being finite |
-| rejection, not absorption | input that is invalid was reported, and the engine is bit for bit what it was apart from the counter that records the drop — an invalid IMU sample bumps `invalid_imu_count` and nothing else |
+| rejection, not absorption | input that is invalid was reported, and the engine is bit for bit what it was apart from the counter that records the drop — an invalid IMU sample bumps `invalid_imu_count` and nothing else, and the count is compared with the number pushed after every call, so that a late fix applied by rewinding cannot take it back |
 
 Finite output is asserted for all input and not only for finite input, because
 the last property makes those the same thing: non-finite input never gets in.

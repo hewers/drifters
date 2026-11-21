@@ -1022,7 +1022,7 @@ harness code:
 | | dense `f64` | factored `f32` |
 |---|---|---|
 | `EqfEngine` | 4 720 bytes | **2 120 bytes** |
-| `EqfRewindEngine<120, 32>` | 25 752 bytes | 17 952 bytes |
+| `EqfRewindEngine<120, 32>` | 25 760 bytes | 17 960 bytes |
 | peak stack, a late fix through the rewind layer included | 15 808 bytes | **14 400 bytes** |
 | instructions per `add_imu` | 4.51 million | **0.89 million** |
 | at an instruction per cycle, 168 MHz | 26.8 ms | **5.3 ms** |

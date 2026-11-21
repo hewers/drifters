@@ -74,10 +74,10 @@
 //!
 //! # Memory
 //!
-//! Three engines, the two rings and 72 bytes of bookkeeping. For
+//! Three engines, the two rings and 80 bytes of bookkeeping. For
 //! `EqfRewindEngine<120, 32>`, the size the ESKF's is quoted at — a 200 Hz
-//! IMU and 300 ms of latency — that is 3 × 4 720 + 120 × 64 + 32 × 120 + 72 =
-//! **25 752 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
+//! IMU and 300 ms of latency — that is 3 × 4 720 + 120 × 64 + 32 × 120 + 80 =
+//! **25 760 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.
 //! The engines are the larger part, for the reason [`EqfEngine`] is larger
 //! than the ESKF's: a dense covariance.
 
@@ -319,7 +319,10 @@ impl<const SAMPLES: usize, const EVENTS: usize, C: Covariance> EqfRewindEngine<S
         self.inner.stale_fix_count()
     }
 
-    /// See [`EqfEngine::invalid_imu_count`].
+    /// IMU samples refused as invalid, a late fix or not. Kept by the rewind
+    /// layer, which refuses them before the engine sees one, so
+    /// [`Self::engine`]'s own count does not move. See
+    /// [`Rewind::invalid_imu_count`].
     #[inline]
     pub fn invalid_imu_count(&self) -> u32 {
         self.inner.invalid_imu_count()
@@ -729,10 +732,10 @@ mod tests {
             3 * size_of::<EqfEngine>()
                 + 120 * size_of::<ImuSample>()
                 + 32 * size_of::<Record<Aid>>()
-                + 72,
-            "three engines, the two rings, and 72 bytes of bookkeeping"
+                + 80,
+            "three engines, the two rings, and 80 bytes of bookkeeping"
         );
-        assert_eq!(size_of::<Representative>(), 25_752);
+        assert_eq!(size_of::<Representative>(), 25_760);
     }
 
     /// The factored, single-precision engine through the same layer. The
@@ -777,7 +780,7 @@ mod tests {
         assert_eq!(size_of::<Ud<f32>>(), 924);
         assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_264);
         assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_120);
-        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_952);
+        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_960);
     }
 
     #[test]

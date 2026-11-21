@@ -95,14 +95,14 @@
 //!
 //! | features | `GinsEngine` | `RewindEngine<120, 32>` |
 //! |---|---|---|
-//! | default | 3 336 | **21 600** |
-//! | `f32-covariance` | 2 416 | 18 840 |
-//! | `reduced-state` | 2 400 | 18 792 |
-//! | both | 1 920 | 17 352 |
-//! | `smoothing` | 21 584 | 76 344 |
+//! | default | 3 336 | **21 608** |
+//! | `f32-covariance` | 2 416 | 18 848 |
+//! | `reduced-state` | 2 400 | 18 800 |
+//! | both | 1 920 | 17 360 |
+//! | `smoothing` | 21 584 | 76 352 |
 //!
 //! The default row is 3 × 3 336 for the engines, 120 × 64 for the samples,
-//! 32 × 120 for the aiding records and 72 of bookkeeping, pinned by
+//! 32 × 120 for the aiding records and 80 of bookkeeping, pinned by
 //! `the_wrapper_has_its_documented_footprint`.
 //!
 //! The last row is why this type does not expose `GinsEngine::record`.
@@ -398,7 +398,10 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
         self.inner.stale_fix_count()
     }
 
-    /// See [`GinsEngine::invalid_imu_count`].
+    /// IMU samples refused as invalid, a late fix or not. Kept by the rewind
+    /// layer, which refuses them before the engine sees one, so
+    /// [`Self::engine`]'s own count does not move. See
+    /// [`Rewind::invalid_imu_count`].
     #[inline]
     pub fn invalid_imu_count(&self) -> u32 {
         self.inner.invalid_imu_count()
@@ -1010,6 +1013,34 @@ mod tests {
         );
     }
 
+    /// Against the real engine: two samples refused, then a fix late enough
+    /// to be applied by rewinding. The count is the stream's and has to read
+    /// the same afterwards. Held in the engine it read zero, because the
+    /// anchor a rewind restores was taken before either was refused.
+    #[test]
+    fn a_rewind_keeps_the_count_of_refused_samples() {
+        let mut late = RewindEngine::<120, 32>::new(options()).unwrap();
+        for i in 0..40 {
+            late.add_imu(sample(i)).unwrap();
+        }
+        let refused = ImuSample {
+            dvel: Vec3::new(F::NAN, 0.0, 0.0),
+            ..sample(40)
+        };
+        late.add_imu(refused).unwrap();
+        late.add_imu(refused).unwrap();
+        for i in 40..50 {
+            late.add_imu(sample(i)).unwrap();
+        }
+        assert_eq!(late.invalid_imu_count(), 2);
+        assert_eq!(late.imu_gap_count(), 0, "a refused sample is not a gap");
+
+        let outcome = late.add_gnss(fix_at(0.305, 7)).unwrap();
+        assert!(matches!(outcome, FixOutcome::Rewound { .. }), "{outcome:?}");
+        assert_eq!(late.invalid_imu_count(), 2);
+        assert_eq!(late.imu_gap_count(), 0);
+    }
+
     #[test]
     fn the_wrapper_has_its_documented_footprint() {
         use core::mem::size_of;
@@ -1020,8 +1051,8 @@ mod tests {
             3 * size_of::<GinsEngine>()
                 + 120 * size_of::<ImuSample>()
                 + 32 * size_of::<Record<Aid>>()
-                + 72,
-            "three engines, the two rings, and 72 bytes of bookkeeping"
+                + 80,
+            "three engines, the two rings, and 80 bytes of bookkeeping"
         );
         #[cfg(not(any(
             feature = "reduced-state",
@@ -1031,7 +1062,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_600);
+            assert_eq!(size_of::<Representative>(), 21_608);
         }
     }
 

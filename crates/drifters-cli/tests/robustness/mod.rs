@@ -466,6 +466,10 @@ pub trait Subject {
 
     fn engine(&self) -> &Self::Engine;
     fn imu(&mut self, sample: ImuSample) -> Result<(), FilterError>;
+    /// How many IMU samples this subject has refused as invalid. Asked of the
+    /// subject and not of [`Subject::engine`]: behind the rewind layer the
+    /// engine never sees a refused sample, and the layer keeps the count.
+    fn invalid_imu_count(&self) -> u32;
     fn fix(&mut self, fix: GnssFix) -> FixReport;
 
     /// `None` when this engine has no such aiding call.
@@ -513,6 +517,10 @@ impl Subject for GinsEngine {
         self
     }
 
+    fn invalid_imu_count(&self) -> u32 {
+        GinsEngine::invalid_imu_count(self)
+    }
+
     fn imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
         self.add_imu(sample)
     }
@@ -555,6 +563,10 @@ impl Subject for RewindEngine<SAMPLES, EVENTS> {
 
     fn engine(&self) -> &GinsEngine {
         RewindEngine::engine(self)
+    }
+
+    fn invalid_imu_count(&self) -> u32 {
+        RewindEngine::invalid_imu_count(self)
     }
 
     fn imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
@@ -613,6 +625,10 @@ macro_rules! eqf_subject {
                 self
             }
 
+            fn invalid_imu_count(&self) -> u32 {
+                EqfEngine::invalid_imu_count(self)
+            }
+
             fn imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
                 self.add_imu(sample)
             }
@@ -637,6 +653,10 @@ macro_rules! eqf_subject {
 
             fn engine(&self) -> &Self::Engine {
                 EqfRewindEngine::engine(self)
+            }
+
+            fn invalid_imu_count(&self) -> u32 {
+                EqfRewindEngine::invalid_imu_count(self)
             }
 
             fn imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
@@ -903,6 +923,11 @@ pub fn drive<S: Subject>(subject: &mut S, script: &[Op]) {
     }
 
     let mut clock = start_time();
+    // Invalid IMU samples pushed so far. The subject's count must equal it
+    // after every call, not only the call that pushed one: a late fix is
+    // applied by restoring an earlier copy of the engine, and a count that
+    // went back with it would read right until then.
+    let mut refused_samples = 0u32;
     for (step, op) in script.iter().enumerate() {
         let before = fingerprint(subject);
         // `Some(reported)` when the input was invalid: did the call say so?
@@ -931,17 +956,11 @@ pub fn drive<S: Subject>(subject: &mut S, script: &[Op]) {
                     dvel: force + *dvel,
                 };
                 let invalid = imu_is_invalid(&sample);
-                let counted = subject.engine().invalid_imu_count();
                 let result = subject.imu(sample);
                 if invalid {
                     // The drop is recorded even though nothing else moves.
-                    if subject.engine().invalid_imu_count() != counted + 1 {
-                        fail(
-                            step,
-                            Some(op),
-                            "an invalid IMU sample was not counted".into(),
-                        );
-                    }
+                    // Checked below, with every other call.
+                    refused_samples = refused_samples.saturating_add(1);
                     Some(result == Ok(()))
                 } else {
                     None
@@ -1015,6 +1034,16 @@ pub fn drive<S: Subject>(subject: &mut S, script: &[Op]) {
 
         if let Err(what) = check(subject) {
             fail(step, Some(op), what);
+        }
+        let counted = subject.invalid_imu_count();
+        if counted != refused_samples {
+            fail(
+                step,
+                Some(op),
+                format!(
+                    "{refused_samples} invalid IMU samples were pushed and the count reads {counted}"
+                ),
+            );
         }
         if let Some(reported) = refusal {
             if !reported {

@@ -174,6 +174,12 @@ noticing it. A caller that knows which it was re-anchors or reinitialises; one
 that does not can at least see that the samples it integrated were not
 contiguous.
 
+Behind the rewind layer the count of refused samples is the layer's own. A late
+fix is applied by restoring an earlier copy of the engine, and a count carried
+in that copy would go back to what it was when the copy was taken. The gap
+count needs no such care: a replay pushes the same samples again and finds the
+same gaps.
+
 ### A fix that arrives after its epoch
 
 The diagram assumes the fix is in hand before the interval that contains it is
@@ -347,16 +353,16 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 336 | **21 600** |
-| `f32-covariance` | 2 416 | 18 840 |
-| `reduced-state` | 2 400 | 18 792 |
-| both | 1 920 | 17 352 |
+| default | 3 336 | **21 608** |
+| `f32-covariance` | 2 416 | 18 848 |
+| `reduced-state` | 2 400 | 18 800 |
+| both | 1 920 | 17 360 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 752 bytes** with
-the dense covariance and 17 952 with the factored `f32` one: the rings are
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 760 bytes** with
+the dense covariance and 17 960 with the factored `f32` one: the rings are
 identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.

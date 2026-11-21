@@ -86,7 +86,7 @@
 //!
 //! # Memory
 //!
-//! Three engines, `SAMPLES` IMU samples, `EVENTS` [`Record`]s and 72 bytes of
+//! Three engines, `SAMPLES` IMU samples, `EVENTS` [`Record`]s and 80 bytes of
 //! bookkeeping, and nothing else. A replay runs in place on the live engine,
 //! so it adds no engine-sized temporary to the stack.
 //!
@@ -279,6 +279,10 @@ pub struct Rewind<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> {
     events_len: usize,
     rewinds: u32,
     stale_fixes: u32,
+    /// Invalid IMU samples refused. Kept here and not read from the engine: a
+    /// rewind restores an anchor, and a count the anchor carried would go
+    /// back to what it was when the anchor was taken.
+    invalid_imu: u32,
     dropped_events: u32,
     replayed_samples: u64,
     longest_replay: u32,
@@ -314,6 +318,7 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
             events_len: 0,
             rewinds: 0,
             stale_fixes: 0,
+            invalid_imu: 0,
             dropped_events: 0,
             replayed_samples: 0,
             longest_replay: 0,
@@ -361,14 +366,23 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         self.stale_fixes
     }
 
-    /// IMU samples the engine refused as invalid. See
-    /// [`Estimator::invalid_imu_count`].
+    /// IMU samples refused as invalid. See [`Estimator::invalid_imu_count`].
+    ///
+    /// Counted by this type and not by the engine it wraps, which never sees
+    /// an invalid sample: [`Rewind::engine`]'s own count stays where it was
+    /// when it was wrapped. A count held in the engine would be lost to every
+    /// rewind, because the anchor a rewind restores was taken before the
+    /// samples refused since, and those are not in the ring to be refused
+    /// again.
     #[inline]
     pub fn invalid_imu_count(&self) -> u32 {
-        self.live.invalid_imu_count()
+        self.invalid_imu
     }
 
     /// Times the IMU stream skipped time. See [`Estimator::imu_gap_count`].
+    ///
+    /// The engine's own count: a replay pushes the same samples over the
+    /// anchor again and finds the same gaps.
     #[inline]
     pub fn imu_gap_count(&self) -> u32 {
         self.live.imu_gap_count()
@@ -403,19 +417,20 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
 
     /// Push one IMU sample. See [`Estimator::add_imu`].
     ///
-    /// An invalid sample is dropped by the engine and so is not recorded. A
-    /// sample the engine returns an error for is not recorded either, and the
-    /// record is no longer a faithful history after one.
+    /// An invalid sample is dropped and counted in
+    /// [`Rewind::invalid_imu_count`]; it reaches neither the engine nor the
+    /// record. A sample the engine returns an error for is not recorded
+    /// either, and the record is no longer a faithful history after one.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
-        // The engine drops and counts an invalid sample itself, so it sees
-        // every call; only a valid one enters the ring, because a replay has
-        // to reproduce what the engine integrated and it never integrated
-        // this one.
-        let valid = raw.is_valid();
-        self.live.add_imu(raw)?;
-        if !valid {
+        if !raw.is_valid() {
+            // Refused here, by the rule the engine would have used. The ring
+            // holds what the engine integrated, and it would not have
+            // integrated this; the count is kept beside the ring so that a
+            // rewind cannot take it back.
+            self.invalid_imu = self.invalid_imu.saturating_add(1);
             return Ok(());
         }
+        self.live.add_imu(raw)?;
         self.seq += 1;
         self.push_sample(raw);
         if self.seq - self.newer_seq >= Self::WINDOW as u64 {
@@ -759,6 +774,7 @@ mod tests {
         pending: Option<GnssFix>,
         hash: u64,
         stale: u32,
+        invalid: u32,
         last_nis: Option<F>,
     }
 
@@ -771,6 +787,7 @@ mod tests {
                 pending: None,
                 hash: 0xCBF2_9CE4_8422_2325,
                 stale: 0,
+                invalid: 0,
                 last_nis: None,
             }
         }
@@ -795,6 +812,7 @@ mod tests {
     impl Estimator for Tally {
         fn add_imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
             if !sample.is_valid() {
+                self.invalid += 1;
                 return Ok(());
             }
             self.interval = sample.dt;
@@ -868,7 +886,7 @@ mod tests {
         }
 
         fn invalid_imu_count(&self) -> u32 {
-            0
+            self.invalid
         }
 
         fn imu_gap_count(&self) -> u32 {
@@ -983,6 +1001,49 @@ mod tests {
             );
             assert_eq!(e.engine().last_nis, reference.last_nis);
         }
+    }
+
+    /// The count of refused samples is the stream's, not the filter's, so a
+    /// rewind must leave it alone. Read from the engine it went back to
+    /// whatever the restored anchor held: two refused samples, then a late
+    /// fix, read zero.
+    #[test]
+    fn a_rewind_does_not_forget_the_samples_it_refused() {
+        let invalid = ImuSample {
+            dvel: Vec3::new(F::NAN, 0.0, 0.0),
+            ..sample(0)
+        };
+        let mut e = Rewind::<Tally, 40, 16>::new(Tally::new());
+        for i in 1..=30 {
+            e.add_imu(sample(i)).unwrap();
+        }
+        // Refused after both anchors were taken, so no anchor has seen them.
+        e.add_imu(invalid).unwrap();
+        e.add_imu(invalid).unwrap();
+        for i in 31..=35 {
+            e.add_imu(sample(i)).unwrap();
+        }
+        assert_eq!(e.invalid_imu_count(), 2);
+
+        let outcome = e.add_gnss(fix(0.285, 1.0)).unwrap();
+        assert!(matches!(outcome, FixOutcome::Rewound { .. }), "{outcome:?}");
+        assert_eq!(e.invalid_imu_count(), 2, "the rewind took the count back");
+
+        // And across a rotation, which replaces the anchors.
+        for i in 36..=90 {
+            e.add_imu(sample(i)).unwrap();
+        }
+        e.add_imu(invalid).unwrap();
+        assert_eq!(e.invalid_imu_count(), 3);
+        // The engine never sees a refused sample through this type.
+        assert_eq!(e.engine().invalid_imu_count(), 0);
+        // Nothing refused entered the ring: the history is the valid samples.
+        let mut plain = Tally::new();
+        assert_eq!(plain.add_gnss(fix(0.285, 1.0)), GnssQueued::Queued);
+        for i in 1..=90 {
+            plain.add_imu(sample(i)).unwrap();
+        }
+        assert_eq!(e.engine().hash, plain.hash);
     }
 
     #[test]
