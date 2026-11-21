@@ -14,6 +14,15 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The `test` profile is optimised, cutting the CI test jobs from hours to
+  minutes.** `opt-level = 2` is set for `[profile.test]` while `debug-assertions`
+  and `overflow-checks` stay on, because the Monte Carlo NEES campaigns do hours
+  of floating-point work in an unoptimised build and about a minute optimised.
+  `dev` is left unoptimised, so `cargo build` and `cargo run` keep their fast
+  compile times. The dataset-gated regression and alignment tests no longer skip
+  under `debug-assertions`: with the profile optimised they run in seconds, so
+  the `DRIFTERS_REGRESSION_DEBUG` escape hatch is gone.
+
 - **The ESKF's time update runs over the navigation states alone, and `add_imu` costs
   59 % fewer instructions on a Cortex-M4 and 71 % fewer on a Cortex-M7.**
   `Ud::predict_partitioned` handles the Gauss-Markov IMU errors separately, and the

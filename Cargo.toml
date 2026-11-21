@@ -52,6 +52,18 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 
+# Tests are the one dev build whose runtime is dominated by arithmetic, and the
+# Monte Carlo NEES campaigns are the extreme case: a debug build of
+# `a_filter_told_the_gravity_gradient_stays_consistent` alone runs for hours on
+# CI hardware, because every `propagate` and every Jacobian is executed
+# unoptimised. Optimising the `test` profile makes that campaign take about a
+# minute and a half including the build. `debug-assertions` and `overflow-checks`
+# stay on — this is not a release build, and the checks are part of what the
+# tests exercise. `dev` is deliberately left alone so that `cargo build` and
+# `cargo run` keep their fast compile times.
+[profile.test]
+opt-level = 2
+
 # Embedded profile: optimise for size, keep overflow checks on so a filter
 # divergence traps instead of silently wrapping.
 [profile.embedded]

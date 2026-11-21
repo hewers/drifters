@@ -27,12 +27,12 @@ mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-R
 Then:
 
 ```bash
-cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
+cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
 ```
 
-Release mode is not optional: the same run is **503 s in debug against 11 s in
-release**, so the test skips in a debug build unless `DRIFTERS_REGRESSION_DEBUG=1`
-is set. Details in [testing.md](testing.md#getting-the-data).
+The `test` profile is optimised, so the same run takes about **2.5 s against 11 s
+in release**; no `--release` and no environment variable are needed. Details in
+[testing.md](testing.md#getting-the-data).
 
 ## GSDC 2023 phone trace
 

@@ -577,8 +577,8 @@ fn heading_does_not_depend_on_mounting_or_course() {
 }
 
 // ---------------------------------------------------------------------------
-// Real recordings. These skip when the datasets are absent, and in debug
-// builds, where parsing them takes minutes.
+// Real recordings. These skip when the datasets are absent. The `test` profile
+// is optimised, so replaying them costs seconds; see docs/testing.md.
 // ---------------------------------------------------------------------------
 
 fn dataset(name: &str) -> Option<PathBuf> {
@@ -589,10 +589,6 @@ fn dataset(name: &str) -> Option<PathBuf> {
         .join(name);
     if !dir.is_dir() {
         eprintln!("skipping: datasets/{name} is not present; see docs/testing.md");
-        return None;
-    }
-    if cfg!(debug_assertions) {
-        eprintln!("skipping: datasets/{name} needs a release build");
         return None;
     }
     Some(dir)

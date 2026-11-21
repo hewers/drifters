@@ -10,6 +10,13 @@ Run everything with:
 cargo test --workspace
 ```
 
+The workspace's `test` profile is optimised (`opt-level = 2`) while keeping
+`debug-assertions` and `overflow-checks` on. The Monte Carlo NEES campaigns in
+`drifters-cli` do hours of floating-point work in an unoptimised build and about
+a minute optimised, so this is the difference between a test job that finishes
+and one that does not. `dev` is left unoptimised so that `cargo build` and
+`cargo run` keep their fast compile times.
+
 That covers the default configuration. Two features change what the filter
 computes rather than adding to it, so each needs its own run:
 
@@ -128,13 +135,12 @@ The test **skips and passes** when the dataset is absent, so a fresh clone is
 not broken by not having it. CI does not fetch it; run it locally with:
 
 ```bash
-cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
+cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
 ```
 
-Release mode is not optional here: the same run takes **503 s in debug against
-11 s in release**. The test therefore skips in a debug build unless
-`DRIFTERS_REGRESSION_DEBUG=1` is set, so that a plain `cargo test --workspace`
-does not quietly spend eight minutes inside one test.
+The `test` profile is optimised (see the top of this document), so this takes
+about **2.5 s in a plain `cargo test` against 11 s in release**; it needs no
+`--release` and no environment variable.
 
 ### Seeing it rather than reading it
 
@@ -1015,10 +1021,10 @@ started from it believes both. So both are tested, first where the truth is
 known exactly and then on recordings where it is not.
 
 ```bash
-cargo test --release -p drifters-cli --test alignment -- --nocapture
+cargo test -p drifters-cli --test alignment -- --nocapture
 ```
 
-The tests that need a recording skip when it is absent, and in a debug build.
+The tests that need a recording skip when it is absent.
 
 ### Against a simulated vehicle
 
