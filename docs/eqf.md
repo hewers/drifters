@@ -1042,7 +1042,7 @@ harness code:
 |---|---|---|
 | `EqfEngine` | 4 720 bytes | **2 120 bytes** |
 | `EqfRewindEngine<120, 32>` | 25 760 bytes | 17 960 bytes |
-| peak stack, a late fix through the rewind layer included | 15 808 bytes | **14 400 bytes** |
+| peak stack, a late fix through the rewind layer included | 15 880 bytes | **14 464 bytes** |
 | instructions per `add_imu` | 4.51 million | **0.89 million** |
 | at an instruction per cycle, 168 MHz | 26.8 ms | **5.3 ms** |
 | panic machinery linked | none | none |
@@ -1108,8 +1108,8 @@ a row at a time, and `A` and `G` are handed over entry by entry and narrowed str
 into the factored buffers, so no whole `Φ` or `f64` copy of `G` sits beside the
 Gram–Schmidt rows.
 
-On a Cortex-M4 a sample alone peaks at 14 160 bytes dense and 10 564 factored, and a
-sample that consumes a fix at 15 808 and 14 400.
+On a Cortex-M4 a sample alone peaks at 14 312 bytes dense and 10 716 factored, and a
+sample that consumes a fix at 15 880 and 14 464.
 
 ## Implementation map
 

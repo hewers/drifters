@@ -453,6 +453,32 @@ for bit-exact golden vectors, so tests needing bit-exactness call
 - Prefer asserting *convergence order* or an *analytic bound* over a captured
   number. A captured number only says the code still does what it did.
 
+## Getting QEMU
+
+The emulated-firmware tests — the stack budget ([Layer 9](#layer-9--bare-metal-stack-budget)),
+the hardware-in-the-loop firmware, and the RTIC example — all need
+`qemu-system-arm` on `PATH`, version 8.x. On Debian or Ubuntu:
+
+```bash
+sudo apt-get update && sudo apt-get install -y qemu-system-arm
+```
+
+Where that is not possible — a container, or a host with no package-install
+rights — [`scripts/install-qemu.sh`](../scripts/install-qemu.sh) unpacks the same
+packages into a local prefix and writes a wrapper onto `PATH`:
+
+```bash
+scripts/install-qemu.sh          # ~/.local/qemu, wrapper in ~/.local/bin
+```
+
+The wrapper sets `LD_LIBRARY_PATH`, because the unpacked binary is linked against
+the unpacked libraries and a minimal image does not carry all of them. The script
+pins the Ubuntu noble packages the figures here were measured with (QEMU 8.2.2).
+
+Three machines are used: `mps2-an386` (Cortex-M4), `mps2-an500` (Cortex-M7, with
+`-cpu cortex-m7` for the double-precision FPU), and `netduinoplus2` (STM32F405,
+for the RTIC example).
+
 ## Layer 9 — bare-metal stack budget
 
 `cortex-m-harness/` boots both estimators on an emulated Cortex-M4 and measures
@@ -463,7 +489,8 @@ their peak stack use, and on an emulated Cortex-M7 as well
 cd cortex-m-harness && cargo run --release
 ```
 
-Needs `qemu-system-arm` on `PATH` and `rustup target add thumbv7em-none-eabihf`.
+Needs `qemu-system-arm` on `PATH` (see [Getting QEMU](#getting-qemu)) and
+`rustup target add thumbv7em-none-eabihf`.
 CI runs it on every push and fails if any estimator's peak exceeds its
 ceiling: 15 KiB for `PEAK`, the ESKF (13 KiB with `f32-covariance`, 10 KiB and
 9 KiB at 15 states), and 20 KiB for `PEAK_EQF`, the equivariant filter's engine with its dense covariance,
@@ -472,12 +499,12 @@ ceiling: 15 KiB for `PEAK`, the ESKF (13 KiB with `f32-covariance`, 10 KiB and
 
 | | peak stack, bytes |
 |---|---|
-| ESKF, 21-state | 13 520 |
-| ESKF, 21-state, `f32-covariance` | 11 880 |
-| ESKF, 15-state (`reduced-state`) | 8 888 |
-| ESKF, 15-state, `f32-covariance` | 7 704 |
-| EqF engine, dense `f64` | **15 808** |
-| EqF engine, factored `f32` | **14 400** |
+| ESKF, 21-state | 13 576 |
+| ESKF, 21-state, `f32-covariance` | 11 936 |
+| ESKF, 15-state (`reduced-state`) | 8 944 |
+| ESKF, 15-state, `f32-covariance` | 7 760 |
+| EqF engine, dense `f64` | **15 880** |
+| EqF engine, factored `f32` | **14 464** |
 | EqF engine, either form, Earth in the group | the same as without |
 
 Measured with Rust 1.100. The ESKF's peak is the time update. The held-state ZUPT
@@ -515,9 +542,9 @@ by operation, in bytes, the same with the Earth's rotation in the group:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 14 160 | 10 564 |
-| `add_imu` with a GNSS fix | **15 808** | **14 400** |
-| `apply_magnetometer` | 14 480 | 13 096 |
+| `add_imu` (propagate) | 14 312 | 10 716 |
+| `add_imu` with a GNSS fix | **15 880** | **14 464** |
+| `apply_magnetometer` | 14 752 | 13 368 |
 
 A single operation's figure moves with how the optimiser inlines under whole-program
 LTO, which is why CI holds the peak to a ceiling and not this table.
@@ -738,10 +765,10 @@ equivariant filter, and it changes which configuration to choose:
   configuration measured, at about a third of the dense form.
 - **`opt-level = 3` helps the dense filter most.** It removes 60 % of that filter's
   instructions and 30 % of the ESKF's. It takes code from 142 KB to 245 KB, and the
-  ESKF's peak stack from 13 220 bytes to 12 364.
+  ESKF's peak stack from 13 236 bytes to 12 364.
 
-Peak stack is 13 220 bytes for the ESKF (8 644 at 15 states), 14 692 for the
-dense equivariant filter and 13 436 for the factored one. Code is 31 % smaller
+Peak stack is 13 236 bytes for the ESKF (8 660 at 15 states), 14 732 for the
+dense equivariant filter and 13 476 for the factored one. Code is 31 % smaller
 than the Cortex-M4 build, 142 172 bytes against 206 408, because the call
 sequences are gone.
 
@@ -861,7 +888,7 @@ run is deterministic.
 The firmware checks itself and exits non-zero if it fails. It must end within
 10 cm of the simulated truth, drop no IMU sample, and apply every fix. CI
 runs it. It ends 2.8 cm from the truth with all 19 fixes rewound; the longest
-replay is 27 samples and the IMU backlog peaks at 12 of 32.
+replay is 27 samples and the IMU backlog peaks at 8 of 32.
 
 What it proves is the integration. The engine runs correctly when it is
 preempted, a late fix arrives between two samples, and the queue absorbs a

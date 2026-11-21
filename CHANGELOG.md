@@ -396,6 +396,17 @@ the list below is what the release *is* rather than what changed.
 
 ### Added
 
+- **`scripts/install-qemu.sh` puts `qemu-system-arm` on `PATH` without root.**
+  The emulated-firmware tests — the stack budget, the hardware-in-the-loop
+  firmware, and the RTIC example — all need it and nothing said how to get it
+  there. The script unpacks the Ubuntu packages into a local prefix and writes a
+  wrapper that sets `LD_LIBRARY_PATH`; `docs/testing.md` gains a "Getting QEMU"
+  section, and the three READMEs point at it. With QEMU available again the
+  QEMU-measured figures were re-run and move: the ESKF's peak stack is 13 576
+  bytes at 21 states (11 936 with `f32-covariance`) and 8 944 at 15 (7 760), the
+  EqF engine 15 880 dense and 14 464 factored, and the RTIC example's IMU
+  backlog peaks at 8 of 32, not 12.
+
 - **The KF-GINS reference solution is scored, and the dataset runs in CI.**
   `truth.nav`, KF-GINS's own 200 Hz reference trajectory, is independent of this
   library, so it gives heading and velocity error and a NEES that the

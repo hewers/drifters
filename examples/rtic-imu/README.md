@@ -22,7 +22,8 @@ second's fix 120 ms after the second.
 ## Running it
 
 It needs the `thumbv7em-none-eabihf` target and `qemu-system-arm` (8.x, for
-the `netduinoplus2` machine):
+the `netduinoplus2` machine) — [`scripts/install-qemu.sh`](../../scripts/install-qemu.sh)
+puts one on `PATH` without root; see [docs/testing.md](../../docs/testing.md#getting-qemu):
 
 ```bash
 rustup target add thumbv7em-none-eabihf

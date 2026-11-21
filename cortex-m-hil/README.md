@@ -118,6 +118,10 @@ open the ST-LINK.
 
 ## Without a board
 
+Needs `qemu-system-arm` on `PATH`; [`scripts/install-qemu.sh`](../scripts/install-qemu.sh)
+puts one there without root, and [docs/testing.md](../docs/testing.md#getting-qemu)
+has the details.
+
 ```bash
 CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER="qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -nographic -semihosting-config enable=on,target=native -kernel" \
   cargo run --release --no-default-features --features qemu,physical-imu

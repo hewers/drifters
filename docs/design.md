@@ -373,9 +373,9 @@ and does not propagate.
 Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, with no engine-sized temporary. A late
-fix reaches the depth of the time update it replays and goes no further: 13 520
-bytes, 11 880 with `f32-covariance`, 8 888 at 15 states and 7 704 with both. The
-EqF's late fix measures 15 808 dense and 14 400 factored, no deeper than its own
+fix reaches the depth of the time update it replays and goes no further: 13 576
+bytes, 11 936 with `f32-covariance`, 8 944 at 15 states and 7 760 with both. The
+EqF's late fix measures 15 880 dense and 14 464 factored, no deeper than its own
 fix step in either. All are inside their CI ceilings, and all are part of the peak
 CI checks.
 
@@ -398,14 +398,14 @@ ESKF:
 
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
-| `add_imu` (propagate) | 14 160 | 10 564 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 808 | 14 400 |
-| `apply_magnetometer` | 14 480 | 13 096 |
-| **peak** | **15 808** | **14 400** |
+| `add_imu` (propagate) | 14 312 | 10 716 |
+| `add_imu` with a GNSS fix, with or without velocity | 15 880 | 14 464 |
+| `apply_magnetometer` | 14 752 | 13 368 |
+| **peak** | **15 880** | **14 464** |
 
 These are the same with the Earth's rotation in the filter's group.
 
-Both are above the default ESKF's 13 520 and under a 20 KiB ceiling in CI. A late
+Both are above the default ESKF's 13 576 and under a 20 KiB ceiling in CI. A late
 fix through `EqfRewindEngine` measures the same as each form's own fix step.
 
 On a small part the constraint is work and not stack. The dense form is 4.51
@@ -423,11 +423,11 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 
 | operation | bytes |
 |---|---|
-| `add_imu` (mechanize + predict) | 13 520 |
+| `add_imu` (mechanize + predict) | 13 576 |
 | `apply_zupt` (3-dim update) | 7 216 |
 | `apply_height` (1-dim update) | 4 672 |
 | `apply_magnetometer` | 7 600 |
-| **peak** | **13 520** |
+| **peak** | **13 576** |
 
 The harness firmware, holding both engines, the aligner, semihosting, and the panic
 handler, links to 206 408 bytes of `.text` and 4 084 of `.rodata`.
@@ -465,7 +465,7 @@ filter to 15 states. Every matrix halves, and so does the stack:
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
 | `GinsEngine` | 3 336 B | 2 400 B |
-| peak stack | 13 520 B | **8 888 B** |
+| peak stack | 13 576 B | **8 944 B** |
 
 Both halve again under `f32-covariance`: 480, 608, and 1 920 bytes.
 
@@ -473,10 +473,10 @@ Peak stack by operation, in bytes:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 13 520 | 7 216 | **13 520** |
-| 21-state, `f32-covariance` | 11 880 | 6 388 | **11 880** |
-| 15-state (`reduced-state`) | 8 888 | 5 016 | **8 888** |
-| 15-state, `f32-covariance` | 7 704 | 4 580 | **7 704** |
+| 21-state, `f64` | 13 576 | 7 216 | **13 576** |
+| 21-state, `f32-covariance` | 11 936 | 6 388 | **11 936** |
+| 15-state (`reduced-state`) | 8 944 | 5 016 | **8 944** |
+| 15-state, `f32-covariance` | 7 760 | 4 580 | **7 760** |
 
 CI measures these on every run, and that is the number to trust over this
 table.
@@ -491,7 +491,7 @@ quantities the recursion has already computed, so the update adds them to the
 factors. [state-model.md](state-model.md) has the derivation.
 
 Fifteen states is the most useful stack lever on a small part. It takes the peak
-from 13 520 to 8 888 bytes and changes no numerics: it estimates fewer things.
+from 13 576 to 8 944 bytes and changes no numerics: it estimates fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 

@@ -37,7 +37,9 @@ gyrocompass alignment that must each reach the right answer; CI holds it under
 data paths — both estimators, both EqF covariance forms, both rewind layers and
 the aligner — so that CI can check none reaches `core::panicking`.
 
-Needs `qemu-system-arm` on `PATH` and the `thumbv7em-none-eabihf` target:
+Needs `qemu-system-arm` on `PATH` — [`scripts/install-qemu.sh`](../scripts/install-qemu.sh)
+puts one there without root, and [docs/testing.md](../docs/testing.md#getting-qemu)
+has the details — and the `thumbv7em-none-eabihf` target:
 
 ```bash
 rustup target add thumbv7em-none-eabihf
