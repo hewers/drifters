@@ -203,10 +203,10 @@ mod size_tests {
                 cfg!(feature = "smoothing"),
                 cfg!(feature = "f32-covariance")
             ) {
-                (true, false) => 21_576,
-                (true, true) => 20_656,
-                (false, false) => 3_328,
-                (false, true) => 2_408,
+                (true, false) => 21_584,
+                (true, true) => 20_664,
+                (false, false) => 3_336,
+                (false, true) => 2_416,
             },
             "whole engine"
         );
@@ -236,10 +236,10 @@ mod size_tests {
         assert_eq!(
             size_of::<crate::engine::GinsEngine>(),
             match (cfg!(feature = "smoothing"), f32_covariance) {
-                (true, false) => 11_848,
-                (true, true) => 11_424,
-                (false, false) => 2_392,
-                (false, true) => 1_912,
+                (true, false) => 11_912,
+                (true, true) => 11_432,
+                (false, false) => 2_400,
+                (false, true) => 1_920,
             },
             "whole engine"
         );

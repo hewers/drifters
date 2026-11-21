@@ -129,6 +129,20 @@ pub fn place(epoch: GpsTime, imu: &ImuSample) -> Placement {
     }
 }
 
+/// The time skipped between two consecutive IMU samples, in seconds.
+///
+/// The interval a sample covers is `(time − dt, time]`, so a stream with no
+/// gap gives `current.time − current.dt − previous.time == 0`. Positive means
+/// one or more samples are missing between them; negative means they overlap,
+/// which a clock step backwards also produces.
+///
+/// A gap and a forward clock step are the same thing to this function, and no
+/// engine can tell them apart from timestamps alone.
+#[inline]
+pub fn interval_gap(previous: &ImuSample, current: &ImuSample) -> F {
+    (current.time.add_seconds(-current.dt)).seconds_since(previous.time)
+}
+
 /// What [`Estimator::add_gnss`] did with a fix.
 ///
 /// Only the first two arms queue anything. The other two are the cases a
@@ -275,7 +289,11 @@ pub trait Estimator {
     ///
     /// The first sample only establishes the interval's left edge. An invalid
     /// sample is dropped and reported as `Ok`: a malformed sample must not be
-    /// allowed to poison the state.
+    /// allowed to poison the state. It is counted in
+    /// [`Estimator::invalid_imu_count`]. Timestamps are taken at their word, so
+    /// a sample whose interval does not begin where the previous ended is
+    /// counted in [`Estimator::imu_gap_count`] and otherwise integrated as
+    /// given.
     fn add_imu(&mut self, sample: ImuSample) -> Result<(), FilterError>;
 
     /// Queue a GNSS fix for the IMU interval that contains it.
@@ -326,6 +344,24 @@ pub trait Estimator {
     /// Non-zero on a live system means the receiver's latency exceeds what the
     /// caller is buffering for.
     fn stale_fix_count(&self) -> u32;
+
+    /// How many IMU samples were refused because [`ImuSample::is_valid`]
+    /// rejected them.
+    ///
+    /// Non-zero means the sensor or the link produced a malformed sample. The
+    /// sample is dropped and the engine carries on; without this counter the
+    /// drop is invisible, which is how a stream that is half garbage looks
+    /// exactly like a stream that is merely quiet.
+    fn invalid_imu_count(&self) -> u32;
+
+    /// How many times the IMU stream skipped time between two samples.
+    ///
+    /// A gap and a forward clock step are indistinguishable from timestamps
+    /// alone (see [`interval_gap`]), so the engine counts them and changes
+    /// nothing else: an undisclosed gap leaves the state's time and position
+    /// inconsistent, and a caller that cares re-anchors or reinitialises.
+    /// Non-zero means the samples the engine integrated were not contiguous.
+    fn imu_gap_count(&self) -> u32;
 
     /// True when the state and covariance are finite.
     fn is_healthy(&self) -> bool;

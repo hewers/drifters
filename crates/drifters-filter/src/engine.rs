@@ -6,7 +6,9 @@
 //! inside a replay harness on a workstation.
 
 use drifters_core::earth::Wgs84;
-use drifters_core::estimator::{epoch_tolerance, place, Estimator, Placement, PvaStd};
+use drifters_core::estimator::{
+    epoch_tolerance, interval_gap, place, Estimator, Placement, PvaStd,
+};
 use drifters_core::frames::Ned;
 use drifters_core::math::Quat;
 use drifters_core::math::{Mat3, Matrix, Vec3};
@@ -54,6 +56,10 @@ pub struct GinsEngine {
     inflations: u32,
     /// Fixes refused for arriving after the engine had passed their epoch.
     stale_fixes: u32,
+    /// IMU samples dropped because [`ImuSample::is_valid`] rejected them.
+    invalid_imu: u32,
+    /// Intervals in the IMU stream that skipped time.
+    imu_gaps: u32,
     /// Smoothing state, present only while recording.
     ///
     /// Behind `smoothing` because it is three 21×21 matrices, several times the
@@ -121,6 +127,8 @@ impl GinsEngine {
             consecutive_rejections: [0; Kind::COUNT],
             inflations: 0,
             stale_fixes: 0,
+            invalid_imu: 0,
+            imu_gaps: 0,
             #[cfg(feature = "smoothing")]
             recorder: None,
             options,
@@ -247,17 +255,22 @@ impl GinsEngine {
     /// Process one IMU sample, applying any pending GNSS fix at the right point
     /// inside the interval.
     ///
-    /// A sample that fails [`ImuSample::is_valid`] is dropped. A valid one that
-    /// cannot be propagated through, because its rates overflow the
-    /// mechanization, returns [`FilterError::Diverged`] with the state and
-    /// covariance as they were, and the next sample carries on from them.
+    /// A sample that fails [`ImuSample::is_valid`] is dropped and counted in
+    /// [`GinsEngine::invalid_imu_count`]. A valid one that cannot be propagated
+    /// through, because its rates overflow the mechanization, returns
+    /// [`FilterError::Diverged`] with the state and covariance as they were,
+    /// and the next sample carries on from them.
     ///
     /// Timestamps are not required to increase. A receiver clock can step, and
-    /// refusing everything after a step would stop the filter for good.
+    /// refusing everything after a step would stop the filter for good. An
+    /// interval that does not begin where the previous ended is counted in
+    /// [`GinsEngine::imu_gap_count`] and otherwise integrated as given: a gap
+    /// and a forward step are the same thing to a timestamp.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
         if !raw.is_valid() {
             // A malformed sample must not be allowed to poison the state; drop
             // it and keep the previous sample as the coning/sculling partner.
+            self.invalid_imu = self.invalid_imu.saturating_add(1);
             return Ok(());
         }
         self.raw_dtheta = raw.dtheta;
@@ -271,6 +284,13 @@ impl GinsEngine {
         }
 
         let imu = self.state.imu_error.compensate(&raw);
+        // The engine takes a timestamp at its word: a gap and a forward clock
+        // step look the same, and closing one would turn a stepped clock into
+        // motion. Count it and integrate the sample as given; the caller that
+        // knows which it was can re-anchor. See `estimator::interval_gap`.
+        if interval_gap(&self.previous_imu, &imu) > epoch_tolerance(imu.dt) {
+            self.imu_gaps = self.imu_gaps.saturating_add(1);
+        }
         // A fix that fails does not stop the interval it fell in: time still
         // has to pass. It is reported once the interval is done.
         let mut fix_outcome = Ok(());
@@ -626,6 +646,27 @@ impl GinsEngine {
         self.stale_fixes
     }
 
+    /// How many IMU samples were refused because [`ImuSample::is_valid`]
+    /// rejected them.
+    ///
+    /// Non-zero means the sensor or the link produced a malformed sample. The
+    /// sample is dropped and the engine carries on; without this counter the
+    /// drop is invisible. See [`Estimator::invalid_imu_count`].
+    #[inline]
+    pub fn invalid_imu_count(&self) -> u32 {
+        self.invalid_imu
+    }
+
+    /// How many times the IMU stream skipped time between two samples.
+    ///
+    /// A gap and a forward clock step are indistinguishable from timestamps
+    /// alone, so the engine counts them and changes nothing else. See
+    /// [`Estimator::imu_gap_count`].
+    #[inline]
+    pub fn imu_gap_count(&self) -> u32 {
+        self.imu_gaps
+    }
+
     /// Change how the IMU is taken to sit in the vehicle, as when a
     /// [`MountingEstimator`] has finished. Returns `false` and changes nothing
     /// if `mounting` is not [valid](VehicleMounting::is_valid).
@@ -940,6 +981,16 @@ impl Estimator for GinsEngine {
     }
 
     #[inline]
+    fn invalid_imu_count(&self) -> u32 {
+        GinsEngine::invalid_imu_count(self)
+    }
+
+    #[inline]
+    fn imu_gap_count(&self) -> u32 {
+        GinsEngine::imu_gap_count(self)
+    }
+
+    #[inline]
     fn is_healthy(&self) -> bool {
         GinsEngine::is_healthy(self)
     }
@@ -1145,6 +1196,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(e.nav_state().position().lat, before.position().lat);
+        assert_eq!(e.invalid_imu_count(), 2);
+        assert_eq!(e.imu_gap_count(), 0);
+    }
+
+    #[test]
+    fn a_gap_in_the_imu_stream_is_counted_and_not_closed() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        // 0.01 s samples at 0.01, 0.02 and 0.03 s are contiguous.
+        for i in 1..=3 {
+            e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
+                .unwrap();
+        }
+        assert_eq!(e.imu_gap_count(), 0);
+        // The 0.04 s sample is missing, so the next covers (0.04, 0.05]. The
+        // timestamp is taken at its word and the gap counted; nothing is
+        // fabricated for the missing interval.
+        e.add_imu(stationary_sample(&e, 0.01, 0.05)).unwrap();
+        assert_eq!(e.imu_gap_count(), 1);
+        assert_eq!(e.timestamp().tow(), 0.05);
+        // A forward clock step is the same thing to the engine, and is
+        // counted the same way rather than turned into motion.
+        e.add_imu(stationary_sample(&e, 0.01, 10.0)).unwrap();
+        assert_eq!(e.imu_gap_count(), 2);
     }
 
     #[test]

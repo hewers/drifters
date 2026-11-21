@@ -42,7 +42,7 @@
 //! [`EqfRewindEngine`]: crate::rewind::EqfRewindEngine
 
 use drifters_core::estimator::{
-    epoch_tolerance, place, Estimator, FilterError, GnssQueued, Placement, PvaStd,
+    epoch_tolerance, interval_gap, place, Estimator, FilterError, GnssQueued, Placement, PvaStd,
 };
 use drifters_core::frames::{Lla, Ned};
 // `Real` supplies the no_std float math; anything that links `std` makes this
@@ -96,6 +96,10 @@ pub struct EqfEngine<C: Covariance = StateMatrix> {
     inflations: u32,
     /// Fixes refused for arriving after the engine had passed their epoch.
     stale_fixes: u32,
+    /// IMU samples dropped because [`ImuSample::is_valid`] rejected them.
+    invalid_imu: u32,
+    /// Intervals in the IMU stream that skipped time.
+    imu_gaps: u32,
 }
 
 impl EqfEngine {
@@ -166,6 +170,8 @@ impl<C: Covariance> EqfEngine<C> {
             consecutive_rejections: 0,
             inflations: 0,
             stale_fixes: 0,
+            invalid_imu: 0,
+            imu_gaps: 0,
         })
     }
 
@@ -377,14 +383,18 @@ impl<C: Covariance> EqfEngine<C> {
     /// the increments divided by it, so integrating over anything else
     /// rescales the input.
     ///
-    /// A sample that fails [`ImuSample::is_valid`] is dropped. A valid one that
-    /// cannot be propagated through returns [`FilterError::Diverged`] with the
-    /// estimate as it was, and the next sample carries on from there.
+    /// A sample that fails [`ImuSample::is_valid`] is dropped and counted in
+    /// [`EqfEngine::invalid_imu_count`]. A valid one that cannot be propagated
+    /// through returns [`FilterError::Diverged`] with the estimate as it was,
+    /// and the next sample carries on from there.
     /// Timestamps are not required to increase: a clock can step, and refusing
-    /// everything after a step would stop the filter for good.
+    /// everything after a step would stop the filter for good. An interval that
+    /// does not begin where the previous ended is counted in
+    /// [`EqfEngine::imu_gap_count`] and otherwise integrated as given.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
         if !raw.is_valid() {
             // A malformed sample must not be allowed to poison the state.
+            self.invalid_imu = self.invalid_imu.saturating_add(1);
             return Ok(());
         }
 
@@ -394,6 +404,19 @@ impl<C: Covariance> EqfEngine<C> {
             self.interval = raw.dt;
             self.initialised = true;
             return Ok(());
+        }
+
+        // The engine takes a timestamp at its word: a gap and a forward clock
+        // step look the same, and closing one would turn a stepped clock into
+        // motion. Count it and integrate the sample as given. See
+        // `estimator::interval_gap`.
+        let previous = ImuSample {
+            time: self.time,
+            dt: self.interval,
+            ..ImuSample::default()
+        };
+        if interval_gap(&previous, &raw) > epoch_tolerance(raw.dt) {
+            self.imu_gaps = self.imu_gaps.saturating_add(1);
         }
 
         // A fix that fails does not stop the interval it fell in: time still
@@ -691,6 +714,27 @@ impl<C: Covariance> EqfEngine<C> {
         self.stale_fixes
     }
 
+    /// How many IMU samples were refused because [`ImuSample::is_valid`]
+    /// rejected them.
+    ///
+    /// Non-zero means the sensor or the link produced a malformed sample. The
+    /// sample is dropped and the engine carries on. See
+    /// [`Estimator::invalid_imu_count`].
+    #[inline]
+    pub fn invalid_imu_count(&self) -> u32 {
+        self.invalid_imu
+    }
+
+    /// How many times the IMU stream skipped time between two samples.
+    ///
+    /// A gap and a forward clock step are indistinguishable from timestamps
+    /// alone, so the engine counts them and changes nothing else. See
+    /// [`Estimator::imu_gap_count`].
+    #[inline]
+    pub fn imu_gap_count(&self) -> u32 {
+        self.imu_gaps
+    }
+
     /// True when the observer state and the covariance are both finite.
     #[inline]
     pub fn is_healthy(&self) -> bool {
@@ -761,6 +805,16 @@ impl<C: Covariance> Estimator for EqfEngine<C> {
     #[inline]
     fn stale_fix_count(&self) -> u32 {
         EqfEngine::stale_fix_count(self)
+    }
+
+    #[inline]
+    fn invalid_imu_count(&self) -> u32 {
+        EqfEngine::invalid_imu_count(self)
+    }
+
+    #[inline]
+    fn imu_gap_count(&self) -> u32 {
+        EqfEngine::imu_gap_count(self)
     }
 
     #[inline]
@@ -940,7 +994,7 @@ mod tests {
         // table in docs/design.md with them.
         assert_eq!(size_of::<EqFilter>(), 3_864);
         assert_eq!(size_of::<EqfOptions>(), 648);
-        assert_eq!(size_of::<EqfEngine>(), 4_712);
+        assert_eq!(size_of::<EqfEngine>(), 4_720);
     }
 
     // --- the interval, and what happens to a fix -------------------------
@@ -974,6 +1028,24 @@ mod tests {
         assert_eq!(e.filter().x, before.x);
         assert_eq!(e.filter().sigma, before.sigma);
         assert_eq!(e.timestamp().tow(), 0.01);
+        assert_eq!(e.invalid_imu_count(), 2);
+        assert_eq!(e.imu_gap_count(), 0);
+    }
+
+    #[test]
+    fn a_gap_in_the_imu_stream_is_counted_and_not_closed() {
+        let mut e = EqfEngine::new(options()).unwrap();
+        for i in 1..=3 {
+            e.add_imu(coasting_sample(&e, 0.01, i as F * 0.01)).unwrap();
+        }
+        assert_eq!(e.imu_gap_count(), 0);
+        // The 0.04 s sample is missing, so the next covers (0.04, 0.05].
+        e.add_imu(coasting_sample(&e, 0.01, 0.05)).unwrap();
+        assert_eq!(e.imu_gap_count(), 1);
+        assert_eq!(e.timestamp().tow(), 0.05);
+        // A forward clock step is counted the same way, not closed.
+        e.add_imu(coasting_sample(&e, 0.01, 10.0)).unwrap();
+        assert_eq!(e.imu_gap_count(), 2);
     }
 
     #[test]

@@ -73,9 +73,6 @@ emulation. This repository claims nothing about time until these items run.
 
 - **Pair the stationarity detector with a height aid,** so the vertical channel does
   not float during long ZUPT-only stops.
-- **Notice a gap in the IMU stream.** Neither engine checks a sample's time against
-  the previous sample's. A dropped sample is integrated as one interval, and GNSS
-  then pulls the velocity away from the truth.
 - **Localisation without GNSS.** Terrain-referenced navigation and lidar intensity
   matching need a general map-derived position update on both engines, with a full
   covariance, its own gate and protection against a wrong map match. Neither engine has

@@ -319,6 +319,18 @@ impl<const SAMPLES: usize, const EVENTS: usize, C: Covariance> EqfRewindEngine<S
         self.inner.stale_fix_count()
     }
 
+    /// See [`EqfEngine::invalid_imu_count`].
+    #[inline]
+    pub fn invalid_imu_count(&self) -> u32 {
+        self.inner.invalid_imu_count()
+    }
+
+    /// See [`EqfEngine::imu_gap_count`].
+    #[inline]
+    pub fn imu_gap_count(&self) -> u32 {
+        self.inner.imu_gap_count()
+    }
+
     /// See [`Rewind::dropped_event_count`].
     #[inline]
     pub fn dropped_event_count(&self) -> u32 {
@@ -720,7 +732,7 @@ mod tests {
                 + 72,
             "three engines, the two rings, and 72 bytes of bookkeeping"
         );
-        assert_eq!(size_of::<Representative>(), 25_728);
+        assert_eq!(size_of::<Representative>(), 25_752);
     }
 
     /// The factored, single-precision engine through the same layer. The
@@ -764,8 +776,8 @@ mod tests {
         // bytes against 3 528, three times over in the wrapper.
         assert_eq!(size_of::<Ud<f32>>(), 924);
         assert_eq!(size_of::<crate::filter::EqFilter<Ud<f32>>>(), 1_264);
-        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_112);
-        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_928);
+        assert_eq!(size_of::<EqfEngine<Ud<f32>>>(), 2_120);
+        assert_eq!(size_of::<EqfRewindEngine<120, 32, Ud<f32>>>(), 17_952);
     }
 
     #[test]

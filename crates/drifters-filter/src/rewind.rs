@@ -398,6 +398,18 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
         self.inner.stale_fix_count()
     }
 
+    /// See [`GinsEngine::invalid_imu_count`].
+    #[inline]
+    pub fn invalid_imu_count(&self) -> u32 {
+        self.inner.invalid_imu_count()
+    }
+
+    /// See [`GinsEngine::imu_gap_count`].
+    #[inline]
+    pub fn imu_gap_count(&self) -> u32 {
+        self.inner.imu_gap_count()
+    }
+
     /// See [`Rewind::dropped_event_count`].
     #[inline]
     pub fn dropped_event_count(&self) -> u32 {
@@ -1019,7 +1031,7 @@ mod tests {
         {
             assert_eq!(size_of::<ImuSample>(), 64);
             assert_eq!(size_of::<Record<Aid>>(), 120, "a GnssFix plus its tag");
-            assert_eq!(size_of::<Representative>(), 21_576);
+            assert_eq!(size_of::<Representative>(), 21_600);
         }
     }
 

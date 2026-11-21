@@ -362,6 +362,18 @@ the list below is what the release *is* rather than what changed.
 
 ### Added
 
+- **Both engines count what the IMU stream drops.**
+  `Estimator::invalid_imu_count` counts samples refused as invalid — dropped
+  and carried on, and before this counted nowhere, unlike a stale fix.
+  `Estimator::imu_gap_count` counts intervals that do not begin where the
+  previous ended. A gap and a forward clock step are the same thing to a
+  timestamp, so the engine notices one and does not close it: integrating a
+  stepped clock as motion would be worse than seeing it. Each engine, and each
+  rewind layer, exposes the pair. `GinsEngine` grows by 8 bytes to 3 336,
+  `RewindEngine<120, 32>` by 24 to 21 600, `EqfEngine` by 8 to 4 720 and
+  `EqfRewindEngine<120, 32>` by 24 to 25 752; the pinned size tests and the
+  budget tables in docs/design.md and docs/eqf.md follow.
+
 - **The EqF's configuration and estimate go over the wire.** `eqf.proto` adds
   `EqfOptions`, `EqfProcessNoise` and `EqfSolution`. `EqfSolution` carries the
   geodetic solution the EqF shares with the ESKF plus the two states only it

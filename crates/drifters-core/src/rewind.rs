@@ -361,6 +361,19 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         self.stale_fixes
     }
 
+    /// IMU samples the engine refused as invalid. See
+    /// [`Estimator::invalid_imu_count`].
+    #[inline]
+    pub fn invalid_imu_count(&self) -> u32 {
+        self.live.invalid_imu_count()
+    }
+
+    /// Times the IMU stream skipped time. See [`Estimator::imu_gap_count`].
+    #[inline]
+    pub fn imu_gap_count(&self) -> u32 {
+        self.live.imu_gap_count()
+    }
+
     /// Aiding records lost because the event ring was full.
     ///
     /// Any value but zero means a replay since may have omitted an aid, and
@@ -394,10 +407,15 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
     /// sample the engine returns an error for is not recorded either, and the
     /// record is no longer a faithful history after one.
     pub fn add_imu(&mut self, raw: ImuSample) -> Result<(), FilterError> {
-        if !raw.is_valid() {
+        // The engine drops and counts an invalid sample itself, so it sees
+        // every call; only a valid one enters the ring, because a replay has
+        // to reproduce what the engine integrated and it never integrated
+        // this one.
+        let valid = raw.is_valid();
+        self.live.add_imu(raw)?;
+        if !valid {
             return Ok(());
         }
-        self.live.add_imu(raw)?;
         self.seq += 1;
         self.push_sample(raw);
         if self.seq - self.newer_seq >= Self::WINDOW as u64 {
@@ -847,6 +865,14 @@ mod tests {
 
         fn stale_fix_count(&self) -> u32 {
             self.stale
+        }
+
+        fn invalid_imu_count(&self) -> u32 {
+            0
+        }
+
+        fn imu_gap_count(&self) -> u32 {
+            0
         }
 
         fn is_healthy(&self) -> bool {

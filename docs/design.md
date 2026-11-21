@@ -161,6 +161,19 @@ Splitting the IMU sample at the GNSS epoch is what keeps a 1 Hz GNSS fix from
 being applied up to one IMU interval late. At 100 Hz and 30 m/s that error would
 be 0.3 m — larger than the GNSS noise it is trying to correct.
 
+### A broken or gappy IMU stream
+
+Two things can go wrong with the samples themselves, and `add_imu` counts both.
+A sample that fails [`ImuSample::is_valid`] is dropped and counted in
+`invalid_imu_count`: a stream that is half garbage otherwise looks exactly like
+a stream that is merely quiet. And an interval that does not begin where the
+previous one ended is a gap, counted in `imu_gap_count`. A gap and a *forward
+clock step* are the same thing to a timestamp, and the engine deliberately does
+not close one — integrating a stepped clock as motion would be worse than
+noticing it. A caller that knows which it was re-anchors or reinitialises; one
+that does not can at least see that the samples it integrated were not
+contiguous.
+
 ### A fix that arrives after its epoch
 
 The diagram assumes the fix is in hand before the interval that contains it is
@@ -317,7 +330,7 @@ Sizes for the 21-state configuration:
 | `Matrix<21, 21>` (transition, and temporaries) | 3 528 | 3 528 |
 | `Matrix<21, 18>` (noise mapping) | 3 024 | 3 024 |
 | `Eskf` (covariance + error state + NIS) | 2 024 | **1 104** |
-| `GinsEngine` total | 3 328 | **2 408** |
+| `GinsEngine` total | 3 336 | **2 416** |
 
 Only the covariance moves: `f32-covariance` changes what `U` and `D` are stored
 in and nothing else, so the transition matrix and the noise mapping are `f64` in
@@ -334,16 +347,16 @@ up to 300 ms late, which is `RewindEngine<120, 32>`:
 
 | features | `GinsEngine` | `RewindEngine<120, 32>` |
 |---|---|---|
-| default | 3 328 | **21 576** |
-| `f32-covariance` | 2 408 | 18 816 |
-| `reduced-state` | 2 392 | 18 768 |
-| both | 1 912 | 17 328 |
+| default | 3 336 | **21 600** |
+| `f32-covariance` | 2 416 | 18 840 |
+| `reduced-state` | 2 400 | 18 792 |
+| both | 1 920 | 17 352 |
 
 Six and a half times the engine, and the one thing in the runtime stack whose
 size the caller chooses. Asserted by
 `rewind::tests::the_wrapper_has_its_documented_footprint`. Over the equivariant
-filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 728 bytes** with
-the dense covariance and 17 928 with the factored `f32` one: the rings are
+filter the same sizing, `EqfRewindEngine<120, 32>`, is **25 752 bytes** with
+the dense covariance and 17 952 with the factored `f32` one: the rings are
 identical and the engines differ. It is also the one
 runtime type that is `Clone` and not `Copy`: it has no destructor either, but at
 this size a copy should be something the caller wrote.
@@ -367,7 +380,7 @@ CI checks.
 | `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
 | `EqFilter<C>` (observer state + `Σ` + gravity, Earth rate and gravity gradient + GCU rate) | 3 864 | 1 264 |
 | `EqfOptions` | 648 | 648 |
-| `EqfEngine<C>` total | **4 712** | **2 112** |
+| `EqfEngine<C>` total | **4 720** | **2 120** |
 
 Asserted by `engine::tests::the_engine_has_its_documented_footprint` and
 `rewind::tests::the_single_precision_wrapper_is_smaller`. The dense form is
@@ -445,10 +458,10 @@ filter to 15 states. Every matrix halves, and so does the stack:
 |---|---|---|
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
-| `GinsEngine` | 3 328 B | 2 392 B |
+| `GinsEngine` | 3 336 B | 2 400 B |
 | peak stack | 13 520 B | **8 888 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 912 bytes.
+Both halve again under `f32-covariance`: 480, 608 and 1 920 bytes.
 
 Peak stack by operation, in bytes:
 

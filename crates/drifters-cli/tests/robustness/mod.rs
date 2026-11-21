@@ -699,6 +699,9 @@ fn fingerprint<S: Subject>(subject: &S) -> Fingerprint {
     print.word(engine.consecutive_rejections().into());
     print.word(engine.inflation_count().into());
     print.word(engine.stale_fix_count().into());
+    // `invalid_imu_count` is deliberately not here: an invalid IMU sample
+    // bumps it, and that is the one thing an invalid input is meant to do.
+    print.word(engine.imu_gap_count().into());
     let antenna = engine.antenna_position();
     print.vec3(Vec3::new(antenna.lat, antenna.lon, antenna.height));
     subject.wrapper_state(&mut print);
@@ -928,8 +931,21 @@ pub fn drive<S: Subject>(subject: &mut S, script: &[Op]) {
                     dvel: force + *dvel,
                 };
                 let invalid = imu_is_invalid(&sample);
+                let counted = subject.engine().invalid_imu_count();
                 let result = subject.imu(sample);
-                invalid.then_some(result == Ok(()))
+                if invalid {
+                    // The drop is recorded even though nothing else moves.
+                    if subject.engine().invalid_imu_count() != counted + 1 {
+                        fail(
+                            step,
+                            Some(op),
+                            "an invalid IMU sample was not counted".into(),
+                        );
+                    }
+                    Some(result == Ok(()))
+                } else {
+                    None
+                }
             }
             Op::Gnss {
                 lag,
