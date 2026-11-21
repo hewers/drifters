@@ -2,7 +2,7 @@
 
 An aided inertial navigation library producing extended pose estimates —
 position, velocity, attitude — along with the sensor errors that corrupt it.
-Rust `no_std` and allocation-free, from a microcontroller to a workstation.
+Rust `no_std` and allocation-free, from a microcontroller on up.
 
 *Aided* because the IMU drives the propagation with corrections from GNSS,
 barometric, magnetic and odometric. *Extended* pose because velocity is a state
