@@ -22,7 +22,7 @@ What the library does, what checks it, and what is open. The reasoning is in
 | Initial alignment | levelling, biases at rest, gyrocompass or heading from motion, with a sigma for each output | `drifters_core::align` |
 | Serialization | protobuf schemas and validated conversions, no allocator, generated code checked in | `drifters-proto` |
 | GNSS processing | robust pseudorange positioning, time-differenced carrier phase, RINEX, reference-station corrections, a banded trajectory fit | `drifters-gnss` (`std`) |
-| Tools | `replay`, `plot`, `eqf`, `gsdc`, `tune` and `nees` commands | `drifters-cli` |
+| Tools | `replay`, `plot`, `eqf`, `gsdc`, `tune`, `comma` and `nees` commands | `drifters-cli` |
 | Firmware | stack, size, instruction and panic measurements under QEMU; an RTIC example; hardware-in-the-loop firmware | `cortex-m-harness`, `examples/rtic-imu`, `cortex-m-hil` |
 
 ## What CI checks

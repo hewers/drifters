@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn the_engine_has_its_documented_footprint() {
         use core::mem::size_of;
-        // The covariance is dense here, 3 528 bytes of the filter's 3 856.
+        // The covariance is dense here, 3 528 bytes of the filter's 3 864.
         // If a change to these is intended, update the "Resource budget"
         // table in docs/design.md with them.
         assert_eq!(size_of::<EqFilter>(), 3_864);

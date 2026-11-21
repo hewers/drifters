@@ -34,7 +34,7 @@ under QEMU.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 752 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 815 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 Accuracy is an open-loop check: the filter's predicted antenna position before
 each fix is applied, so between fixes it runs on inertial dead reckoning alone.
@@ -444,8 +444,9 @@ help.
 - [design.md](docs/design.md) — architecture and resource budget
 - [state-model.md](docs/state-model.md) — the 21-state error model, derived
 - [frames.md](docs/frames.md) — coordinate frames and conventions
-- [testing.md](docs/testing.md) — seventeen layers, and what each one can prove
+- [testing.md](docs/testing.md) — eighteen layers, and what each one can prove
 - [gsdc.md](docs/gsdc.md) — where the filter stops helping, and why
+- [comma2k19.md](docs/comma2k19.md) — a phone-class IMU with wheel speed, and what the aids buy in a GNSS outage
 - [releasing.md](docs/releasing.md) — crates.io publish order and procedure
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
 - [milestones.md](docs/milestones.md) — what works, what CI checks, and what is open

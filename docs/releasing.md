@@ -37,7 +37,7 @@ cargo test -p drifters-filter -p drifters-proto --features reduced-state
 cargo test -p drifters-filter -p drifters-cli --features f32-covariance
 cargo deny check
 cargo package --list -p <crate>          # confirm nothing unexpected ships
-cargo publish --dry-run -p drifters-core # only the root can dry-run pre-release
+cargo publish --dry-run --workspace      # packages and verifies all six, in order
 ```
 
 Update [`CHANGELOG.md`](../CHANGELOG.md) and tag the release. The tag is what
@@ -46,11 +46,12 @@ request against the most recent tag, and says so and passes when there is none,
 which is the state until the first release. So the first tag is what turns that
 job on; there is nothing to run before it.
 
-A dry-run of a dependent crate fails with *"no matching package named
-drifters-core found"* until its dependency is actually on the registry. That is
-expected, not a misconfiguration — the workspace dependency declarations carry
-both `version` and `path`, so cargo strips the path and uses the version at
-publish time.
+The workspace dry-run verifies each dependent crate against a temporary local
+registry holding the ones before it, so nothing has to be published first.
+Checked with cargo 1.100. A dry-run of one dependent crate alone, with
+`-p`, still fails with *"no matching package named drifters-core found"* until
+its dependency is on the registry: the workspace dependency declarations carry
+both `version` and `path`, and cargo strips the path at publish time.
 
 ## Minimum supported Rust
 
@@ -72,7 +73,7 @@ dependencies do.
 
 ## What ships
 
-Verified for `drifters-core`: 15 files — sources, README, manifests. The 67 MB
+Verified for `drifters-core`: 22 files — sources, README, manifests. The 67 MB
 dataset, the papers in [`papers/`](papers/) and `target/` are all outside the crate directories and
 never enter a package.
 
