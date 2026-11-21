@@ -27,7 +27,8 @@ micropb = { version = "0.6", default-features = false, features = [
     "enable-64bit",
     "container-heapless-0-9",
 ] }
-heapless = "0.9"
+# 0.9.4 clears the RUSTSEC-2026-0574..-0582 unsoundness advisories in 0.9.3.
+heapless = "0.9.4"
 
 [dev-dependencies]
 approx = { workspace = true }
@@ -40,7 +41,7 @@ micropb = { version = "0.6", default-features = false, features = [
     "enable-64bit",
     "container-heapless-0-9",
 ] }
-heapless = "0.9"
+heapless = "0.9.4"
 
 [features]
 default = []
