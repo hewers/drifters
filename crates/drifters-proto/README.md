@@ -8,6 +8,12 @@ inertial navigation library.
 `no_std` and allocation-free, built on `micropb`. Code generation needs no
 `protoc` binary; the toolchain is pure Rust.
 
+It carries both estimators: the ESKF's configuration and solution, and the
+EqF's, including the GNSS lever arm and magnetometer calibration the EqF
+estimates. The EqF's messages are always generated; its conversions are the
+`eqf` feature, so a build that only serializes the ESKF does not link the EqF
+engine.
+
 Decoding is a trust boundary. proto3 has no required fields, so an absent
 message decodes to zeros, and a zero interval or a zero-norm quaternion is not a
 navigation state. Every conversion validates rather than assumes.

@@ -525,6 +525,7 @@ dependencies = [
  "approx",
  "defmt",
  "drifters-core",
+ "drifters-eqf",
  "drifters-filter",
  "heapless 0.9.4",
  "micropb",

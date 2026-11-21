@@ -1,6 +1,13 @@
 //! Protobuf serialization for the drifters navigation types.
 //!
-//! Extended pose, sensor samples and filter configuration, on the wire.
+//! Extended pose, sensor samples and filter configuration, on the wire, for
+//! both estimators: the ESKF ([`pb::GinsOptions`], [`pb::NavSolution`]) and the
+//! EqF ([`pb::EqfOptions`], [`pb::EqfSolution`], carrying the GNSS lever arm and
+//! magnetometer calibration it estimates).
+//!
+//! The EqF's messages are always generated. Its `EqfOptions`/`ProcessNoise`
+//! conversions and `convert::eqf_solution` need the `eqf` feature, the crate's
+//! only dependency on `drifters-eqf`; decoding an EqF solution needs no engine.
 //!
 //! `no_std` and allocation-free, so the same code encodes a solution on a
 //! microcontroller and decodes it in a host replay tool.

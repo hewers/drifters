@@ -26,11 +26,19 @@
 use core::fmt;
 
 use drifters_core::frames::{Lla, Ned};
-use drifters_core::math::{Euler, Quat, Vec3};
+use drifters_core::math::{Euler, Mat3, Quat, Vec3};
 use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{Attitude, GnssFix, ImuError, ImuNoise, ImuSample, NavState, Pva};
 use drifters_core::F;
+// The EqF's conversions need its engine and configuration types; the generated
+// messages and the decode side do not, so this is behind the `eqf` feature.
+#[cfg(feature = "eqf")]
+use drifters_eqf::config::EqfOptions;
+#[cfg(feature = "eqf")]
+use drifters_eqf::filter::ProcessNoise;
+#[cfg(feature = "eqf")]
+use drifters_eqf::{Covariance, EqfEngine};
 use drifters_filter::config::GinsOptions;
 use drifters_filter::state::{StateMatrix, N_STATE};
 
@@ -50,6 +58,13 @@ pub const COVARIANCE_LEN: usize = N_STATE * N_STATE;
 /// local build would instead make two peers silently incompatible depending on
 /// how each was compiled.
 const WIRE_COVARIANCE_CAPACITY: usize = 21 * 21;
+
+/// The number of elements the EqF writes into `EqfSolution.state_std`.
+///
+/// The EqF has 21 states and no build feature changes that, unlike the ESKF's
+/// `N_STATE`. Spelled out rather than taken from `drifters_eqf` so that decoding
+/// an EqF solution needs no engine.
+pub const EQF_STATE_DIM: usize = 21;
 
 /// Why a decoded message could not become an in-memory value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -593,6 +608,274 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
     }
 }
 
+// --- the equivariant filter ---------------------------------------------
+//
+// The EqF reports the same geodetic navigation solution the ESKF does, so the
+// `NavSolution` types above apply to it too. What it adds is a different set of
+// estimated states: a GNSS lever arm and a magnetometer rotation, and no IMU
+// scale factors. `EqfOptions` and `EqfSolution` carry those.
+//
+// The conversions *from* the EqF's own types need `drifters-eqf` and are behind
+// the `eqf` feature. Everything that turns a decoded message back into plain
+// data — `EqfEstimate`, `eqf_state_std` — needs only `drifters-core`, so a
+// consumer that reads EqF logs does not compile the engine.
+
+#[cfg(feature = "eqf")]
+impl From<&ProcessNoise> for pb::EqfProcessNoise {
+    fn from(n: &ProcessNoise) -> Self {
+        let mut msg = Self::default();
+        msg.set_gyro((&n.gyro).into());
+        msg.set_accel((&n.accel).into());
+        msg.set_gyro_bias((&n.gyro_bias).into());
+        msg.set_accel_bias((&n.accel_bias).into());
+        msg.set_lever((&n.lever).into());
+        msg.set_mag((&n.mag).into());
+        msg
+    }
+}
+
+#[cfg(feature = "eqf")]
+impl TryFrom<&pb::EqfProcessNoise> for ProcessNoise {
+    type Error = ConvertError;
+
+    fn try_from(msg: &pb::EqfProcessNoise) -> Result<Self, Self::Error> {
+        let noise = Self {
+            gyro: require!(msg.r#gyro(), "gyro").into(),
+            accel: require!(msg.r#accel(), "accel").into(),
+            gyro_bias: require!(msg.r#gyro_bias(), "gyro_bias").into(),
+            accel_bias: require!(msg.r#accel_bias(), "accel_bias").into(),
+            lever: require!(msg.r#lever(), "lever").into(),
+            mag: require!(msg.r#mag(), "mag").into(),
+        };
+        for density in [
+            noise.gyro,
+            noise.accel,
+            noise.gyro_bias,
+            noise.accel_bias,
+            noise.lever,
+            noise.mag,
+        ] {
+            // A negative density is not a covariance; a non-finite one would
+            // reach the process-noise matrix and from there the factors.
+            if !density.is_finite() || density.x < 0.0 || density.y < 0.0 || density.z < 0.0 {
+                return Err(ConvertError::Invalid("eqf_process_noise"));
+            }
+        }
+        Ok(noise)
+    }
+}
+
+#[cfg(feature = "eqf")]
+impl From<&EqfOptions> for pb::EqfOptions {
+    fn from(o: &EqfOptions) -> Self {
+        let mut msg = Self {
+            r#compensate_earth: o.compensate_earth,
+            r#earth_in_group: o.earth_in_group,
+            r#gravity_gradient: o.gravity_gradient,
+            ..Default::default()
+        };
+        msg.set_initial_position((&o.initial_state.position).into());
+        msg.set_initial_velocity_mps((&o.initial_state.velocity).into());
+        msg.set_initial_attitude((&o.initial_state.attitude.euler()).into());
+        msg.set_initial_gyro_bias_rps((&o.initial_gyro_bias).into());
+        msg.set_initial_accel_bias_mps2((&o.initial_accel_bias).into());
+        msg.set_initial_lever_arm_m((&o.initial_lever_arm).into());
+        msg.set_initial_position_std_m((&o.initial_position_std).into());
+        msg.set_initial_velocity_std_mps((&o.initial_velocity_std).into());
+        msg.set_initial_attitude_std_rad((&o.initial_attitude_std).into());
+        msg.set_initial_gyro_bias_std_rps((&o.initial_gyro_bias_std).into());
+        msg.set_initial_accel_bias_std_mps2((&o.initial_accel_bias_std).into());
+        msg.set_initial_lever_arm_std_m((&o.initial_lever_arm_std).into());
+        msg.set_initial_mag_std_rad((&o.initial_mag_std).into());
+        msg.set_process_noise((&o.process_noise).into());
+        if let Some(anchor) = &o.anchor {
+            msg.set_anchor((anchor).into());
+        }
+        // Every `optional` field is written only when it has a value, so that
+        // "off" and "the default value" stay distinguishable on the wire.
+        if let Some(alpha) = o.gcu_alpha {
+            msg.set_gcu_alpha(alpha);
+        }
+        if let Some(gate) = o.position_gate {
+            msg.set_position_gate(gate);
+        }
+        if let Some(gate) = o.velocity_gate {
+            msg.set_velocity_gate(gate);
+        }
+        if let Some(gate) = o.direction_gate {
+            msg.set_direction_gate(gate);
+        }
+        msg.set_max_consecutive_rejections(o.max_consecutive_rejections);
+        msg.set_rejection_inflation(o.rejection_inflation);
+        msg
+    }
+}
+
+#[cfg(feature = "eqf")]
+impl TryFrom<&pb::EqfOptions> for EqfOptions {
+    type Error = ConvertError;
+
+    /// Runs [`EqfOptions::validate`], so a bad configuration is rejected at the
+    /// decode boundary rather than at `EqfEngine::new`.
+    fn try_from(msg: &pb::EqfOptions) -> Result<Self, Self::Error> {
+        let default = EqfOptions::default();
+        let euler: Euler = require!(msg.r#initial_attitude(), "initial_attitude").into();
+        // Every field is assigned. `EqfOptions` is `#[non_exhaustive]`, so the
+        // compiler no longer says when it grows one this misses;
+        // `every_eqf_options_field_is_carried` below does.
+        let mut options = EqfOptions::default();
+        options.initial_state = Pva {
+            position: require!(msg.r#initial_position(), "initial_position").try_into()?,
+            velocity: require!(msg.r#initial_velocity_mps(), "initial_velocity_mps").into(),
+            attitude: Attitude::from_euler(euler.roll, euler.pitch, euler.yaw),
+        };
+        options.initial_gyro_bias =
+            require!(msg.r#initial_gyro_bias_rps(), "initial_gyro_bias_rps").into();
+        options.initial_accel_bias =
+            require!(msg.r#initial_accel_bias_mps2(), "initial_accel_bias_mps2").into();
+        options.initial_lever_arm =
+            require!(msg.r#initial_lever_arm_m(), "initial_lever_arm_m").into();
+        options.initial_position_std =
+            require!(msg.r#initial_position_std_m(), "initial_position_std_m").into();
+        options.initial_velocity_std =
+            require!(msg.r#initial_velocity_std_mps(), "initial_velocity_std_mps").into();
+        options.initial_attitude_std =
+            require!(msg.r#initial_attitude_std_rad(), "initial_attitude_std_rad").into();
+        options.initial_gyro_bias_std = require!(
+            msg.r#initial_gyro_bias_std_rps(),
+            "initial_gyro_bias_std_rps"
+        )
+        .into();
+        options.initial_accel_bias_std = require!(
+            msg.r#initial_accel_bias_std_mps2(),
+            "initial_accel_bias_std_mps2"
+        )
+        .into();
+        options.initial_lever_arm_std =
+            require!(msg.r#initial_lever_arm_std_m(), "initial_lever_arm_std_m").into();
+        options.initial_mag_std =
+            require!(msg.r#initial_mag_std_rad(), "initial_mag_std_rad").into();
+        options.process_noise = require!(msg.r#process_noise(), "process_noise").try_into()?;
+        options.anchor = msg.r#anchor().map(Lla::try_from).transpose()?;
+        options.compensate_earth = msg.r#compensate_earth;
+        options.earth_in_group = msg.r#earth_in_group;
+        options.gravity_gradient = msg.r#gravity_gradient;
+        // Absent optional fields keep the in-memory `None`, and the two
+        // defaults that are not zero are restored from `EqfOptions::default`.
+        options.gcu_alpha = msg.r#gcu_alpha().copied();
+        options.position_gate = msg.r#position_gate().copied();
+        options.velocity_gate = msg.r#velocity_gate().copied();
+        options.direction_gate = msg.r#direction_gate().copied();
+        options.max_consecutive_rejections = msg
+            .r#max_consecutive_rejections()
+            .copied()
+            .unwrap_or(default.max_consecutive_rejections);
+        options.rejection_inflation = msg
+            .r#rejection_inflation()
+            .copied()
+            .unwrap_or(default.rejection_inflation);
+        if options.validate().is_some() {
+            return Err(ConvertError::Invalid("eqf_options"));
+        }
+        Ok(options)
+    }
+}
+
+/// The EqF's estimate, decoded from [`pb::EqfSolution`].
+///
+/// The navigation part is the same [`NavState`] the ESKF reports. The two
+/// fields below it are the states the EqF has and the ESKF does not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EqfEstimate {
+    /// Geodetic position, ground velocity, attitude and IMU biases.
+    pub nav: NavState,
+    /// Estimated GNSS antenna phase centre in the body frame, metres.
+    pub lever_arm: Vec3,
+    /// Magnetometer rotational calibration, rotating a measured field into the
+    /// body frame.
+    pub mag_calibration: Mat3,
+}
+
+/// Build a [`pb::EqfSolution`] from a running EqF.
+///
+/// The navigation fields come from [`EqfEngine::nav_state`], so they are the
+/// same geodetic solution the ESKF reports; the lever arm and magnetometer
+/// calibration come from the filter's own state, and `state_std` is the
+/// physical one-sigma vector in the EqF's block order.
+#[cfg(feature = "eqf")]
+pub fn eqf_solution<C: Covariance>(engine: &EqfEngine<C>) -> pb::EqfSolution {
+    let nav = engine.nav_state();
+    let state = engine.state();
+    let std = engine.std_deviations();
+    let mut msg = pb::EqfSolution::default();
+    msg.set_time((&nav.time).into());
+    msg.set_position((&nav.pva.position).into());
+    msg.set_velocity_mps((&nav.pva.velocity).into());
+    msg.set_attitude((&nav.pva.attitude.quat).into());
+    msg.set_euler((&nav.pva.attitude.euler()).into());
+    msg.set_gyro_bias_rps((&nav.imu_error.gyro_bias).into());
+    msg.set_accel_bias_mps2((&nav.imu_error.accel_bias).into());
+    msg.set_lever_arm_m((&state.lever).into());
+    msg.set_mag_calibration((&Quat::from_dcm(&state.mag)).into());
+    // Capacity is exactly EQF_STATE_DIM, so this cannot overflow.
+    msg.r#state_std = heapless::Vec::from_slice(&std).unwrap_or_default();
+    msg
+}
+
+/// Read back the per-state uncertainties the EqF writes into `state_std`.
+///
+/// Returns `Ok(None)` when the solution carried none, which is the normal case
+/// and not an error.
+pub fn eqf_state_std(msg: &pb::EqfSolution) -> Result<Option<[F; EQF_STATE_DIM]>, ConvertError> {
+    if msg.r#state_std.is_empty() {
+        return Ok(None);
+    }
+    let slice = msg.r#state_std.as_slice();
+    let array: [F; EQF_STATE_DIM] = slice.try_into().map_err(|_| ConvertError::WrongLength {
+        field: "state_std",
+        expected: EQF_STATE_DIM,
+        actual: slice.len(),
+    })?;
+    Ok(Some(array))
+}
+
+impl TryFrom<&pb::EqfSolution> for EqfEstimate {
+    type Error = ConvertError;
+
+    /// Reconstructs attitude from the **quaternion**, never from `euler`, and
+    /// the magnetometer calibration likewise. The ESKF's scale-factor fields
+    /// are left at zero: this filter has no such states.
+    fn try_from(msg: &pb::EqfSolution) -> Result<Self, Self::Error> {
+        let quat: Quat = require!(msg.r#attitude(), "attitude").try_into()?;
+        let mag: Quat = require!(msg.r#mag_calibration(), "mag_calibration").try_into()?;
+        let lever_arm: Vec3 = require!(msg.r#lever_arm_m(), "lever_arm_m").into();
+        let gyro_bias: Vec3 = require!(msg.r#gyro_bias_rps(), "gyro_bias_rps").into();
+        let accel_bias: Vec3 = require!(msg.r#accel_bias_mps2(), "accel_bias_mps2").into();
+        // A non-finite bias or lever arm would reach the filter's state or be
+        // subtracted from every subsequent sample.
+        if !lever_arm.is_finite() || !gyro_bias.is_finite() || !accel_bias.is_finite() {
+            return Err(ConvertError::Invalid("eqf_solution"));
+        }
+        Ok(Self {
+            nav: NavState {
+                time: require!(msg.r#time(), "time").into(),
+                pva: Pva {
+                    position: require!(msg.r#position(), "position").try_into()?,
+                    velocity: require!(msg.r#velocity_mps(), "velocity_mps").into(),
+                    attitude: Attitude::from_quat(quat),
+                },
+                imu_error: ImuError {
+                    gyro_bias,
+                    accel_bias,
+                    ..ImuError::ZERO
+                },
+            },
+            lever_arm,
+            mag_calibration: mag.to_dcm(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,11 +1269,22 @@ mod decode_robustness {
         try_decode::<pb::GnssFix, GnssFix>(bytes);
         try_decode::<pb::NavSolution, NavState>(bytes);
         try_decode::<pb::GinsOptions, GinsOptions>(bytes);
+        #[cfg(feature = "eqf")]
+        try_decode::<pb::EqfProcessNoise, ProcessNoise>(bytes);
+        #[cfg(feature = "eqf")]
+        try_decode::<pb::EqfOptions, EqfOptions>(bytes);
+        try_decode::<pb::EqfSolution, EqfEstimate>(bytes);
 
         let mut decoder = PbDecoder::new(bytes);
         let mut solution = pb::NavSolution::default();
         if solution.decode(&mut decoder, bytes.len()).is_ok() {
             let _ = state_std(&solution);
+        }
+
+        let mut decoder = PbDecoder::new(bytes);
+        let mut eqf = pb::EqfSolution::default();
+        if eqf.decode(&mut decoder, bytes.len()).is_ok() {
+            let _ = eqf_state_std(&eqf);
         }
 
         let mut decoder = PbDecoder::new(bytes);
@@ -1250,5 +1544,288 @@ mod option_defaults {
     fn an_explicit_true_survives_the_round_trip() {
         let msg = pb::GinsOptions::from(&GinsOptions::default());
         assert!(GinsOptions::try_from(&msg).unwrap().zupt_holds_attitude);
+    }
+}
+
+/// The EqF decode side, which needs no `drifters-eqf` and so is tested with the
+/// feature off as well.
+#[cfg(test)]
+mod eqf_decode {
+    use super::*;
+
+    #[test]
+    fn a_default_eqf_solution_is_rejected() {
+        assert!(EqfEstimate::try_from(&pb::EqfSolution::default()).is_err());
+    }
+
+    #[test]
+    fn eqf_state_std_is_optional_and_length_checked() {
+        let mut msg = pb::EqfSolution::default();
+        assert_eq!(eqf_state_std(&msg).unwrap(), None);
+        msg.r#state_std = heapless::Vec::from_slice(&[0.0; EQF_STATE_DIM]).unwrap();
+        assert!(eqf_state_std(&msg).unwrap().is_some());
+        msg.r#state_std = heapless::Vec::from_slice(&[0.0; 3]).unwrap();
+        assert!(matches!(
+            eqf_state_std(&msg),
+            Err(ConvertError::WrongLength { .. })
+        ));
+    }
+}
+
+/// The EqF encoding side, which needs `drifters-eqf`.
+#[cfg(all(test, feature = "eqf"))]
+mod eqf {
+    use super::*;
+    use approx::assert_relative_eq;
+    use micropb::{MessageDecode, MessageEncode, PbDecoder, PbEncoder};
+
+    const BUFFER: usize = 8192;
+
+    fn to_bytes<M: MessageEncode>(msg: &M) -> heapless::Vec<u8, BUFFER> {
+        let mut encoder = PbEncoder::new(heapless::Vec::<u8, BUFFER>::new());
+        msg.encode(&mut encoder).expect("encode");
+        encoder.into_writer()
+    }
+
+    fn from_bytes<M: MessageDecode + Default>(bytes: &[u8]) -> M {
+        let mut decoder = PbDecoder::new(bytes);
+        let mut msg = M::default();
+        msg.decode(&mut decoder, bytes.len()).expect("decode");
+        msg
+    }
+
+    fn sample_options() -> EqfOptions {
+        let mut options = EqfOptions::default()
+            .with_initial_state(
+                Lla::from_degrees(30.44, 114.47, 20.0),
+                Ned::new(8.0, 3.0, 0.0),
+                Euler::new(0.02, -0.01, 0.6),
+            )
+            .with_anchor(Lla::from_degrees(30.45, 114.46, 25.0))
+            .with_lever_arm(Vec3::new(0.30, -0.10, -0.20), Vec3::splat(0.05));
+        options.initial_gyro_bias = Vec3::new(1.0e-4, -2.0e-4, 3.0e-5);
+        options.initial_accel_bias = Vec3::new(0.01, -0.02, 0.003);
+        options.process_noise = ProcessNoise {
+            gyro: Vec3::splat(1.0e-6),
+            accel: Vec3::splat(1.0e-4),
+            gyro_bias: Vec3::splat(1.0e-12),
+            accel_bias: Vec3::splat(1.0e-10),
+            lever: Vec3::splat(1.0e-8),
+            mag: Vec3::splat(2.0e-8),
+        };
+        options.earth_in_group = true;
+        options.gravity_gradient = true;
+        options.gcu_alpha = Some(0.25);
+        options.position_gate = Some(11.3);
+        options.velocity_gate = Some(16.3);
+        options.direction_gate = Some(13.8);
+        options.max_consecutive_rejections = 7;
+        options.rejection_inflation = 9.0;
+        options
+    }
+
+    fn an_engine() -> EqfEngine {
+        EqfEngine::new(sample_options()).expect("valid configuration")
+    }
+
+    #[test]
+    fn eqf_process_noise_survives_the_wire() {
+        let original = ProcessNoise {
+            gyro: Vec3::new(1.0e-6, 2.0e-6, 3.0e-6),
+            accel: Vec3::new(1.0e-4, 2.0e-4, 3.0e-4),
+            gyro_bias: Vec3::splat(1.0e-12),
+            accel_bias: Vec3::splat(1.0e-10),
+            lever: Vec3::splat(1.0e-8),
+            mag: Vec3::splat(2.0e-8),
+        };
+        let msg = pb::EqfProcessNoise::from(&original);
+        let decoded: pb::EqfProcessNoise = from_bytes(&to_bytes(&msg));
+        assert_eq!(ProcessNoise::try_from(&decoded).unwrap(), original);
+    }
+
+    #[test]
+    fn eqf_options_survive_the_wire() {
+        let original = sample_options();
+        let msg = pb::EqfOptions::from(&original);
+        let decoded: pb::EqfOptions = from_bytes(&to_bytes(&msg));
+        let back = EqfOptions::try_from(&decoded).expect("valid");
+        assert!(back.validate().is_none());
+        assert_eq!(back.initial_state.position, original.initial_state.position);
+        assert_eq!(back.initial_state.velocity, original.initial_state.velocity);
+        assert_eq!(back.initial_gyro_bias, original.initial_gyro_bias);
+        assert_eq!(back.initial_accel_bias, original.initial_accel_bias);
+        assert_eq!(back.initial_lever_arm, original.initial_lever_arm);
+        assert_eq!(back.initial_position_std, original.initial_position_std);
+        assert_eq!(back.initial_velocity_std, original.initial_velocity_std);
+        assert_eq!(back.initial_attitude_std, original.initial_attitude_std);
+        assert_eq!(back.initial_gyro_bias_std, original.initial_gyro_bias_std);
+        assert_eq!(back.initial_accel_bias_std, original.initial_accel_bias_std);
+        assert_eq!(back.initial_lever_arm_std, original.initial_lever_arm_std);
+        assert_eq!(back.initial_mag_std, original.initial_mag_std);
+        assert_eq!(back.process_noise, original.process_noise);
+        assert_eq!(back.anchor, original.anchor);
+        assert_eq!(back.compensate_earth, original.compensate_earth);
+        assert_eq!(back.earth_in_group, original.earth_in_group);
+        assert_eq!(back.gravity_gradient, original.gravity_gradient);
+        assert_eq!(back.gcu_alpha, original.gcu_alpha);
+        assert_eq!(back.position_gate, original.position_gate);
+        assert_eq!(back.velocity_gate, original.velocity_gate);
+        assert_eq!(back.direction_gate, original.direction_gate);
+        assert_eq!(
+            back.max_consecutive_rejections,
+            original.max_consecutive_rejections
+        );
+        assert_eq!(back.rejection_inflation, original.rejection_inflation);
+        // Attitude is carried as Euler and rebuilt, so compare as a rotation.
+        assert_relative_eq!(
+            back.initial_state.attitude.euler().yaw,
+            original.initial_state.attitude.euler().yaw,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn eqf_solution_survives_the_wire() {
+        let engine = an_engine();
+        let msg = eqf_solution(&engine);
+        let decoded: pb::EqfSolution = from_bytes(&to_bytes(&msg));
+        let back = EqfEstimate::try_from(&decoded).expect("valid");
+        let nav = engine.nav_state();
+        assert_eq!(back.nav.time.week(), nav.time.week());
+        assert_eq!(back.nav.pva.position, nav.pva.position);
+        assert_eq!(back.nav.pva.velocity, nav.pva.velocity);
+        assert_eq!(back.nav.imu_error.gyro_bias, nav.imu_error.gyro_bias);
+        assert_eq!(back.nav.imu_error.accel_bias, nav.imu_error.accel_bias);
+        // The state the ESKF is configured with and the EqF works out.
+        assert_eq!(back.lever_arm, engine.lever_arm());
+        let turned = Quat::from_dcm(&back.mag_calibration)
+            .angle_to(Quat::from_dcm(&engine.state().mag))
+            .abs();
+        assert_relative_eq!(turned, 0.0, epsilon = 1e-12);
+        assert_eq!(
+            eqf_state_std(&decoded).unwrap(),
+            Some(engine.std_deviations())
+        );
+    }
+
+    #[test]
+    fn an_absent_eqf_anchor_anchors_at_the_initial_position() {
+        let mut options = sample_options();
+        options.anchor = None;
+        let msg = pb::EqfOptions::from(&options);
+        assert!(msg.r#anchor().is_none());
+        let decoded = EqfOptions::try_from(&msg).expect("valid");
+        assert_eq!(decoded.anchor, None);
+        assert_eq!(decoded.anchor_or_initial(), decoded.initial_state.position);
+    }
+
+    #[test]
+    fn an_absent_eqf_gcu_alpha_is_none() {
+        // `Some(0.0)` is not off, so absence must not decode to it.
+        let mut msg = pb::EqfOptions::from(&sample_options());
+        msg.clear_gcu_alpha();
+        let decoded = EqfOptions::try_from(&msg).expect("valid");
+        assert_eq!(decoded.gcu_alpha, None);
+    }
+
+    #[test]
+    fn the_eqf_defaults_that_are_not_zero_are_restored() {
+        let mut msg = pb::EqfOptions::from(&sample_options());
+        msg.clear_max_consecutive_rejections();
+        msg.clear_rejection_inflation();
+        let decoded = EqfOptions::try_from(&msg).expect("valid");
+        let default = EqfOptions::default();
+        assert_eq!(
+            decoded.max_consecutive_rejections,
+            default.max_consecutive_rejections
+        );
+        assert_eq!(decoded.rejection_inflation, default.rejection_inflation);
+    }
+
+    #[test]
+    fn a_default_eqf_options_message_is_rejected() {
+        assert!(EqfOptions::try_from(&pb::EqfOptions::default()).is_err());
+    }
+
+    #[test]
+    fn an_invalid_eqf_configuration_is_rejected_at_the_wire() {
+        let mut options = sample_options();
+        options.initial_position_std = Vec3::ZERO; // not positive
+        let msg = pb::EqfOptions::from(&options);
+        assert!(matches!(
+            EqfOptions::try_from(&msg),
+            Err(ConvertError::Invalid("eqf_options"))
+        ));
+    }
+
+    #[test]
+    fn a_negative_eqf_process_noise_is_rejected() {
+        let mut msg = pb::EqfProcessNoise::from(&ProcessNoise::default());
+        msg.set_gyro(pb::Vec3 {
+            r#x: -1.0,
+            r#y: 0.0,
+            r#z: 0.0,
+        });
+        assert!(matches!(
+            ProcessNoise::try_from(&msg),
+            Err(ConvertError::Invalid("eqf_process_noise"))
+        ));
+    }
+
+    /// The field list the two conversions above were written against.
+    ///
+    /// `EqfOptions` is `#[non_exhaustive]` (adr/0010), so a field added
+    /// upstream and missed by a conversion would otherwise be a setting that
+    /// silently vanished at the wire. `Debug` prints every field; a missing one
+    /// fails here.
+    #[test]
+    fn every_eqf_options_field_is_carried() {
+        extern crate std;
+        use std::{format, vec::Vec};
+        let debug = format!("{:?}", EqfOptions::default());
+        let mut depth = 0;
+        let mut fields = Vec::new();
+        let mut word = std::string::String::new();
+        for c in debug.chars() {
+            match c {
+                '{' | '(' | '[' => depth += 1,
+                '}' | ')' | ']' => depth -= 1,
+                ':' if depth == 1 && !word.is_empty() => fields.push(word.clone()),
+                _ => {}
+            }
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else if c != ' ' {
+                word.clear();
+            }
+        }
+        let carried = [
+            "initial_state",
+            "anchor",
+            "initial_gyro_bias",
+            "initial_accel_bias",
+            "initial_lever_arm",
+            "initial_position_std",
+            "initial_velocity_std",
+            "initial_attitude_std",
+            "initial_gyro_bias_std",
+            "initial_accel_bias_std",
+            "initial_lever_arm_std",
+            "initial_mag_std",
+            "process_noise",
+            "compensate_earth",
+            "earth_in_group",
+            "gravity_gradient",
+            "gcu_alpha",
+            "position_gate",
+            "velocity_gate",
+            "direction_gate",
+            "max_consecutive_rejections",
+            "rejection_inflation",
+        ];
+        assert_eq!(
+            fields, carried,
+            "EqfOptions's fields changed; update both conversions and this list"
+        );
     }
 }

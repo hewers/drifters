@@ -14,6 +14,9 @@ keywords = ["navigation", "protobuf", "gnss", "ins", "no-std"]
 
 [dependencies]
 drifters-core = { workspace = true }
+# Optional: the EqF's conversions are the only thing here that needs it, and a
+# firmware running the ESKF alone should not link the EqF engine.
+drifters-eqf = { workspace = true, optional = true }
 drifters-filter = { workspace = true }
 defmt = { workspace = true, optional = true }
 # Allocation-free protobuf runtime. `container-heapless` supplies the
@@ -43,10 +46,22 @@ heapless = "0.9"
 default = []
 ## Pass through to `drifters-filter`: 15 states, no scale factors.
 reduced-state = ["drifters-filter/reduced-state"]
-std = ["drifters-core/std", "drifters-filter/std"]
+## The EqF's `EqfOptions` and `ProcessNoise` conversions, and `eqf_solution`.
+## It is the only thing that needs `drifters-eqf`, so it is off by default: a
+## firmware serializing the ESKF's messages should not compile the EqF engine.
+## The generated `EqfOptions` / `EqfSolution` messages and the decode side
+## (`EqfEstimate`, `eqf_state_std`) need no engine and are always available.
+eqf = ["dep:drifters-eqf"]
+std = ["drifters-core/std", "drifters-filter/std", "drifters-eqf?/std"]
 ## `defmt::Format` on [`ConvertError`], and through to `drifters-core` and
-## `drifters-filter`. The generated message types do not implement it.
-defmt = ["dep:defmt", "drifters-core/defmt", "drifters-filter/defmt"]
+## `drifters-filter` — and to `drifters-eqf` when `eqf` is on. The generated
+## message types do not implement it.
+defmt = [
+    "dep:defmt",
+    "drifters-core/defmt",
+    "drifters-filter/defmt",
+    "drifters-eqf?/defmt",
+]
 
 [lints.rust]
 unsafe_code = "forbid"

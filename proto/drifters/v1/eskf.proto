@@ -1,4 +1,7 @@
-// The filter's output, and the configuration that produced it.
+// The ESKF's (GinsEngine's) output and the configuration that produced it.
+//
+// The EqF's messages are in eqf.proto; both live in the same package and share
+// the value types in types.proto.
 
 syntax = "proto3";
 

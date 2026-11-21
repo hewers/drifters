@@ -76,6 +76,7 @@ name = "drifters-proto"
 version = "0.1.0"
 dependencies = [
  "drifters-core",
+ "drifters-eqf",
  "drifters-filter",
  "heapless",
  "micropb",

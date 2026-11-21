@@ -27,8 +27,13 @@
 #![no_main]
 
 use drifters_core::types::{GnssFix, ImuSample, NavState};
+use drifters_eqf::config::EqfOptions;
+use drifters_eqf::filter::ProcessNoise;
 use drifters_filter::config::GinsOptions;
-use drifters_proto::{convert, pb};
+use drifters_proto::{
+    convert::{self, EqfEstimate},
+    pb,
+};
 use libfuzzer_sys::fuzz_target;
 use micropb::{MessageDecode, PbDecoder};
 
@@ -53,6 +58,9 @@ fuzz_target!(|data: &[u8]| {
     try_decode::<pb::GnssFix, GnssFix>(data);
     try_decode::<pb::NavSolution, NavState>(data);
     try_decode::<pb::GinsOptions, GinsOptions>(data);
+    try_decode::<pb::EqfProcessNoise, ProcessNoise>(data);
+    try_decode::<pb::EqfOptions, EqfOptions>(data);
+    try_decode::<pb::EqfSolution, EqfEstimate>(data);
 
     // The repeated fields have fixed capacities, so exercise them through the
     // helpers that enforce the length rather than through `TryFrom`.
@@ -60,6 +68,12 @@ fuzz_target!(|data: &[u8]| {
     let mut solution = pb::NavSolution::default();
     if solution.decode(&mut decoder, data.len()).is_ok() {
         let _ = convert::state_std(&solution);
+    }
+
+    let mut decoder = PbDecoder::new(data);
+    let mut eqf = pb::EqfSolution::default();
+    if eqf.decode(&mut decoder, data.len()).is_ok() {
+        let _ = convert::eqf_state_std(&eqf);
     }
 
     let mut decoder = PbDecoder::new(data);

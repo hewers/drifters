@@ -8356,5 +8356,4305 @@ pub mod drifters_ {
                 }
             }
         }
+        /// Continuous-time process noise for the EqF, as power spectral densities per
+        /// axis, split by physical source rather than by state block.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct EqfProcessNoise {
+            /// Gyroscope white noise, (rad/s)^2/Hz.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro: Vec3,
+            /// Accelerometer white noise, (m/s^2)^2/Hz.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel: Vec3,
+            /// Gyroscope bias random walk, (rad/s^2)^2/Hz.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_bias: Vec3,
+            /// Accelerometer bias random walk, (m/s^3)^2/Hz.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_bias: Vec3,
+            /// GNSS lever-arm random walk. Usually zero; the antenna is fixed.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#lever: Vec3,
+            /// Magnetometer calibration random walk. Usually zero.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#mag: Vec3,
+            /// Tracks presence of optional and message fields
+            pub _has: EqfProcessNoise_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for EqfProcessNoise {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#gyro() == other.r#gyro());
+                ret &= (self.r#accel() == other.r#accel());
+                ret &= (self.r#gyro_bias() == other.r#gyro_bias());
+                ret &= (self.r#accel_bias() == other.r#accel_bias());
+                ret &= (self.r#lever() == other.r#lever());
+                ret &= (self.r#mag() == other.r#mag());
+                ret
+            }
+        }
+        impl EqfProcessNoise {
+            /// Return a reference to `gyro` as an `Option`
+            #[inline]
+            pub fn r#gyro(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro().then_some(&self.r#gyro)
+            }
+            /// Set the value and presence of `gyro`
+            #[inline]
+            pub fn set_gyro(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro();
+                self.r#gyro = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro` as an `Option`
+            #[inline]
+            pub fn mut_gyro(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro().then_some(&mut self.r#gyro)
+            }
+            /// Clear the presence of `gyro`
+            #[inline]
+            pub fn clear_gyro(&mut self) -> &mut Self {
+                self._has.clear_gyro();
+                self
+            }
+            /// Take the value of `gyro` and clear its presence
+            #[inline]
+            pub fn take_gyro(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro()
+                    .then(|| ::core::mem::take(&mut self.r#gyro));
+                self._has.clear_gyro();
+                val
+            }
+            /// Builder method that sets the value of `gyro`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro(mut self, value: Vec3) -> Self {
+                self.set_gyro(value);
+                self
+            }
+            /// Return a reference to `accel` as an `Option`
+            #[inline]
+            pub fn r#accel(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel().then_some(&self.r#accel)
+            }
+            /// Set the value and presence of `accel`
+            #[inline]
+            pub fn set_accel(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel();
+                self.r#accel = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel` as an `Option`
+            #[inline]
+            pub fn mut_accel(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel().then_some(&mut self.r#accel)
+            }
+            /// Clear the presence of `accel`
+            #[inline]
+            pub fn clear_accel(&mut self) -> &mut Self {
+                self._has.clear_accel();
+                self
+            }
+            /// Take the value of `accel` and clear its presence
+            #[inline]
+            pub fn take_accel(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel()
+                    .then(|| ::core::mem::take(&mut self.r#accel));
+                self._has.clear_accel();
+                val
+            }
+            /// Builder method that sets the value of `accel`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel(mut self, value: Vec3) -> Self {
+                self.set_accel(value);
+                self
+            }
+            /// Return a reference to `gyro_bias` as an `Option`
+            #[inline]
+            pub fn r#gyro_bias(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_bias().then_some(&self.r#gyro_bias)
+            }
+            /// Set the value and presence of `gyro_bias`
+            #[inline]
+            pub fn set_gyro_bias(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_bias();
+                self.r#gyro_bias = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_bias` as an `Option`
+            #[inline]
+            pub fn mut_gyro_bias(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_bias().then_some(&mut self.r#gyro_bias)
+            }
+            /// Clear the presence of `gyro_bias`
+            #[inline]
+            pub fn clear_gyro_bias(&mut self) -> &mut Self {
+                self._has.clear_gyro_bias();
+                self
+            }
+            /// Take the value of `gyro_bias` and clear its presence
+            #[inline]
+            pub fn take_gyro_bias(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_bias()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_bias));
+                self._has.clear_gyro_bias();
+                val
+            }
+            /// Builder method that sets the value of `gyro_bias`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_bias(mut self, value: Vec3) -> Self {
+                self.set_gyro_bias(value);
+                self
+            }
+            /// Return a reference to `accel_bias` as an `Option`
+            #[inline]
+            pub fn r#accel_bias(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_bias().then_some(&self.r#accel_bias)
+            }
+            /// Set the value and presence of `accel_bias`
+            #[inline]
+            pub fn set_accel_bias(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_bias();
+                self.r#accel_bias = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_bias` as an `Option`
+            #[inline]
+            pub fn mut_accel_bias(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_bias().then_some(&mut self.r#accel_bias)
+            }
+            /// Clear the presence of `accel_bias`
+            #[inline]
+            pub fn clear_accel_bias(&mut self) -> &mut Self {
+                self._has.clear_accel_bias();
+                self
+            }
+            /// Take the value of `accel_bias` and clear its presence
+            #[inline]
+            pub fn take_accel_bias(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_bias()
+                    .then(|| ::core::mem::take(&mut self.r#accel_bias));
+                self._has.clear_accel_bias();
+                val
+            }
+            /// Builder method that sets the value of `accel_bias`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_bias(mut self, value: Vec3) -> Self {
+                self.set_accel_bias(value);
+                self
+            }
+            /// Return a reference to `lever` as an `Option`
+            #[inline]
+            pub fn r#lever(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#lever().then_some(&self.r#lever)
+            }
+            /// Set the value and presence of `lever`
+            #[inline]
+            pub fn set_lever(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_lever();
+                self.r#lever = value.into();
+                self
+            }
+            /// Return a mutable reference to `lever` as an `Option`
+            #[inline]
+            pub fn mut_lever(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#lever().then_some(&mut self.r#lever)
+            }
+            /// Clear the presence of `lever`
+            #[inline]
+            pub fn clear_lever(&mut self) -> &mut Self {
+                self._has.clear_lever();
+                self
+            }
+            /// Take the value of `lever` and clear its presence
+            #[inline]
+            pub fn take_lever(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#lever()
+                    .then(|| ::core::mem::take(&mut self.r#lever));
+                self._has.clear_lever();
+                val
+            }
+            /// Builder method that sets the value of `lever`. Useful for initializing the message.
+            #[inline]
+            pub fn init_lever(mut self, value: Vec3) -> Self {
+                self.set_lever(value);
+                self
+            }
+            /// Return a reference to `mag` as an `Option`
+            #[inline]
+            pub fn r#mag(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#mag().then_some(&self.r#mag)
+            }
+            /// Set the value and presence of `mag`
+            #[inline]
+            pub fn set_mag(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_mag();
+                self.r#mag = value.into();
+                self
+            }
+            /// Return a mutable reference to `mag` as an `Option`
+            #[inline]
+            pub fn mut_mag(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#mag().then_some(&mut self.r#mag)
+            }
+            /// Clear the presence of `mag`
+            #[inline]
+            pub fn clear_mag(&mut self) -> &mut Self {
+                self._has.clear_mag();
+                self
+            }
+            /// Take the value of `mag` and clear its presence
+            #[inline]
+            pub fn take_mag(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self._has.r#mag().then(|| ::core::mem::take(&mut self.r#mag));
+                self._has.clear_mag();
+                val
+            }
+            /// Builder method that sets the value of `mag`. Useful for initializing the message.
+            #[inline]
+            pub fn init_mag(mut self, value: Vec3) -> Self {
+                self.set_mag(value);
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for EqfProcessNoise {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#gyro;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#accel;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#gyro_bias;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_bias();
+                        }
+                        4u32 => {
+                            let mut_ref = &mut self.r#accel_bias;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_bias();
+                        }
+                        5u32 => {
+                            let mut_ref = &mut self.r#lever;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_lever();
+                        }
+                        6u32 => {
+                            let mut_ref = &mut self.r#mag;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_mag();
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for EqfProcessNoise {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel() {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias() {
+                        encoder.encode_varint32(26u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_bias() {
+                        encoder.encode_varint32(34u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#lever() {
+                        encoder.encode_varint32(42u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#mag() {
+                        encoder.encode_varint32(50u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_bias() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#lever() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#mag() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `EqfProcessNoise`
+        pub mod EqfProcessNoise_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `gyro`
+                #[inline]
+                pub const fn r#gyro(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `gyro`
+                #[inline]
+                pub const fn set_gyro(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `gyro`
+                #[inline]
+                pub const fn clear_gyro(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro(mut self) -> Self {
+                    self.set_gyro();
+                    self
+                }
+                /// Query presence of `accel`
+                #[inline]
+                pub const fn r#accel(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `accel`
+                #[inline]
+                pub const fn set_accel(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `accel`
+                #[inline]
+                pub const fn clear_accel(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `accel`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel(mut self) -> Self {
+                    self.set_accel();
+                    self
+                }
+                /// Query presence of `gyro_bias`
+                #[inline]
+                pub const fn r#gyro_bias(&self) -> bool {
+                    (self.0[0] & 4) != 0
+                }
+                /// Set presence of `gyro_bias`
+                #[inline]
+                pub const fn set_gyro_bias(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `gyro_bias`
+                #[inline]
+                pub const fn clear_gyro_bias(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_bias`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_bias(mut self) -> Self {
+                    self.set_gyro_bias();
+                    self
+                }
+                /// Query presence of `accel_bias`
+                #[inline]
+                pub const fn r#accel_bias(&self) -> bool {
+                    (self.0[0] & 8) != 0
+                }
+                /// Set presence of `accel_bias`
+                #[inline]
+                pub const fn set_accel_bias(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `accel_bias`
+                #[inline]
+                pub const fn clear_accel_bias(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_bias`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_bias(mut self) -> Self {
+                    self.set_accel_bias();
+                    self
+                }
+                /// Query presence of `lever`
+                #[inline]
+                pub const fn r#lever(&self) -> bool {
+                    (self.0[0] & 16) != 0
+                }
+                /// Set presence of `lever`
+                #[inline]
+                pub const fn set_lever(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `lever`
+                #[inline]
+                pub const fn clear_lever(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `lever`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_lever(mut self) -> Self {
+                    self.set_lever();
+                    self
+                }
+                /// Query presence of `mag`
+                #[inline]
+                pub const fn r#mag(&self) -> bool {
+                    (self.0[0] & 32) != 0
+                }
+                /// Set presence of `mag`
+                #[inline]
+                pub const fn set_mag(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `mag`
+                #[inline]
+                pub const fn clear_mag(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `mag`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_mag(mut self) -> Self {
+                    self.set_mag();
+                    self
+                }
+            }
+        }
+        /// Everything EqfEngine needs to start.
+        ///
+        /// Deliberately the same shape as GinsOptions wherever the two estimators want
+        /// the same thing, so one can be configured from the other's numbers. Where they
+        /// differ, the models do: the lever arm is a first guess with an uncertainty
+        /// rather than a constant, and there are no scale factors.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct EqfOptions {
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_position: Lla,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_velocity_mps: Ned,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_attitude: Euler,
+            /// Initial gyroscope bias, rad/s. Usually zero.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_gyro_bias_rps: Vec3,
+            /// Initial accelerometer bias, m/s^2. Usually zero.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_accel_bias_mps2: Vec3,
+            /// First guess at the GNSS antenna phase centre in the body frame, metres
+            /// (forward, right, down from the IMU reference point). Estimated from here.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_lever_arm_m: Vec3,
+            /// One-sigma initial uncertainties, in physical units.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_position_std_m: Vec3,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_velocity_std_mps: Vec3,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_attitude_std_rad: Vec3,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_gyro_bias_std_rps: Vec3,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_accel_bias_std_mps2: Vec3,
+            /// How far the antenna could plausibly be from `initial_lever_arm_m`.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_lever_arm_std_m: Vec3,
+            /// One-sigma initial uncertainty of the magnetometer's rotational
+            /// calibration, radians.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#initial_mag_std_rad: Vec3,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#process_noise: EqfProcessNoise,
+            /// Origin of the filter's local tangent frame. Absent anchors at the initial
+            /// position, which is what a system that starts where it will operate wants.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#anchor: Lla,
+            /// Correct the IMU input for Earth rotation, transport rate and Coriolis.
+            pub r#compensate_earth: bool,
+            /// Let the anchor's tangent frame turn with the Earth, inside the filter's
+            /// group. Cannot be combined with `compensate_earth`.
+            pub r#earth_in_group: bool,
+            /// Add the horizontal gravity gradient to `earth_in_group`.
+            pub r#gravity_gradient: bool,
+            /// GCU convergence rate in [0, 1] — the lower, the faster — or absent for no
+            /// inflation at all. `optional` so that "no inflation" and "the fastest rate"
+            /// stay distinguishable; absent means none.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gcu_alpha: f64,
+            /// Chi-squared gates on a position fix, a velocity and a magnetometer
+            /// direction. Absent means the gate is off.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#position_gate: f64,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#velocity_gate: f64,
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#direction_gate: f64,
+            /// Consecutive gate rejections tolerated before the covariance is inflated.
+            /// Absent means the recommended default, 10.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#max_consecutive_rejections: u32,
+            /// Covariance scale factor applied when that limit is reached. Absent means
+            /// the recommended default, 4.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#rejection_inflation: f64,
+            /// Tracks presence of optional and message fields
+            pub _has: EqfOptions_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for EqfOptions {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#initial_position() == other.r#initial_position());
+                ret &= (self.r#initial_velocity_mps() == other.r#initial_velocity_mps());
+                ret &= (self.r#initial_attitude() == other.r#initial_attitude());
+                ret
+                    &= (self.r#initial_gyro_bias_rps()
+                        == other.r#initial_gyro_bias_rps());
+                ret
+                    &= (self.r#initial_accel_bias_mps2()
+                        == other.r#initial_accel_bias_mps2());
+                ret &= (self.r#initial_lever_arm_m() == other.r#initial_lever_arm_m());
+                ret
+                    &= (self.r#initial_position_std_m()
+                        == other.r#initial_position_std_m());
+                ret
+                    &= (self.r#initial_velocity_std_mps()
+                        == other.r#initial_velocity_std_mps());
+                ret
+                    &= (self.r#initial_attitude_std_rad()
+                        == other.r#initial_attitude_std_rad());
+                ret
+                    &= (self.r#initial_gyro_bias_std_rps()
+                        == other.r#initial_gyro_bias_std_rps());
+                ret
+                    &= (self.r#initial_accel_bias_std_mps2()
+                        == other.r#initial_accel_bias_std_mps2());
+                ret
+                    &= (self.r#initial_lever_arm_std_m()
+                        == other.r#initial_lever_arm_std_m());
+                ret &= (self.r#initial_mag_std_rad() == other.r#initial_mag_std_rad());
+                ret &= (self.r#process_noise() == other.r#process_noise());
+                ret &= (self.r#anchor() == other.r#anchor());
+                ret &= (self.r#compensate_earth == other.r#compensate_earth);
+                ret &= (self.r#earth_in_group == other.r#earth_in_group);
+                ret &= (self.r#gravity_gradient == other.r#gravity_gradient);
+                ret &= (self.r#gcu_alpha() == other.r#gcu_alpha());
+                ret &= (self.r#position_gate() == other.r#position_gate());
+                ret &= (self.r#velocity_gate() == other.r#velocity_gate());
+                ret &= (self.r#direction_gate() == other.r#direction_gate());
+                ret
+                    &= (self.r#max_consecutive_rejections()
+                        == other.r#max_consecutive_rejections());
+                ret &= (self.r#rejection_inflation() == other.r#rejection_inflation());
+                ret
+            }
+        }
+        impl EqfOptions {
+            /// Return a reference to `initial_position` as an `Option`
+            #[inline]
+            pub fn r#initial_position(&self) -> ::core::option::Option<&Lla> {
+                self._has.r#initial_position().then_some(&self.r#initial_position)
+            }
+            /// Set the value and presence of `initial_position`
+            #[inline]
+            pub fn set_initial_position(&mut self, value: Lla) -> &mut Self {
+                self._has.set_initial_position();
+                self.r#initial_position = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_position` as an `Option`
+            #[inline]
+            pub fn mut_initial_position(&mut self) -> ::core::option::Option<&mut Lla> {
+                self._has.r#initial_position().then_some(&mut self.r#initial_position)
+            }
+            /// Clear the presence of `initial_position`
+            #[inline]
+            pub fn clear_initial_position(&mut self) -> &mut Self {
+                self._has.clear_initial_position();
+                self
+            }
+            /// Take the value of `initial_position` and clear its presence
+            #[inline]
+            pub fn take_initial_position(&mut self) -> ::core::option::Option<Lla> {
+                let val = self
+                    ._has
+                    .r#initial_position()
+                    .then(|| ::core::mem::take(&mut self.r#initial_position));
+                self._has.clear_initial_position();
+                val
+            }
+            /// Builder method that sets the value of `initial_position`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_position(mut self, value: Lla) -> Self {
+                self.set_initial_position(value);
+                self
+            }
+            /// Return a reference to `initial_velocity_mps` as an `Option`
+            #[inline]
+            pub fn r#initial_velocity_mps(&self) -> ::core::option::Option<&Ned> {
+                self._has
+                    .r#initial_velocity_mps()
+                    .then_some(&self.r#initial_velocity_mps)
+            }
+            /// Set the value and presence of `initial_velocity_mps`
+            #[inline]
+            pub fn set_initial_velocity_mps(&mut self, value: Ned) -> &mut Self {
+                self._has.set_initial_velocity_mps();
+                self.r#initial_velocity_mps = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_velocity_mps` as an `Option`
+            #[inline]
+            pub fn mut_initial_velocity_mps(
+                &mut self,
+            ) -> ::core::option::Option<&mut Ned> {
+                self._has
+                    .r#initial_velocity_mps()
+                    .then_some(&mut self.r#initial_velocity_mps)
+            }
+            /// Clear the presence of `initial_velocity_mps`
+            #[inline]
+            pub fn clear_initial_velocity_mps(&mut self) -> &mut Self {
+                self._has.clear_initial_velocity_mps();
+                self
+            }
+            /// Take the value of `initial_velocity_mps` and clear its presence
+            #[inline]
+            pub fn take_initial_velocity_mps(&mut self) -> ::core::option::Option<Ned> {
+                let val = self
+                    ._has
+                    .r#initial_velocity_mps()
+                    .then(|| ::core::mem::take(&mut self.r#initial_velocity_mps));
+                self._has.clear_initial_velocity_mps();
+                val
+            }
+            /// Builder method that sets the value of `initial_velocity_mps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_velocity_mps(mut self, value: Ned) -> Self {
+                self.set_initial_velocity_mps(value);
+                self
+            }
+            /// Return a reference to `initial_attitude` as an `Option`
+            #[inline]
+            pub fn r#initial_attitude(&self) -> ::core::option::Option<&Euler> {
+                self._has.r#initial_attitude().then_some(&self.r#initial_attitude)
+            }
+            /// Set the value and presence of `initial_attitude`
+            #[inline]
+            pub fn set_initial_attitude(&mut self, value: Euler) -> &mut Self {
+                self._has.set_initial_attitude();
+                self.r#initial_attitude = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_attitude` as an `Option`
+            #[inline]
+            pub fn mut_initial_attitude(
+                &mut self,
+            ) -> ::core::option::Option<&mut Euler> {
+                self._has.r#initial_attitude().then_some(&mut self.r#initial_attitude)
+            }
+            /// Clear the presence of `initial_attitude`
+            #[inline]
+            pub fn clear_initial_attitude(&mut self) -> &mut Self {
+                self._has.clear_initial_attitude();
+                self
+            }
+            /// Take the value of `initial_attitude` and clear its presence
+            #[inline]
+            pub fn take_initial_attitude(&mut self) -> ::core::option::Option<Euler> {
+                let val = self
+                    ._has
+                    .r#initial_attitude()
+                    .then(|| ::core::mem::take(&mut self.r#initial_attitude));
+                self._has.clear_initial_attitude();
+                val
+            }
+            /// Builder method that sets the value of `initial_attitude`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_attitude(mut self, value: Euler) -> Self {
+                self.set_initial_attitude(value);
+                self
+            }
+            /// Return a reference to `initial_gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn r#initial_gyro_bias_rps(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_gyro_bias_rps()
+                    .then_some(&self.r#initial_gyro_bias_rps)
+            }
+            /// Set the value and presence of `initial_gyro_bias_rps`
+            #[inline]
+            pub fn set_initial_gyro_bias_rps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_gyro_bias_rps();
+                self.r#initial_gyro_bias_rps = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn mut_initial_gyro_bias_rps(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_gyro_bias_rps()
+                    .then_some(&mut self.r#initial_gyro_bias_rps)
+            }
+            /// Clear the presence of `initial_gyro_bias_rps`
+            #[inline]
+            pub fn clear_initial_gyro_bias_rps(&mut self) -> &mut Self {
+                self._has.clear_initial_gyro_bias_rps();
+                self
+            }
+            /// Take the value of `initial_gyro_bias_rps` and clear its presence
+            #[inline]
+            pub fn take_initial_gyro_bias_rps(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_gyro_bias_rps()
+                    .then(|| ::core::mem::take(&mut self.r#initial_gyro_bias_rps));
+                self._has.clear_initial_gyro_bias_rps();
+                val
+            }
+            /// Builder method that sets the value of `initial_gyro_bias_rps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_gyro_bias_rps(mut self, value: Vec3) -> Self {
+                self.set_initial_gyro_bias_rps(value);
+                self
+            }
+            /// Return a reference to `initial_accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn r#initial_accel_bias_mps2(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_accel_bias_mps2()
+                    .then_some(&self.r#initial_accel_bias_mps2)
+            }
+            /// Set the value and presence of `initial_accel_bias_mps2`
+            #[inline]
+            pub fn set_initial_accel_bias_mps2(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_accel_bias_mps2();
+                self.r#initial_accel_bias_mps2 = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn mut_initial_accel_bias_mps2(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_accel_bias_mps2()
+                    .then_some(&mut self.r#initial_accel_bias_mps2)
+            }
+            /// Clear the presence of `initial_accel_bias_mps2`
+            #[inline]
+            pub fn clear_initial_accel_bias_mps2(&mut self) -> &mut Self {
+                self._has.clear_initial_accel_bias_mps2();
+                self
+            }
+            /// Take the value of `initial_accel_bias_mps2` and clear its presence
+            #[inline]
+            pub fn take_initial_accel_bias_mps2(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_accel_bias_mps2()
+                    .then(|| ::core::mem::take(&mut self.r#initial_accel_bias_mps2));
+                self._has.clear_initial_accel_bias_mps2();
+                val
+            }
+            /// Builder method that sets the value of `initial_accel_bias_mps2`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_accel_bias_mps2(mut self, value: Vec3) -> Self {
+                self.set_initial_accel_bias_mps2(value);
+                self
+            }
+            /// Return a reference to `initial_lever_arm_m` as an `Option`
+            #[inline]
+            pub fn r#initial_lever_arm_m(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#initial_lever_arm_m().then_some(&self.r#initial_lever_arm_m)
+            }
+            /// Set the value and presence of `initial_lever_arm_m`
+            #[inline]
+            pub fn set_initial_lever_arm_m(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_lever_arm_m();
+                self.r#initial_lever_arm_m = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_lever_arm_m` as an `Option`
+            #[inline]
+            pub fn mut_initial_lever_arm_m(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_lever_arm_m()
+                    .then_some(&mut self.r#initial_lever_arm_m)
+            }
+            /// Clear the presence of `initial_lever_arm_m`
+            #[inline]
+            pub fn clear_initial_lever_arm_m(&mut self) -> &mut Self {
+                self._has.clear_initial_lever_arm_m();
+                self
+            }
+            /// Take the value of `initial_lever_arm_m` and clear its presence
+            #[inline]
+            pub fn take_initial_lever_arm_m(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_lever_arm_m()
+                    .then(|| ::core::mem::take(&mut self.r#initial_lever_arm_m));
+                self._has.clear_initial_lever_arm_m();
+                val
+            }
+            /// Builder method that sets the value of `initial_lever_arm_m`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_lever_arm_m(mut self, value: Vec3) -> Self {
+                self.set_initial_lever_arm_m(value);
+                self
+            }
+            /// Return a reference to `initial_position_std_m` as an `Option`
+            #[inline]
+            pub fn r#initial_position_std_m(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_position_std_m()
+                    .then_some(&self.r#initial_position_std_m)
+            }
+            /// Set the value and presence of `initial_position_std_m`
+            #[inline]
+            pub fn set_initial_position_std_m(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_position_std_m();
+                self.r#initial_position_std_m = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_position_std_m` as an `Option`
+            #[inline]
+            pub fn mut_initial_position_std_m(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_position_std_m()
+                    .then_some(&mut self.r#initial_position_std_m)
+            }
+            /// Clear the presence of `initial_position_std_m`
+            #[inline]
+            pub fn clear_initial_position_std_m(&mut self) -> &mut Self {
+                self._has.clear_initial_position_std_m();
+                self
+            }
+            /// Take the value of `initial_position_std_m` and clear its presence
+            #[inline]
+            pub fn take_initial_position_std_m(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_position_std_m()
+                    .then(|| ::core::mem::take(&mut self.r#initial_position_std_m));
+                self._has.clear_initial_position_std_m();
+                val
+            }
+            /// Builder method that sets the value of `initial_position_std_m`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_position_std_m(mut self, value: Vec3) -> Self {
+                self.set_initial_position_std_m(value);
+                self
+            }
+            /// Return a reference to `initial_velocity_std_mps` as an `Option`
+            #[inline]
+            pub fn r#initial_velocity_std_mps(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_velocity_std_mps()
+                    .then_some(&self.r#initial_velocity_std_mps)
+            }
+            /// Set the value and presence of `initial_velocity_std_mps`
+            #[inline]
+            pub fn set_initial_velocity_std_mps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_velocity_std_mps();
+                self.r#initial_velocity_std_mps = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_velocity_std_mps` as an `Option`
+            #[inline]
+            pub fn mut_initial_velocity_std_mps(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_velocity_std_mps()
+                    .then_some(&mut self.r#initial_velocity_std_mps)
+            }
+            /// Clear the presence of `initial_velocity_std_mps`
+            #[inline]
+            pub fn clear_initial_velocity_std_mps(&mut self) -> &mut Self {
+                self._has.clear_initial_velocity_std_mps();
+                self
+            }
+            /// Take the value of `initial_velocity_std_mps` and clear its presence
+            #[inline]
+            pub fn take_initial_velocity_std_mps(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_velocity_std_mps()
+                    .then(|| ::core::mem::take(&mut self.r#initial_velocity_std_mps));
+                self._has.clear_initial_velocity_std_mps();
+                val
+            }
+            /// Builder method that sets the value of `initial_velocity_std_mps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_velocity_std_mps(mut self, value: Vec3) -> Self {
+                self.set_initial_velocity_std_mps(value);
+                self
+            }
+            /// Return a reference to `initial_attitude_std_rad` as an `Option`
+            #[inline]
+            pub fn r#initial_attitude_std_rad(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_attitude_std_rad()
+                    .then_some(&self.r#initial_attitude_std_rad)
+            }
+            /// Set the value and presence of `initial_attitude_std_rad`
+            #[inline]
+            pub fn set_initial_attitude_std_rad(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_attitude_std_rad();
+                self.r#initial_attitude_std_rad = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_attitude_std_rad` as an `Option`
+            #[inline]
+            pub fn mut_initial_attitude_std_rad(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_attitude_std_rad()
+                    .then_some(&mut self.r#initial_attitude_std_rad)
+            }
+            /// Clear the presence of `initial_attitude_std_rad`
+            #[inline]
+            pub fn clear_initial_attitude_std_rad(&mut self) -> &mut Self {
+                self._has.clear_initial_attitude_std_rad();
+                self
+            }
+            /// Take the value of `initial_attitude_std_rad` and clear its presence
+            #[inline]
+            pub fn take_initial_attitude_std_rad(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_attitude_std_rad()
+                    .then(|| ::core::mem::take(&mut self.r#initial_attitude_std_rad));
+                self._has.clear_initial_attitude_std_rad();
+                val
+            }
+            /// Builder method that sets the value of `initial_attitude_std_rad`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_attitude_std_rad(mut self, value: Vec3) -> Self {
+                self.set_initial_attitude_std_rad(value);
+                self
+            }
+            /// Return a reference to `initial_gyro_bias_std_rps` as an `Option`
+            #[inline]
+            pub fn r#initial_gyro_bias_std_rps(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_gyro_bias_std_rps()
+                    .then_some(&self.r#initial_gyro_bias_std_rps)
+            }
+            /// Set the value and presence of `initial_gyro_bias_std_rps`
+            #[inline]
+            pub fn set_initial_gyro_bias_std_rps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_gyro_bias_std_rps();
+                self.r#initial_gyro_bias_std_rps = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_gyro_bias_std_rps` as an `Option`
+            #[inline]
+            pub fn mut_initial_gyro_bias_std_rps(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_gyro_bias_std_rps()
+                    .then_some(&mut self.r#initial_gyro_bias_std_rps)
+            }
+            /// Clear the presence of `initial_gyro_bias_std_rps`
+            #[inline]
+            pub fn clear_initial_gyro_bias_std_rps(&mut self) -> &mut Self {
+                self._has.clear_initial_gyro_bias_std_rps();
+                self
+            }
+            /// Take the value of `initial_gyro_bias_std_rps` and clear its presence
+            #[inline]
+            pub fn take_initial_gyro_bias_std_rps(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_gyro_bias_std_rps()
+                    .then(|| ::core::mem::take(&mut self.r#initial_gyro_bias_std_rps));
+                self._has.clear_initial_gyro_bias_std_rps();
+                val
+            }
+            /// Builder method that sets the value of `initial_gyro_bias_std_rps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_gyro_bias_std_rps(mut self, value: Vec3) -> Self {
+                self.set_initial_gyro_bias_std_rps(value);
+                self
+            }
+            /// Return a reference to `initial_accel_bias_std_mps2` as an `Option`
+            #[inline]
+            pub fn r#initial_accel_bias_std_mps2(
+                &self,
+            ) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_accel_bias_std_mps2()
+                    .then_some(&self.r#initial_accel_bias_std_mps2)
+            }
+            /// Set the value and presence of `initial_accel_bias_std_mps2`
+            #[inline]
+            pub fn set_initial_accel_bias_std_mps2(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_accel_bias_std_mps2();
+                self.r#initial_accel_bias_std_mps2 = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_accel_bias_std_mps2` as an `Option`
+            #[inline]
+            pub fn mut_initial_accel_bias_std_mps2(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_accel_bias_std_mps2()
+                    .then_some(&mut self.r#initial_accel_bias_std_mps2)
+            }
+            /// Clear the presence of `initial_accel_bias_std_mps2`
+            #[inline]
+            pub fn clear_initial_accel_bias_std_mps2(&mut self) -> &mut Self {
+                self._has.clear_initial_accel_bias_std_mps2();
+                self
+            }
+            /// Take the value of `initial_accel_bias_std_mps2` and clear its presence
+            #[inline]
+            pub fn take_initial_accel_bias_std_mps2(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_accel_bias_std_mps2()
+                    .then(|| ::core::mem::take(&mut self.r#initial_accel_bias_std_mps2));
+                self._has.clear_initial_accel_bias_std_mps2();
+                val
+            }
+            /// Builder method that sets the value of `initial_accel_bias_std_mps2`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_accel_bias_std_mps2(mut self, value: Vec3) -> Self {
+                self.set_initial_accel_bias_std_mps2(value);
+                self
+            }
+            /// Return a reference to `initial_lever_arm_std_m` as an `Option`
+            #[inline]
+            pub fn r#initial_lever_arm_std_m(&self) -> ::core::option::Option<&Vec3> {
+                self._has
+                    .r#initial_lever_arm_std_m()
+                    .then_some(&self.r#initial_lever_arm_std_m)
+            }
+            /// Set the value and presence of `initial_lever_arm_std_m`
+            #[inline]
+            pub fn set_initial_lever_arm_std_m(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_lever_arm_std_m();
+                self.r#initial_lever_arm_std_m = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_lever_arm_std_m` as an `Option`
+            #[inline]
+            pub fn mut_initial_lever_arm_std_m(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_lever_arm_std_m()
+                    .then_some(&mut self.r#initial_lever_arm_std_m)
+            }
+            /// Clear the presence of `initial_lever_arm_std_m`
+            #[inline]
+            pub fn clear_initial_lever_arm_std_m(&mut self) -> &mut Self {
+                self._has.clear_initial_lever_arm_std_m();
+                self
+            }
+            /// Take the value of `initial_lever_arm_std_m` and clear its presence
+            #[inline]
+            pub fn take_initial_lever_arm_std_m(
+                &mut self,
+            ) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_lever_arm_std_m()
+                    .then(|| ::core::mem::take(&mut self.r#initial_lever_arm_std_m));
+                self._has.clear_initial_lever_arm_std_m();
+                val
+            }
+            /// Builder method that sets the value of `initial_lever_arm_std_m`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_lever_arm_std_m(mut self, value: Vec3) -> Self {
+                self.set_initial_lever_arm_std_m(value);
+                self
+            }
+            /// Return a reference to `initial_mag_std_rad` as an `Option`
+            #[inline]
+            pub fn r#initial_mag_std_rad(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#initial_mag_std_rad().then_some(&self.r#initial_mag_std_rad)
+            }
+            /// Set the value and presence of `initial_mag_std_rad`
+            #[inline]
+            pub fn set_initial_mag_std_rad(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_initial_mag_std_rad();
+                self.r#initial_mag_std_rad = value.into();
+                self
+            }
+            /// Return a mutable reference to `initial_mag_std_rad` as an `Option`
+            #[inline]
+            pub fn mut_initial_mag_std_rad(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#initial_mag_std_rad()
+                    .then_some(&mut self.r#initial_mag_std_rad)
+            }
+            /// Clear the presence of `initial_mag_std_rad`
+            #[inline]
+            pub fn clear_initial_mag_std_rad(&mut self) -> &mut Self {
+                self._has.clear_initial_mag_std_rad();
+                self
+            }
+            /// Take the value of `initial_mag_std_rad` and clear its presence
+            #[inline]
+            pub fn take_initial_mag_std_rad(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#initial_mag_std_rad()
+                    .then(|| ::core::mem::take(&mut self.r#initial_mag_std_rad));
+                self._has.clear_initial_mag_std_rad();
+                val
+            }
+            /// Builder method that sets the value of `initial_mag_std_rad`. Useful for initializing the message.
+            #[inline]
+            pub fn init_initial_mag_std_rad(mut self, value: Vec3) -> Self {
+                self.set_initial_mag_std_rad(value);
+                self
+            }
+            /// Return a reference to `process_noise` as an `Option`
+            #[inline]
+            pub fn r#process_noise(&self) -> ::core::option::Option<&EqfProcessNoise> {
+                self._has.r#process_noise().then_some(&self.r#process_noise)
+            }
+            /// Set the value and presence of `process_noise`
+            #[inline]
+            pub fn set_process_noise(&mut self, value: EqfProcessNoise) -> &mut Self {
+                self._has.set_process_noise();
+                self.r#process_noise = value.into();
+                self
+            }
+            /// Return a mutable reference to `process_noise` as an `Option`
+            #[inline]
+            pub fn mut_process_noise(
+                &mut self,
+            ) -> ::core::option::Option<&mut EqfProcessNoise> {
+                self._has.r#process_noise().then_some(&mut self.r#process_noise)
+            }
+            /// Clear the presence of `process_noise`
+            #[inline]
+            pub fn clear_process_noise(&mut self) -> &mut Self {
+                self._has.clear_process_noise();
+                self
+            }
+            /// Take the value of `process_noise` and clear its presence
+            #[inline]
+            pub fn take_process_noise(
+                &mut self,
+            ) -> ::core::option::Option<EqfProcessNoise> {
+                let val = self
+                    ._has
+                    .r#process_noise()
+                    .then(|| ::core::mem::take(&mut self.r#process_noise));
+                self._has.clear_process_noise();
+                val
+            }
+            /// Builder method that sets the value of `process_noise`. Useful for initializing the message.
+            #[inline]
+            pub fn init_process_noise(mut self, value: EqfProcessNoise) -> Self {
+                self.set_process_noise(value);
+                self
+            }
+            /// Return a reference to `anchor` as an `Option`
+            #[inline]
+            pub fn r#anchor(&self) -> ::core::option::Option<&Lla> {
+                self._has.r#anchor().then_some(&self.r#anchor)
+            }
+            /// Set the value and presence of `anchor`
+            #[inline]
+            pub fn set_anchor(&mut self, value: Lla) -> &mut Self {
+                self._has.set_anchor();
+                self.r#anchor = value.into();
+                self
+            }
+            /// Return a mutable reference to `anchor` as an `Option`
+            #[inline]
+            pub fn mut_anchor(&mut self) -> ::core::option::Option<&mut Lla> {
+                self._has.r#anchor().then_some(&mut self.r#anchor)
+            }
+            /// Clear the presence of `anchor`
+            #[inline]
+            pub fn clear_anchor(&mut self) -> &mut Self {
+                self._has.clear_anchor();
+                self
+            }
+            /// Take the value of `anchor` and clear its presence
+            #[inline]
+            pub fn take_anchor(&mut self) -> ::core::option::Option<Lla> {
+                let val = self
+                    ._has
+                    .r#anchor()
+                    .then(|| ::core::mem::take(&mut self.r#anchor));
+                self._has.clear_anchor();
+                val
+            }
+            /// Builder method that sets the value of `anchor`. Useful for initializing the message.
+            #[inline]
+            pub fn init_anchor(mut self, value: Lla) -> Self {
+                self.set_anchor(value);
+                self
+            }
+            /// Return a reference to `compensate_earth`
+            #[inline]
+            pub fn r#compensate_earth(&self) -> &bool {
+                &self.r#compensate_earth
+            }
+            /// Return a mutable reference to `compensate_earth`
+            #[inline]
+            pub fn mut_compensate_earth(&mut self) -> &mut bool {
+                &mut self.r#compensate_earth
+            }
+            /// Set the value of `compensate_earth`
+            #[inline]
+            pub fn set_compensate_earth(&mut self, value: bool) -> &mut Self {
+                self.r#compensate_earth = value.into();
+                self
+            }
+            /// Builder method that sets the value of `compensate_earth`. Useful for initializing the message.
+            #[inline]
+            pub fn init_compensate_earth(mut self, value: bool) -> Self {
+                self.r#compensate_earth = value.into();
+                self
+            }
+            /// Return a reference to `earth_in_group`
+            #[inline]
+            pub fn r#earth_in_group(&self) -> &bool {
+                &self.r#earth_in_group
+            }
+            /// Return a mutable reference to `earth_in_group`
+            #[inline]
+            pub fn mut_earth_in_group(&mut self) -> &mut bool {
+                &mut self.r#earth_in_group
+            }
+            /// Set the value of `earth_in_group`
+            #[inline]
+            pub fn set_earth_in_group(&mut self, value: bool) -> &mut Self {
+                self.r#earth_in_group = value.into();
+                self
+            }
+            /// Builder method that sets the value of `earth_in_group`. Useful for initializing the message.
+            #[inline]
+            pub fn init_earth_in_group(mut self, value: bool) -> Self {
+                self.r#earth_in_group = value.into();
+                self
+            }
+            /// Return a reference to `gravity_gradient`
+            #[inline]
+            pub fn r#gravity_gradient(&self) -> &bool {
+                &self.r#gravity_gradient
+            }
+            /// Return a mutable reference to `gravity_gradient`
+            #[inline]
+            pub fn mut_gravity_gradient(&mut self) -> &mut bool {
+                &mut self.r#gravity_gradient
+            }
+            /// Set the value of `gravity_gradient`
+            #[inline]
+            pub fn set_gravity_gradient(&mut self, value: bool) -> &mut Self {
+                self.r#gravity_gradient = value.into();
+                self
+            }
+            /// Builder method that sets the value of `gravity_gradient`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gravity_gradient(mut self, value: bool) -> Self {
+                self.r#gravity_gradient = value.into();
+                self
+            }
+            /// Return a reference to `gcu_alpha` as an `Option`
+            #[inline]
+            pub fn r#gcu_alpha(&self) -> ::core::option::Option<&f64> {
+                self._has.r#gcu_alpha().then_some(&self.r#gcu_alpha)
+            }
+            /// Set the value and presence of `gcu_alpha`
+            #[inline]
+            pub fn set_gcu_alpha(&mut self, value: f64) -> &mut Self {
+                self._has.set_gcu_alpha();
+                self.r#gcu_alpha = value.into();
+                self
+            }
+            /// Return a mutable reference to `gcu_alpha` as an `Option`
+            #[inline]
+            pub fn mut_gcu_alpha(&mut self) -> ::core::option::Option<&mut f64> {
+                self._has.r#gcu_alpha().then_some(&mut self.r#gcu_alpha)
+            }
+            /// Clear the presence of `gcu_alpha`
+            #[inline]
+            pub fn clear_gcu_alpha(&mut self) -> &mut Self {
+                self._has.clear_gcu_alpha();
+                self
+            }
+            /// Take the value of `gcu_alpha` and clear its presence
+            #[inline]
+            pub fn take_gcu_alpha(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#gcu_alpha()
+                    .then(|| ::core::mem::take(&mut self.r#gcu_alpha));
+                self._has.clear_gcu_alpha();
+                val
+            }
+            /// Builder method that sets the value of `gcu_alpha`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gcu_alpha(mut self, value: f64) -> Self {
+                self.set_gcu_alpha(value);
+                self
+            }
+            /// Return a reference to `position_gate` as an `Option`
+            #[inline]
+            pub fn r#position_gate(&self) -> ::core::option::Option<&f64> {
+                self._has.r#position_gate().then_some(&self.r#position_gate)
+            }
+            /// Set the value and presence of `position_gate`
+            #[inline]
+            pub fn set_position_gate(&mut self, value: f64) -> &mut Self {
+                self._has.set_position_gate();
+                self.r#position_gate = value.into();
+                self
+            }
+            /// Return a mutable reference to `position_gate` as an `Option`
+            #[inline]
+            pub fn mut_position_gate(&mut self) -> ::core::option::Option<&mut f64> {
+                self._has.r#position_gate().then_some(&mut self.r#position_gate)
+            }
+            /// Clear the presence of `position_gate`
+            #[inline]
+            pub fn clear_position_gate(&mut self) -> &mut Self {
+                self._has.clear_position_gate();
+                self
+            }
+            /// Take the value of `position_gate` and clear its presence
+            #[inline]
+            pub fn take_position_gate(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#position_gate()
+                    .then(|| ::core::mem::take(&mut self.r#position_gate));
+                self._has.clear_position_gate();
+                val
+            }
+            /// Builder method that sets the value of `position_gate`. Useful for initializing the message.
+            #[inline]
+            pub fn init_position_gate(mut self, value: f64) -> Self {
+                self.set_position_gate(value);
+                self
+            }
+            /// Return a reference to `velocity_gate` as an `Option`
+            #[inline]
+            pub fn r#velocity_gate(&self) -> ::core::option::Option<&f64> {
+                self._has.r#velocity_gate().then_some(&self.r#velocity_gate)
+            }
+            /// Set the value and presence of `velocity_gate`
+            #[inline]
+            pub fn set_velocity_gate(&mut self, value: f64) -> &mut Self {
+                self._has.set_velocity_gate();
+                self.r#velocity_gate = value.into();
+                self
+            }
+            /// Return a mutable reference to `velocity_gate` as an `Option`
+            #[inline]
+            pub fn mut_velocity_gate(&mut self) -> ::core::option::Option<&mut f64> {
+                self._has.r#velocity_gate().then_some(&mut self.r#velocity_gate)
+            }
+            /// Clear the presence of `velocity_gate`
+            #[inline]
+            pub fn clear_velocity_gate(&mut self) -> &mut Self {
+                self._has.clear_velocity_gate();
+                self
+            }
+            /// Take the value of `velocity_gate` and clear its presence
+            #[inline]
+            pub fn take_velocity_gate(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#velocity_gate()
+                    .then(|| ::core::mem::take(&mut self.r#velocity_gate));
+                self._has.clear_velocity_gate();
+                val
+            }
+            /// Builder method that sets the value of `velocity_gate`. Useful for initializing the message.
+            #[inline]
+            pub fn init_velocity_gate(mut self, value: f64) -> Self {
+                self.set_velocity_gate(value);
+                self
+            }
+            /// Return a reference to `direction_gate` as an `Option`
+            #[inline]
+            pub fn r#direction_gate(&self) -> ::core::option::Option<&f64> {
+                self._has.r#direction_gate().then_some(&self.r#direction_gate)
+            }
+            /// Set the value and presence of `direction_gate`
+            #[inline]
+            pub fn set_direction_gate(&mut self, value: f64) -> &mut Self {
+                self._has.set_direction_gate();
+                self.r#direction_gate = value.into();
+                self
+            }
+            /// Return a mutable reference to `direction_gate` as an `Option`
+            #[inline]
+            pub fn mut_direction_gate(&mut self) -> ::core::option::Option<&mut f64> {
+                self._has.r#direction_gate().then_some(&mut self.r#direction_gate)
+            }
+            /// Clear the presence of `direction_gate`
+            #[inline]
+            pub fn clear_direction_gate(&mut self) -> &mut Self {
+                self._has.clear_direction_gate();
+                self
+            }
+            /// Take the value of `direction_gate` and clear its presence
+            #[inline]
+            pub fn take_direction_gate(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#direction_gate()
+                    .then(|| ::core::mem::take(&mut self.r#direction_gate));
+                self._has.clear_direction_gate();
+                val
+            }
+            /// Builder method that sets the value of `direction_gate`. Useful for initializing the message.
+            #[inline]
+            pub fn init_direction_gate(mut self, value: f64) -> Self {
+                self.set_direction_gate(value);
+                self
+            }
+            /// Return a reference to `max_consecutive_rejections` as an `Option`
+            #[inline]
+            pub fn r#max_consecutive_rejections(&self) -> ::core::option::Option<&u32> {
+                self._has
+                    .r#max_consecutive_rejections()
+                    .then_some(&self.r#max_consecutive_rejections)
+            }
+            /// Set the value and presence of `max_consecutive_rejections`
+            #[inline]
+            pub fn set_max_consecutive_rejections(&mut self, value: u32) -> &mut Self {
+                self._has.set_max_consecutive_rejections();
+                self.r#max_consecutive_rejections = value.into();
+                self
+            }
+            /// Return a mutable reference to `max_consecutive_rejections` as an `Option`
+            #[inline]
+            pub fn mut_max_consecutive_rejections(
+                &mut self,
+            ) -> ::core::option::Option<&mut u32> {
+                self._has
+                    .r#max_consecutive_rejections()
+                    .then_some(&mut self.r#max_consecutive_rejections)
+            }
+            /// Clear the presence of `max_consecutive_rejections`
+            #[inline]
+            pub fn clear_max_consecutive_rejections(&mut self) -> &mut Self {
+                self._has.clear_max_consecutive_rejections();
+                self
+            }
+            /// Take the value of `max_consecutive_rejections` and clear its presence
+            #[inline]
+            pub fn take_max_consecutive_rejections(
+                &mut self,
+            ) -> ::core::option::Option<u32> {
+                let val = self
+                    ._has
+                    .r#max_consecutive_rejections()
+                    .then(|| ::core::mem::take(&mut self.r#max_consecutive_rejections));
+                self._has.clear_max_consecutive_rejections();
+                val
+            }
+            /// Builder method that sets the value of `max_consecutive_rejections`. Useful for initializing the message.
+            #[inline]
+            pub fn init_max_consecutive_rejections(mut self, value: u32) -> Self {
+                self.set_max_consecutive_rejections(value);
+                self
+            }
+            /// Return a reference to `rejection_inflation` as an `Option`
+            #[inline]
+            pub fn r#rejection_inflation(&self) -> ::core::option::Option<&f64> {
+                self._has.r#rejection_inflation().then_some(&self.r#rejection_inflation)
+            }
+            /// Set the value and presence of `rejection_inflation`
+            #[inline]
+            pub fn set_rejection_inflation(&mut self, value: f64) -> &mut Self {
+                self._has.set_rejection_inflation();
+                self.r#rejection_inflation = value.into();
+                self
+            }
+            /// Return a mutable reference to `rejection_inflation` as an `Option`
+            #[inline]
+            pub fn mut_rejection_inflation(
+                &mut self,
+            ) -> ::core::option::Option<&mut f64> {
+                self._has
+                    .r#rejection_inflation()
+                    .then_some(&mut self.r#rejection_inflation)
+            }
+            /// Clear the presence of `rejection_inflation`
+            #[inline]
+            pub fn clear_rejection_inflation(&mut self) -> &mut Self {
+                self._has.clear_rejection_inflation();
+                self
+            }
+            /// Take the value of `rejection_inflation` and clear its presence
+            #[inline]
+            pub fn take_rejection_inflation(&mut self) -> ::core::option::Option<f64> {
+                let val = self
+                    ._has
+                    .r#rejection_inflation()
+                    .then(|| ::core::mem::take(&mut self.r#rejection_inflation));
+                self._has.clear_rejection_inflation();
+                val
+            }
+            /// Builder method that sets the value of `rejection_inflation`. Useful for initializing the message.
+            #[inline]
+            pub fn init_rejection_inflation(mut self, value: f64) -> Self {
+                self.set_rejection_inflation(value);
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for EqfOptions {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#initial_position;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_position();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#initial_velocity_mps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_velocity_mps();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#initial_attitude;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_attitude();
+                        }
+                        4u32 => {
+                            let mut_ref = &mut self.r#initial_gyro_bias_rps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_gyro_bias_rps();
+                        }
+                        5u32 => {
+                            let mut_ref = &mut self.r#initial_accel_bias_mps2;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_accel_bias_mps2();
+                        }
+                        6u32 => {
+                            let mut_ref = &mut self.r#initial_lever_arm_m;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_lever_arm_m();
+                        }
+                        7u32 => {
+                            let mut_ref = &mut self.r#initial_position_std_m;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_position_std_m();
+                        }
+                        8u32 => {
+                            let mut_ref = &mut self.r#initial_velocity_std_mps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_velocity_std_mps();
+                        }
+                        9u32 => {
+                            let mut_ref = &mut self.r#initial_attitude_std_rad;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_attitude_std_rad();
+                        }
+                        10u32 => {
+                            let mut_ref = &mut self.r#initial_gyro_bias_std_rps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_gyro_bias_std_rps();
+                        }
+                        11u32 => {
+                            let mut_ref = &mut self.r#initial_accel_bias_std_mps2;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_accel_bias_std_mps2();
+                        }
+                        12u32 => {
+                            let mut_ref = &mut self.r#initial_lever_arm_std_m;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_lever_arm_std_m();
+                        }
+                        13u32 => {
+                            let mut_ref = &mut self.r#initial_mag_std_rad;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_initial_mag_std_rad();
+                        }
+                        14u32 => {
+                            let mut_ref = &mut self.r#process_noise;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_process_noise();
+                        }
+                        15u32 => {
+                            let mut_ref = &mut self.r#anchor;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_anchor();
+                        }
+                        16u32 => {
+                            let mut_ref = &mut self.r#compensate_earth;
+                            {
+                                let val = decoder.decode_bool()?;
+                                let val_ref = &val;
+                                if *val_ref {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        17u32 => {
+                            let mut_ref = &mut self.r#earth_in_group;
+                            {
+                                let val = decoder.decode_bool()?;
+                                let val_ref = &val;
+                                if *val_ref {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        18u32 => {
+                            let mut_ref = &mut self.r#gravity_gradient;
+                            {
+                                let val = decoder.decode_bool()?;
+                                let val_ref = &val;
+                                if *val_ref {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        19u32 => {
+                            let mut_ref = &mut self.r#gcu_alpha;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_gcu_alpha();
+                        }
+                        20u32 => {
+                            let mut_ref = &mut self.r#position_gate;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_position_gate();
+                        }
+                        21u32 => {
+                            let mut_ref = &mut self.r#velocity_gate;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_velocity_gate();
+                        }
+                        22u32 => {
+                            let mut_ref = &mut self.r#direction_gate;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_direction_gate();
+                        }
+                        23u32 => {
+                            let mut_ref = &mut self.r#max_consecutive_rejections;
+                            {
+                                let val = decoder.decode_varint32()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_max_consecutive_rejections();
+                        }
+                        24u32 => {
+                            let mut_ref = &mut self.r#rejection_inflation;
+                            {
+                                let val = decoder.decode_double()?;
+                                *mut_ref = val as _;
+                            };
+                            self._has.set_rejection_inflation();
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for EqfOptions {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Lla as ::micropb::MessageEncode > ::MAX_SIZE,
+                    | size | ::micropb::size::sizeof_len_record(size)), | size | size +
+                    1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Ned as ::micropb::MessageEncode > ::MAX_SIZE,
+                    | size | ::micropb::size::sizeof_len_record(size)), | size | size +
+                    1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Euler as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< EqfProcessNoise as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Lla as ::micropb::MessageEncode > ::MAX_SIZE,
+                    | size | ::micropb::size::sizeof_len_record(size)), | size | size +
+                    1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(1usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(1usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(1usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(5usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 2usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_position()
+                    {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_velocity_mps()
+                    {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_attitude()
+                    {
+                        encoder.encode_varint32(26u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_gyro_bias_rps()
+                    {
+                        encoder.encode_varint32(34u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_accel_bias_mps2()
+                    {
+                        encoder.encode_varint32(42u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_lever_arm_m()
+                    {
+                        encoder.encode_varint32(50u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_position_std_m()
+                    {
+                        encoder.encode_varint32(58u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_velocity_std_mps()
+                    {
+                        encoder.encode_varint32(66u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_attitude_std_rad()
+                    {
+                        encoder.encode_varint32(74u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_gyro_bias_std_rps()
+                    {
+                        encoder.encode_varint32(82u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_accel_bias_std_mps2()
+                    {
+                        encoder.encode_varint32(90u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_lever_arm_std_m()
+                    {
+                        encoder.encode_varint32(98u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_mag_std_rad()
+                    {
+                        encoder.encode_varint32(106u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#process_noise()
+                    {
+                        encoder.encode_varint32(114u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#anchor() {
+                        encoder.encode_varint32(122u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#compensate_earth;
+                    if *val_ref {
+                        encoder.encode_varint32(128u32)?;
+                        encoder.encode_bool(*val_ref)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#earth_in_group;
+                    if *val_ref {
+                        encoder.encode_varint32(136u32)?;
+                        encoder.encode_bool(*val_ref)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#gravity_gradient;
+                    if *val_ref {
+                        encoder.encode_varint32(144u32)?;
+                        encoder.encode_bool(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gcu_alpha() {
+                        encoder.encode_varint32(153u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#position_gate()
+                    {
+                        encoder.encode_varint32(161u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#velocity_gate()
+                    {
+                        encoder.encode_varint32(169u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#direction_gate()
+                    {
+                        encoder.encode_varint32(177u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#max_consecutive_rejections()
+                    {
+                        encoder.encode_varint32(184u32)?;
+                        encoder.encode_varint32(*val_ref as _)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#rejection_inflation()
+                    {
+                        encoder.encode_varint32(193u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_position()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_velocity_mps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_attitude()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_gyro_bias_rps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_accel_bias_mps2()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_lever_arm_m()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_position_std_m()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_velocity_std_mps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_attitude_std_rad()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_gyro_bias_std_rps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_accel_bias_std_mps2()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_lever_arm_std_m()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#initial_mag_std_rad()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#process_noise()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#anchor() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    let val_ref = &self.r#compensate_earth;
+                    if *val_ref {
+                        size += 2usize + 1;
+                    }
+                }
+                {
+                    let val_ref = &self.r#earth_in_group;
+                    if *val_ref {
+                        size += 2usize + 1;
+                    }
+                }
+                {
+                    let val_ref = &self.r#gravity_gradient;
+                    if *val_ref {
+                        size += 2usize + 1;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gcu_alpha() {
+                        size += 2usize + 8;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#position_gate()
+                    {
+                        size += 2usize + 8;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#velocity_gate()
+                    {
+                        size += 2usize + 8;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#direction_gate()
+                    {
+                        size += 2usize + 8;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#max_consecutive_rejections()
+                    {
+                        size += 2usize + ::micropb::size::sizeof_varint32(*val_ref as _);
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#rejection_inflation()
+                    {
+                        size += 2usize + 8;
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `EqfOptions`
+        pub mod EqfOptions_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 3]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 3])
+                }
+                /// Query presence of `initial_position`
+                #[inline]
+                pub const fn r#initial_position(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `initial_position`
+                #[inline]
+                pub const fn set_initial_position(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `initial_position`
+                #[inline]
+                pub const fn clear_initial_position(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_position`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_position(mut self) -> Self {
+                    self.set_initial_position();
+                    self
+                }
+                /// Query presence of `initial_velocity_mps`
+                #[inline]
+                pub const fn r#initial_velocity_mps(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `initial_velocity_mps`
+                #[inline]
+                pub const fn set_initial_velocity_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `initial_velocity_mps`
+                #[inline]
+                pub const fn clear_initial_velocity_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_velocity_mps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_velocity_mps(mut self) -> Self {
+                    self.set_initial_velocity_mps();
+                    self
+                }
+                /// Query presence of `initial_attitude`
+                #[inline]
+                pub const fn r#initial_attitude(&self) -> bool {
+                    (self.0[0] & 4) != 0
+                }
+                /// Set presence of `initial_attitude`
+                #[inline]
+                pub const fn set_initial_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `initial_attitude`
+                #[inline]
+                pub const fn clear_initial_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_attitude`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_attitude(mut self) -> Self {
+                    self.set_initial_attitude();
+                    self
+                }
+                /// Query presence of `initial_gyro_bias_rps`
+                #[inline]
+                pub const fn r#initial_gyro_bias_rps(&self) -> bool {
+                    (self.0[0] & 8) != 0
+                }
+                /// Set presence of `initial_gyro_bias_rps`
+                #[inline]
+                pub const fn set_initial_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `initial_gyro_bias_rps`
+                #[inline]
+                pub const fn clear_initial_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_gyro_bias_rps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_gyro_bias_rps(mut self) -> Self {
+                    self.set_initial_gyro_bias_rps();
+                    self
+                }
+                /// Query presence of `initial_accel_bias_mps2`
+                #[inline]
+                pub const fn r#initial_accel_bias_mps2(&self) -> bool {
+                    (self.0[0] & 16) != 0
+                }
+                /// Set presence of `initial_accel_bias_mps2`
+                #[inline]
+                pub const fn set_initial_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `initial_accel_bias_mps2`
+                #[inline]
+                pub const fn clear_initial_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_accel_bias_mps2`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_accel_bias_mps2(mut self) -> Self {
+                    self.set_initial_accel_bias_mps2();
+                    self
+                }
+                /// Query presence of `initial_lever_arm_m`
+                #[inline]
+                pub const fn r#initial_lever_arm_m(&self) -> bool {
+                    (self.0[0] & 32) != 0
+                }
+                /// Set presence of `initial_lever_arm_m`
+                #[inline]
+                pub const fn set_initial_lever_arm_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `initial_lever_arm_m`
+                #[inline]
+                pub const fn clear_initial_lever_arm_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_lever_arm_m`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_lever_arm_m(mut self) -> Self {
+                    self.set_initial_lever_arm_m();
+                    self
+                }
+                /// Query presence of `initial_position_std_m`
+                #[inline]
+                pub const fn r#initial_position_std_m(&self) -> bool {
+                    (self.0[0] & 64) != 0
+                }
+                /// Set presence of `initial_position_std_m`
+                #[inline]
+                pub const fn set_initial_position_std_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 64;
+                    self
+                }
+                /// Clear presence of `initial_position_std_m`
+                #[inline]
+                pub const fn clear_initial_position_std_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !64;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_position_std_m`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_position_std_m(mut self) -> Self {
+                    self.set_initial_position_std_m();
+                    self
+                }
+                /// Query presence of `initial_velocity_std_mps`
+                #[inline]
+                pub const fn r#initial_velocity_std_mps(&self) -> bool {
+                    (self.0[0] & 128) != 0
+                }
+                /// Set presence of `initial_velocity_std_mps`
+                #[inline]
+                pub const fn set_initial_velocity_std_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 128;
+                    self
+                }
+                /// Clear presence of `initial_velocity_std_mps`
+                #[inline]
+                pub const fn clear_initial_velocity_std_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !128;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_velocity_std_mps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_velocity_std_mps(mut self) -> Self {
+                    self.set_initial_velocity_std_mps();
+                    self
+                }
+                /// Query presence of `initial_attitude_std_rad`
+                #[inline]
+                pub const fn r#initial_attitude_std_rad(&self) -> bool {
+                    (self.0[1] & 1) != 0
+                }
+                /// Set presence of `initial_attitude_std_rad`
+                #[inline]
+                pub const fn set_initial_attitude_std_rad(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `initial_attitude_std_rad`
+                #[inline]
+                pub const fn clear_initial_attitude_std_rad(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_attitude_std_rad`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_attitude_std_rad(mut self) -> Self {
+                    self.set_initial_attitude_std_rad();
+                    self
+                }
+                /// Query presence of `initial_gyro_bias_std_rps`
+                #[inline]
+                pub const fn r#initial_gyro_bias_std_rps(&self) -> bool {
+                    (self.0[1] & 2) != 0
+                }
+                /// Set presence of `initial_gyro_bias_std_rps`
+                #[inline]
+                pub const fn set_initial_gyro_bias_std_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `initial_gyro_bias_std_rps`
+                #[inline]
+                pub const fn clear_initial_gyro_bias_std_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_gyro_bias_std_rps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_gyro_bias_std_rps(mut self) -> Self {
+                    self.set_initial_gyro_bias_std_rps();
+                    self
+                }
+                /// Query presence of `initial_accel_bias_std_mps2`
+                #[inline]
+                pub const fn r#initial_accel_bias_std_mps2(&self) -> bool {
+                    (self.0[1] & 4) != 0
+                }
+                /// Set presence of `initial_accel_bias_std_mps2`
+                #[inline]
+                pub const fn set_initial_accel_bias_std_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `initial_accel_bias_std_mps2`
+                #[inline]
+                pub const fn clear_initial_accel_bias_std_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_accel_bias_std_mps2`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_accel_bias_std_mps2(mut self) -> Self {
+                    self.set_initial_accel_bias_std_mps2();
+                    self
+                }
+                /// Query presence of `initial_lever_arm_std_m`
+                #[inline]
+                pub const fn r#initial_lever_arm_std_m(&self) -> bool {
+                    (self.0[1] & 8) != 0
+                }
+                /// Set presence of `initial_lever_arm_std_m`
+                #[inline]
+                pub const fn set_initial_lever_arm_std_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `initial_lever_arm_std_m`
+                #[inline]
+                pub const fn clear_initial_lever_arm_std_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_lever_arm_std_m`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_lever_arm_std_m(mut self) -> Self {
+                    self.set_initial_lever_arm_std_m();
+                    self
+                }
+                /// Query presence of `initial_mag_std_rad`
+                #[inline]
+                pub const fn r#initial_mag_std_rad(&self) -> bool {
+                    (self.0[1] & 16) != 0
+                }
+                /// Set presence of `initial_mag_std_rad`
+                #[inline]
+                pub const fn set_initial_mag_std_rad(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `initial_mag_std_rad`
+                #[inline]
+                pub const fn clear_initial_mag_std_rad(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `initial_mag_std_rad`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_initial_mag_std_rad(mut self) -> Self {
+                    self.set_initial_mag_std_rad();
+                    self
+                }
+                /// Query presence of `process_noise`
+                #[inline]
+                pub const fn r#process_noise(&self) -> bool {
+                    (self.0[1] & 32) != 0
+                }
+                /// Set presence of `process_noise`
+                #[inline]
+                pub const fn set_process_noise(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `process_noise`
+                #[inline]
+                pub const fn clear_process_noise(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `process_noise`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_process_noise(mut self) -> Self {
+                    self.set_process_noise();
+                    self
+                }
+                /// Query presence of `anchor`
+                #[inline]
+                pub const fn r#anchor(&self) -> bool {
+                    (self.0[1] & 64) != 0
+                }
+                /// Set presence of `anchor`
+                #[inline]
+                pub const fn set_anchor(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 64;
+                    self
+                }
+                /// Clear presence of `anchor`
+                #[inline]
+                pub const fn clear_anchor(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !64;
+                    self
+                }
+                /// Builder method that sets the presence of `anchor`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_anchor(mut self) -> Self {
+                    self.set_anchor();
+                    self
+                }
+                /// Query presence of `gcu_alpha`
+                #[inline]
+                pub const fn r#gcu_alpha(&self) -> bool {
+                    (self.0[1] & 128) != 0
+                }
+                /// Set presence of `gcu_alpha`
+                #[inline]
+                pub const fn set_gcu_alpha(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 128;
+                    self
+                }
+                /// Clear presence of `gcu_alpha`
+                #[inline]
+                pub const fn clear_gcu_alpha(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !128;
+                    self
+                }
+                /// Builder method that sets the presence of `gcu_alpha`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gcu_alpha(mut self) -> Self {
+                    self.set_gcu_alpha();
+                    self
+                }
+                /// Query presence of `position_gate`
+                #[inline]
+                pub const fn r#position_gate(&self) -> bool {
+                    (self.0[2] & 1) != 0
+                }
+                /// Set presence of `position_gate`
+                #[inline]
+                pub const fn set_position_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `position_gate`
+                #[inline]
+                pub const fn clear_position_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `position_gate`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_position_gate(mut self) -> Self {
+                    self.set_position_gate();
+                    self
+                }
+                /// Query presence of `velocity_gate`
+                #[inline]
+                pub const fn r#velocity_gate(&self) -> bool {
+                    (self.0[2] & 2) != 0
+                }
+                /// Set presence of `velocity_gate`
+                #[inline]
+                pub const fn set_velocity_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `velocity_gate`
+                #[inline]
+                pub const fn clear_velocity_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `velocity_gate`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_velocity_gate(mut self) -> Self {
+                    self.set_velocity_gate();
+                    self
+                }
+                /// Query presence of `direction_gate`
+                #[inline]
+                pub const fn r#direction_gate(&self) -> bool {
+                    (self.0[2] & 4) != 0
+                }
+                /// Set presence of `direction_gate`
+                #[inline]
+                pub const fn set_direction_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `direction_gate`
+                #[inline]
+                pub const fn clear_direction_gate(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `direction_gate`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_direction_gate(mut self) -> Self {
+                    self.set_direction_gate();
+                    self
+                }
+                /// Query presence of `max_consecutive_rejections`
+                #[inline]
+                pub const fn r#max_consecutive_rejections(&self) -> bool {
+                    (self.0[2] & 8) != 0
+                }
+                /// Set presence of `max_consecutive_rejections`
+                #[inline]
+                pub const fn set_max_consecutive_rejections(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `max_consecutive_rejections`
+                #[inline]
+                pub const fn clear_max_consecutive_rejections(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `max_consecutive_rejections`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_max_consecutive_rejections(mut self) -> Self {
+                    self.set_max_consecutive_rejections();
+                    self
+                }
+                /// Query presence of `rejection_inflation`
+                #[inline]
+                pub const fn r#rejection_inflation(&self) -> bool {
+                    (self.0[2] & 16) != 0
+                }
+                /// Set presence of `rejection_inflation`
+                #[inline]
+                pub const fn set_rejection_inflation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `rejection_inflation`
+                #[inline]
+                pub const fn clear_rejection_inflation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[2];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `rejection_inflation`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_rejection_inflation(mut self) -> Self {
+                    self.set_rejection_inflation();
+                    self
+                }
+            }
+        }
+        /// The EqF's estimate at one epoch.
+        ///
+        /// The navigation fields match NavSolution's and are reported the same way —
+        /// geodetic position, ground velocity in NED, attitude as a quaternion — so a
+        /// consumer can treat the two estimates alike. The states the EqF has and the
+        /// ESKF does not are `lever_arm_m` and `mag_calibration`.
+        #[derive(Debug, Default, Clone)]
+        pub struct EqfSolution {
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#time: GpsTime,
+            /// Position of the IMU reference point, not the GNSS antenna.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#position: Lla,
+            /// Ground velocity in the NED navigation frame, m/s.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#velocity_mps: Ned,
+            /// Attitude q_nb. Authoritative.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#attitude: Quaternion,
+            /// Attitude as Euler angles. Derived from `attitude`, carried for the
+            /// convenience of consumers that only plot; never round-trip through it.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#euler: Euler,
+            /// Estimated gyroscope bias, rad/s.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_bias_rps: Vec3,
+            /// Estimated accelerometer bias, m/s^2.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_bias_mps2: Vec3,
+            /// Estimated GNSS antenna phase centre in the body frame, metres.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#lever_arm_m: Vec3,
+            /// Magnetometer rotational calibration, rotating a measured field into the
+            /// body frame. Identity when no magnetometer is used.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#mag_calibration: Quaternion,
+            /// Per-state one-sigma uncertainties, 21 elements, in the EqF's block order:
+            /// attitude, velocity, position, gyroscope bias, accelerometer bias, lever
+            /// arm, magnetometer calibration. This is *not* the ESKF's state order, which
+            /// NavSolution carries.
+            pub r#state_std: ::heapless::Vec<f64, 21>,
+            /// Tracks presence of optional and message fields
+            pub _has: EqfSolution_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for EqfSolution {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#time() == other.r#time());
+                ret &= (self.r#position() == other.r#position());
+                ret &= (self.r#velocity_mps() == other.r#velocity_mps());
+                ret &= (self.r#attitude() == other.r#attitude());
+                ret &= (self.r#euler() == other.r#euler());
+                ret &= (self.r#gyro_bias_rps() == other.r#gyro_bias_rps());
+                ret &= (self.r#accel_bias_mps2() == other.r#accel_bias_mps2());
+                ret &= (self.r#lever_arm_m() == other.r#lever_arm_m());
+                ret &= (self.r#mag_calibration() == other.r#mag_calibration());
+                ret &= (self.r#state_std == other.r#state_std);
+                ret
+            }
+        }
+        impl EqfSolution {
+            /// Return a reference to `time` as an `Option`
+            #[inline]
+            pub fn r#time(&self) -> ::core::option::Option<&GpsTime> {
+                self._has.r#time().then_some(&self.r#time)
+            }
+            /// Set the value and presence of `time`
+            #[inline]
+            pub fn set_time(&mut self, value: GpsTime) -> &mut Self {
+                self._has.set_time();
+                self.r#time = value.into();
+                self
+            }
+            /// Return a mutable reference to `time` as an `Option`
+            #[inline]
+            pub fn mut_time(&mut self) -> ::core::option::Option<&mut GpsTime> {
+                self._has.r#time().then_some(&mut self.r#time)
+            }
+            /// Clear the presence of `time`
+            #[inline]
+            pub fn clear_time(&mut self) -> &mut Self {
+                self._has.clear_time();
+                self
+            }
+            /// Take the value of `time` and clear its presence
+            #[inline]
+            pub fn take_time(&mut self) -> ::core::option::Option<GpsTime> {
+                let val = self
+                    ._has
+                    .r#time()
+                    .then(|| ::core::mem::take(&mut self.r#time));
+                self._has.clear_time();
+                val
+            }
+            /// Builder method that sets the value of `time`. Useful for initializing the message.
+            #[inline]
+            pub fn init_time(mut self, value: GpsTime) -> Self {
+                self.set_time(value);
+                self
+            }
+            /// Return a reference to `position` as an `Option`
+            #[inline]
+            pub fn r#position(&self) -> ::core::option::Option<&Lla> {
+                self._has.r#position().then_some(&self.r#position)
+            }
+            /// Set the value and presence of `position`
+            #[inline]
+            pub fn set_position(&mut self, value: Lla) -> &mut Self {
+                self._has.set_position();
+                self.r#position = value.into();
+                self
+            }
+            /// Return a mutable reference to `position` as an `Option`
+            #[inline]
+            pub fn mut_position(&mut self) -> ::core::option::Option<&mut Lla> {
+                self._has.r#position().then_some(&mut self.r#position)
+            }
+            /// Clear the presence of `position`
+            #[inline]
+            pub fn clear_position(&mut self) -> &mut Self {
+                self._has.clear_position();
+                self
+            }
+            /// Take the value of `position` and clear its presence
+            #[inline]
+            pub fn take_position(&mut self) -> ::core::option::Option<Lla> {
+                let val = self
+                    ._has
+                    .r#position()
+                    .then(|| ::core::mem::take(&mut self.r#position));
+                self._has.clear_position();
+                val
+            }
+            /// Builder method that sets the value of `position`. Useful for initializing the message.
+            #[inline]
+            pub fn init_position(mut self, value: Lla) -> Self {
+                self.set_position(value);
+                self
+            }
+            /// Return a reference to `velocity_mps` as an `Option`
+            #[inline]
+            pub fn r#velocity_mps(&self) -> ::core::option::Option<&Ned> {
+                self._has.r#velocity_mps().then_some(&self.r#velocity_mps)
+            }
+            /// Set the value and presence of `velocity_mps`
+            #[inline]
+            pub fn set_velocity_mps(&mut self, value: Ned) -> &mut Self {
+                self._has.set_velocity_mps();
+                self.r#velocity_mps = value.into();
+                self
+            }
+            /// Return a mutable reference to `velocity_mps` as an `Option`
+            #[inline]
+            pub fn mut_velocity_mps(&mut self) -> ::core::option::Option<&mut Ned> {
+                self._has.r#velocity_mps().then_some(&mut self.r#velocity_mps)
+            }
+            /// Clear the presence of `velocity_mps`
+            #[inline]
+            pub fn clear_velocity_mps(&mut self) -> &mut Self {
+                self._has.clear_velocity_mps();
+                self
+            }
+            /// Take the value of `velocity_mps` and clear its presence
+            #[inline]
+            pub fn take_velocity_mps(&mut self) -> ::core::option::Option<Ned> {
+                let val = self
+                    ._has
+                    .r#velocity_mps()
+                    .then(|| ::core::mem::take(&mut self.r#velocity_mps));
+                self._has.clear_velocity_mps();
+                val
+            }
+            /// Builder method that sets the value of `velocity_mps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_velocity_mps(mut self, value: Ned) -> Self {
+                self.set_velocity_mps(value);
+                self
+            }
+            /// Return a reference to `attitude` as an `Option`
+            #[inline]
+            pub fn r#attitude(&self) -> ::core::option::Option<&Quaternion> {
+                self._has.r#attitude().then_some(&self.r#attitude)
+            }
+            /// Set the value and presence of `attitude`
+            #[inline]
+            pub fn set_attitude(&mut self, value: Quaternion) -> &mut Self {
+                self._has.set_attitude();
+                self.r#attitude = value.into();
+                self
+            }
+            /// Return a mutable reference to `attitude` as an `Option`
+            #[inline]
+            pub fn mut_attitude(&mut self) -> ::core::option::Option<&mut Quaternion> {
+                self._has.r#attitude().then_some(&mut self.r#attitude)
+            }
+            /// Clear the presence of `attitude`
+            #[inline]
+            pub fn clear_attitude(&mut self) -> &mut Self {
+                self._has.clear_attitude();
+                self
+            }
+            /// Take the value of `attitude` and clear its presence
+            #[inline]
+            pub fn take_attitude(&mut self) -> ::core::option::Option<Quaternion> {
+                let val = self
+                    ._has
+                    .r#attitude()
+                    .then(|| ::core::mem::take(&mut self.r#attitude));
+                self._has.clear_attitude();
+                val
+            }
+            /// Builder method that sets the value of `attitude`. Useful for initializing the message.
+            #[inline]
+            pub fn init_attitude(mut self, value: Quaternion) -> Self {
+                self.set_attitude(value);
+                self
+            }
+            /// Return a reference to `euler` as an `Option`
+            #[inline]
+            pub fn r#euler(&self) -> ::core::option::Option<&Euler> {
+                self._has.r#euler().then_some(&self.r#euler)
+            }
+            /// Set the value and presence of `euler`
+            #[inline]
+            pub fn set_euler(&mut self, value: Euler) -> &mut Self {
+                self._has.set_euler();
+                self.r#euler = value.into();
+                self
+            }
+            /// Return a mutable reference to `euler` as an `Option`
+            #[inline]
+            pub fn mut_euler(&mut self) -> ::core::option::Option<&mut Euler> {
+                self._has.r#euler().then_some(&mut self.r#euler)
+            }
+            /// Clear the presence of `euler`
+            #[inline]
+            pub fn clear_euler(&mut self) -> &mut Self {
+                self._has.clear_euler();
+                self
+            }
+            /// Take the value of `euler` and clear its presence
+            #[inline]
+            pub fn take_euler(&mut self) -> ::core::option::Option<Euler> {
+                let val = self
+                    ._has
+                    .r#euler()
+                    .then(|| ::core::mem::take(&mut self.r#euler));
+                self._has.clear_euler();
+                val
+            }
+            /// Builder method that sets the value of `euler`. Useful for initializing the message.
+            #[inline]
+            pub fn init_euler(mut self, value: Euler) -> Self {
+                self.set_euler(value);
+                self
+            }
+            /// Return a reference to `gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn r#gyro_bias_rps(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_bias_rps().then_some(&self.r#gyro_bias_rps)
+            }
+            /// Set the value and presence of `gyro_bias_rps`
+            #[inline]
+            pub fn set_gyro_bias_rps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_bias_rps();
+                self.r#gyro_bias_rps = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn mut_gyro_bias_rps(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_bias_rps().then_some(&mut self.r#gyro_bias_rps)
+            }
+            /// Clear the presence of `gyro_bias_rps`
+            #[inline]
+            pub fn clear_gyro_bias_rps(&mut self) -> &mut Self {
+                self._has.clear_gyro_bias_rps();
+                self
+            }
+            /// Take the value of `gyro_bias_rps` and clear its presence
+            #[inline]
+            pub fn take_gyro_bias_rps(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_bias_rps()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_bias_rps));
+                self._has.clear_gyro_bias_rps();
+                val
+            }
+            /// Builder method that sets the value of `gyro_bias_rps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_bias_rps(mut self, value: Vec3) -> Self {
+                self.set_gyro_bias_rps(value);
+                self
+            }
+            /// Return a reference to `accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn r#accel_bias_mps2(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_bias_mps2().then_some(&self.r#accel_bias_mps2)
+            }
+            /// Set the value and presence of `accel_bias_mps2`
+            #[inline]
+            pub fn set_accel_bias_mps2(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_bias_mps2();
+                self.r#accel_bias_mps2 = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn mut_accel_bias_mps2(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_bias_mps2().then_some(&mut self.r#accel_bias_mps2)
+            }
+            /// Clear the presence of `accel_bias_mps2`
+            #[inline]
+            pub fn clear_accel_bias_mps2(&mut self) -> &mut Self {
+                self._has.clear_accel_bias_mps2();
+                self
+            }
+            /// Take the value of `accel_bias_mps2` and clear its presence
+            #[inline]
+            pub fn take_accel_bias_mps2(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_bias_mps2()
+                    .then(|| ::core::mem::take(&mut self.r#accel_bias_mps2));
+                self._has.clear_accel_bias_mps2();
+                val
+            }
+            /// Builder method that sets the value of `accel_bias_mps2`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_bias_mps2(mut self, value: Vec3) -> Self {
+                self.set_accel_bias_mps2(value);
+                self
+            }
+            /// Return a reference to `lever_arm_m` as an `Option`
+            #[inline]
+            pub fn r#lever_arm_m(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#lever_arm_m().then_some(&self.r#lever_arm_m)
+            }
+            /// Set the value and presence of `lever_arm_m`
+            #[inline]
+            pub fn set_lever_arm_m(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_lever_arm_m();
+                self.r#lever_arm_m = value.into();
+                self
+            }
+            /// Return a mutable reference to `lever_arm_m` as an `Option`
+            #[inline]
+            pub fn mut_lever_arm_m(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#lever_arm_m().then_some(&mut self.r#lever_arm_m)
+            }
+            /// Clear the presence of `lever_arm_m`
+            #[inline]
+            pub fn clear_lever_arm_m(&mut self) -> &mut Self {
+                self._has.clear_lever_arm_m();
+                self
+            }
+            /// Take the value of `lever_arm_m` and clear its presence
+            #[inline]
+            pub fn take_lever_arm_m(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#lever_arm_m()
+                    .then(|| ::core::mem::take(&mut self.r#lever_arm_m));
+                self._has.clear_lever_arm_m();
+                val
+            }
+            /// Builder method that sets the value of `lever_arm_m`. Useful for initializing the message.
+            #[inline]
+            pub fn init_lever_arm_m(mut self, value: Vec3) -> Self {
+                self.set_lever_arm_m(value);
+                self
+            }
+            /// Return a reference to `mag_calibration` as an `Option`
+            #[inline]
+            pub fn r#mag_calibration(&self) -> ::core::option::Option<&Quaternion> {
+                self._has.r#mag_calibration().then_some(&self.r#mag_calibration)
+            }
+            /// Set the value and presence of `mag_calibration`
+            #[inline]
+            pub fn set_mag_calibration(&mut self, value: Quaternion) -> &mut Self {
+                self._has.set_mag_calibration();
+                self.r#mag_calibration = value.into();
+                self
+            }
+            /// Return a mutable reference to `mag_calibration` as an `Option`
+            #[inline]
+            pub fn mut_mag_calibration(
+                &mut self,
+            ) -> ::core::option::Option<&mut Quaternion> {
+                self._has.r#mag_calibration().then_some(&mut self.r#mag_calibration)
+            }
+            /// Clear the presence of `mag_calibration`
+            #[inline]
+            pub fn clear_mag_calibration(&mut self) -> &mut Self {
+                self._has.clear_mag_calibration();
+                self
+            }
+            /// Take the value of `mag_calibration` and clear its presence
+            #[inline]
+            pub fn take_mag_calibration(
+                &mut self,
+            ) -> ::core::option::Option<Quaternion> {
+                let val = self
+                    ._has
+                    .r#mag_calibration()
+                    .then(|| ::core::mem::take(&mut self.r#mag_calibration));
+                self._has.clear_mag_calibration();
+                val
+            }
+            /// Builder method that sets the value of `mag_calibration`. Useful for initializing the message.
+            #[inline]
+            pub fn init_mag_calibration(mut self, value: Quaternion) -> Self {
+                self.set_mag_calibration(value);
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for EqfSolution {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#time;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_time();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#position;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_position();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#velocity_mps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_velocity_mps();
+                        }
+                        4u32 => {
+                            let mut_ref = &mut self.r#attitude;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_attitude();
+                        }
+                        5u32 => {
+                            let mut_ref = &mut self.r#euler;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_euler();
+                        }
+                        6u32 => {
+                            let mut_ref = &mut self.r#gyro_bias_rps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_bias_rps();
+                        }
+                        7u32 => {
+                            let mut_ref = &mut self.r#accel_bias_mps2;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_bias_mps2();
+                        }
+                        8u32 => {
+                            let mut_ref = &mut self.r#lever_arm_m;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_lever_arm_m();
+                        }
+                        9u32 => {
+                            let mut_ref = &mut self.r#mag_calibration;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_mag_calibration();
+                        }
+                        10u32 => {
+                            if tag.wire_type() == ::micropb::WIRE_TYPE_LEN {
+                                decoder
+                                    .decode_packed(
+                                        &mut self.r#state_std,
+                                        |decoder| decoder.decode_double().map(|v| v as _),
+                                    )?;
+                            } else {
+                                if let (Err(_), false) = (
+                                    self.r#state_std.pb_push(decoder.decode_double()? as _),
+                                    decoder.ignore_repeated_cap_err,
+                                ) {
+                                    return Err(::micropb::DecodeError::Capacity);
+                                }
+                            }
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for EqfSolution {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< GpsTime as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Lla as ::micropb::MessageEncode > ::MAX_SIZE,
+                    | size | ::micropb::size::sizeof_len_record(size)), | size | size +
+                    1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Ned as ::micropb::MessageEncode > ::MAX_SIZE,
+                    | size | ::micropb::size::sizeof_len_record(size)), | size | size +
+                    1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Quaternion as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Euler as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Quaternion as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size |
+                    ::micropb::size::sizeof_len_record(21usize * size) + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#time() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#position() {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#velocity_mps()
+                    {
+                        encoder.encode_varint32(26u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#attitude() {
+                        encoder.encode_varint32(34u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#euler() {
+                        encoder.encode_varint32(42u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
+                    {
+                        encoder.encode_varint32(50u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_mps2()
+                    {
+                        encoder.encode_varint32(58u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#lever_arm_m() {
+                        encoder.encode_varint32(66u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#mag_calibration()
+                    {
+                        encoder.encode_varint32(74u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if !self.r#state_std.is_empty() {
+                        let len = self.r#state_std.len() * 8usize;
+                        encoder.encode_varint32(82u32)?;
+                        encoder
+                            .encode_packed(
+                                len,
+                                &self.r#state_std,
+                                |encoder, val| {
+                                    let val_ref = &val;
+                                    encoder.encode_double(*val_ref)
+                                },
+                            )?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#time() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#position() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#velocity_mps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#attitude() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#euler() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_mps2()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#lever_arm_m() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#mag_calibration()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if !self.r#state_std.is_empty() {
+                        let len = self.r#state_std.len() * 8usize;
+                        size += 1usize + ::micropb::size::sizeof_len_record(len);
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `EqfSolution`
+        pub mod EqfSolution_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 2]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 2])
+                }
+                /// Query presence of `time`
+                #[inline]
+                pub const fn r#time(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `time`
+                #[inline]
+                pub const fn set_time(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `time`
+                #[inline]
+                pub const fn clear_time(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `time`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_time(mut self) -> Self {
+                    self.set_time();
+                    self
+                }
+                /// Query presence of `position`
+                #[inline]
+                pub const fn r#position(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `position`
+                #[inline]
+                pub const fn set_position(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `position`
+                #[inline]
+                pub const fn clear_position(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `position`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_position(mut self) -> Self {
+                    self.set_position();
+                    self
+                }
+                /// Query presence of `velocity_mps`
+                #[inline]
+                pub const fn r#velocity_mps(&self) -> bool {
+                    (self.0[0] & 4) != 0
+                }
+                /// Set presence of `velocity_mps`
+                #[inline]
+                pub const fn set_velocity_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `velocity_mps`
+                #[inline]
+                pub const fn clear_velocity_mps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `velocity_mps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_velocity_mps(mut self) -> Self {
+                    self.set_velocity_mps();
+                    self
+                }
+                /// Query presence of `attitude`
+                #[inline]
+                pub const fn r#attitude(&self) -> bool {
+                    (self.0[0] & 8) != 0
+                }
+                /// Set presence of `attitude`
+                #[inline]
+                pub const fn set_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `attitude`
+                #[inline]
+                pub const fn clear_attitude(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `attitude`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_attitude(mut self) -> Self {
+                    self.set_attitude();
+                    self
+                }
+                /// Query presence of `euler`
+                #[inline]
+                pub const fn r#euler(&self) -> bool {
+                    (self.0[0] & 16) != 0
+                }
+                /// Set presence of `euler`
+                #[inline]
+                pub const fn set_euler(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `euler`
+                #[inline]
+                pub const fn clear_euler(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `euler`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_euler(mut self) -> Self {
+                    self.set_euler();
+                    self
+                }
+                /// Query presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn r#gyro_bias_rps(&self) -> bool {
+                    (self.0[0] & 32) != 0
+                }
+                /// Set presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn set_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn clear_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_bias_rps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_bias_rps(mut self) -> Self {
+                    self.set_gyro_bias_rps();
+                    self
+                }
+                /// Query presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn r#accel_bias_mps2(&self) -> bool {
+                    (self.0[0] & 64) != 0
+                }
+                /// Set presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn set_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 64;
+                    self
+                }
+                /// Clear presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn clear_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !64;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_bias_mps2`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_bias_mps2(mut self) -> Self {
+                    self.set_accel_bias_mps2();
+                    self
+                }
+                /// Query presence of `lever_arm_m`
+                #[inline]
+                pub const fn r#lever_arm_m(&self) -> bool {
+                    (self.0[0] & 128) != 0
+                }
+                /// Set presence of `lever_arm_m`
+                #[inline]
+                pub const fn set_lever_arm_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 128;
+                    self
+                }
+                /// Clear presence of `lever_arm_m`
+                #[inline]
+                pub const fn clear_lever_arm_m(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !128;
+                    self
+                }
+                /// Builder method that sets the presence of `lever_arm_m`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_lever_arm_m(mut self) -> Self {
+                    self.set_lever_arm_m();
+                    self
+                }
+                /// Query presence of `mag_calibration`
+                #[inline]
+                pub const fn r#mag_calibration(&self) -> bool {
+                    (self.0[1] & 1) != 0
+                }
+                /// Set presence of `mag_calibration`
+                #[inline]
+                pub const fn set_mag_calibration(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `mag_calibration`
+                #[inline]
+                pub const fn clear_mag_calibration(&mut self) -> &mut Self {
+                    let elem = &mut self.0[1];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `mag_calibration`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_mag_calibration(mut self) -> Self {
+                    self.set_mag_calibration();
+                    self
+                }
+            }
+        }
     }
 }

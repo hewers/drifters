@@ -16,7 +16,7 @@ libfuzzer-sys = "0.4"
 drifters-core = { path = "../crates/drifters-core" }
 drifters-eqf = { path = "../crates/drifters-eqf" }
 drifters-filter = { path = "../crates/drifters-filter" }
-drifters-proto = { path = "../crates/drifters-proto" }
+drifters-proto = { path = "../crates/drifters-proto", features = ["eqf"] }
 micropb = { version = "0.6", default-features = false, features = [
     "encode",
     "decode",

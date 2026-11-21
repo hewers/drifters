@@ -92,6 +92,9 @@ protobuf codecs   gnss-rtk adapters    WLS, TDCP, RINEX,  and validation
                                        DGNSS, batch fit
 ```
 
+`drifters-proto` sits below both estimators: it carries the ESKF's messages and
+the EqF's, so it depends on `drifters-filter` and `drifters-eqf`.
+
 `drifters-filter::anchor` and `drifters-core::local` hold the local-frame and
 re-anchoring transforms. Nothing calls them: the state representation change they
 exist for is [parked](milestones.md#local-frame-state), because the measurements
@@ -570,7 +573,13 @@ is **checked into the repository** rather than produced by a `build.rs`, so
 building `drifters` never requires `protoc`. Regeneration is an explicit,
 reviewable step. See [adr/0002](adr/0002-protobuf.md).
 
-Schemas live in `proto/drifters/v1/`.
+Schemas live in `proto/drifters/v1/`. `eskf.proto` and `sensors.proto` hold the
+ESKF's messages and the sensor samples; `eqf.proto` holds the EqF's options and
+its estimate, including the GNSS lever arm and magnetometer calibration it
+estimates. The two estimators share one package and the value types in
+`types.proto`, so there is one wire version to keep; the EqF's conversions are
+the crate's `eqf` feature, so an ESKF-only firmware does not link the EqF
+engine.
 
 `double` is a fixed64 on the wire, so position and velocity round-trip bit-exactly,
 and the tests assert equality. A geodetic latitude carries about 10⁻⁹ rad of

@@ -23,7 +23,8 @@ use crate::repo_root;
 const SCHEMAS: &[&str] = &[
     "drifters/v1/types.proto",
     "drifters/v1/sensors.proto",
-    "drifters/v1/solution.proto",
+    "drifters/v1/eskf.proto",
+    "drifters/v1/eqf.proto",
 ];
 
 /// Where the generated module lands.
@@ -60,6 +61,10 @@ pub fn run(check: bool) -> Result<(), Box<dyn Error>> {
     generator.use_container_heapless();
     generator.configure(
         ".drifters.v1.NavSolution.state_std",
+        Config::new().max_len(STATE_STD_LEN),
+    );
+    generator.configure(
+        ".drifters.v1.EqfSolution.state_std",
         Config::new().max_len(STATE_STD_LEN),
     );
     generator.configure(

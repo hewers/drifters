@@ -349,6 +349,19 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Added
 
+- **The EqF's configuration and estimate go over the wire.** `eqf.proto` adds
+  `EqfOptions`, `EqfProcessNoise` and `EqfSolution`. `EqfSolution` carries the
+  geodetic solution the EqF shares with the ESKF plus the two states only it
+  has, the estimated GNSS lever arm and the magnetometer calibration, and its
+  per-state sigmas in the EqF's own block order. `EqfOptions` round-trips every
+  setting, restoring the non-zero defaults for `max_consecutive_rejections` and
+  `rejection_inflation` when absent and keeping `gcu_alpha = None` distinct from
+  the fastest rate. The conversions from the EqF's own types are the new `eqf`
+  feature, the crate's only dependency on `drifters-eqf`, so a firmware that
+  serializes the ESKF alone does not link the EqF engine; the messages and the
+  decode side are always available. The two estimators share the `drifters.v1`
+  package, and the ESKF's schema is renamed `solution.proto` to `eskf.proto` — no
+  message or field name changes.
 - **`EqfOptions::gravity_gradient`**, on top of `earth_in_group`, adds the horizontal
   gravity gradient to the equivariant filter, so its free-inertial errors follow the
   84.4-minute Schuler oscillation. After 42 minutes unaided from a 20 µrad tilt the error
