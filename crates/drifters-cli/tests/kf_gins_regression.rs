@@ -47,9 +47,19 @@ fn dataset_dir() -> Option<PathBuf> {
     complete.then_some(root)
 }
 
+/// `DRIFTERS_DATASET_REQUIRED` turns the skip into a failure, which is what the
+/// CI dataset job sets so a broken fetch cannot pass as a skipped test.
+fn required() -> bool {
+    std::env::var_os("DRIFTERS_DATASET_REQUIRED").is_some()
+}
+
 #[test]
 fn the_demo_dataset_replays_within_tolerance() {
     let Some(dir) = dataset_dir() else {
+        assert!(
+            !required(),
+            "the KF-GINS dataset is required but datasets/kf-gins is incomplete"
+        );
         eprintln!(
             "skipping: KF-GINS demo dataset not present.\n\
              See docs/testing.md for how to fetch it into datasets/kf-gins/."

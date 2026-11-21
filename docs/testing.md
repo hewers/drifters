@@ -125,14 +125,17 @@ It is **not committed**: 67 MB, and it belongs to the KF-GINS authors, so its
 licence stays with upstream. `datasets/` is git-ignored — see
 [datasets.md](datasets.md) for every external artefact this repository expects,
 and [adr/0007](adr/0007-no-binaries-in-history.md) for why none of it is in git.
-To fetch it:
+To fetch it — the reference solution included, pinned to the upstream commit
+these figures were measured at and verified by SHA-256:
 
 ```bash
-mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done
+scripts/fetch-kf-gins.sh
 ```
 
 The test **skips and passes** when the dataset is absent, so a fresh clone is
-not broken by not having it. CI does not fetch it; run it locally with:
+not broken by not having it. The `dataset` CI job fetches it, cached, and sets
+`DRIFTERS_DATASET_REQUIRED`, so a failed fetch fails the job rather than
+skipping the tests. Run it locally with:
 
 ```bash
 cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
@@ -191,15 +194,47 @@ conversion bug produces, and none of those should be within tolerance.
 
 ### What this does not prove
 
-It is not a comparison against KF-GINS's own output. That needs their C++
-implementation built and run, which this test cannot do; the upstream repository
-ships no reference solution file. What the test does establish is that the
-mechanization, the transition matrix and the GNSS update are mutually consistent
-to centimetres over an hour of real data — an implementation error in any of the
-three would be orders of magnitude larger than these tolerances.
+It scores against the fixes, not against truth: the fixes carry their own error,
+so a filter tracking them perfectly reports a small residual while being wrong
+by whatever the fixes were. What it establishes is that the mechanization, the
+transition matrix and the GNSS update are mutually consistent to centimetres
+over an hour of real data — an implementation error in any of the three would be
+orders of magnitude larger than these tolerances. The next section closes the
+truth gap.
 
-A true cross-implementation comparison is on the
-[roadmap](milestones.md#estimators).
+### Against the reference solution
+
+`crates/drifters-cli/tests/kf_gins_truth.rs` replays the same dataset and
+compares each estimator's **IMU-reference-point** solution with `truth.nav`,
+KF-GINS's own reference trajectory, once a second after a 30 s settle.
+`truth.nav` is independent of both this library and the RTK receiver, which is
+what makes heading and velocity error — invisible to a prediction residual —
+measurable:
+
+| quantity | ESKF | EqF |
+|---|---|---|
+| horizontal position RMS | 0.012 m | 0.030 m |
+| vertical position RMS | 0.009 m | 0.045 m |
+| horizontal velocity RMS | 0.003 m/s | 0.003 m/s |
+| heading RMS | 0.018° | 0.011° |
+| NEES, 9 navigation states | 20.9 | 57.3 |
+
+The EqF is flat-Earth by default, so it carries the metre-level tangent-plane
+error the ESKF does not — the larger position error — while its self-calibrating
+attitude gives the smaller heading. Tolerances are ~3x each engine's observed
+values, the convention the rest of the suite uses.
+
+NEES is the filter's error against that truth in its own covariance, over
+position, velocity and attitude, and an exact truth would read 9. Both read
+above it because `truth.nav` is itself a reference with an error, not a truth
+without one: the errors against it are at the level of the reference's own
+error, while the covariance each claims is smaller. The EqF's is the higher of
+the two. The bands are wide for that reason — they catch an order-of-magnitude
+covariance fault, not a factor of two. On simulated data with exact truth the
+ESKF reads 8.9 to 11.0 (Layer 7).
+
+The [initial-alignment test](#layer-13--initial-alignment) scores against the
+same file rather than the library's own output.
 
 ## Layer 7 — statistical consistency
 

@@ -36,6 +36,7 @@ What the library does, what checks it, and what is open. The reasoning is in
 | `msrv` | Rust 1.85 for `drifters-core`, `-filter`, `-eqf`, `-gnss` and `-interop`, and 1.88 for the workspace |
 | `docs` | rustdoc with `-D warnings` |
 | `proto` | the checked-in bindings match the `.proto` sources |
+| `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution) and the alignment test, with a missing dataset failing the job |
 | `fuzz` | the decode target, and the engine target in three filter configurations, 60 s each |
 | `interop` | the permissive `nav-types` adapter |
 | `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit and agreement between builds |
@@ -83,8 +84,9 @@ emulation. This repository claims nothing about time until these items run.
   on one trace. Compare phone results by medians over nearby starts.
 - **The Earth-in-group filter's NIS.** It reads 1.76 on KF-GINS against 1.55 with the
   input compensated, and the difference has not been investigated.
-- **A true comparison against KF-GINS's own output,** which needs its C++ build in the
-  loop. The regression checks against the GNSS fixes instead.
+- **A comparison against KF-GINS's own filter output,** which needs their C++
+  build in the loop. `truth.nav` now gives independent truth, scored in
+  `kf_gins_truth.rs`, but it is their reference trajectory and not their filter.
 - **Fuzzing beyond the engines.** The aligner, the smoother and the CLI's parsers are
   not fuzzed.
 

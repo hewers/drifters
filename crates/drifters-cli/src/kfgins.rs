@@ -21,6 +21,13 @@
 //! tow_s  lat_deg  lon_deg  height_m  std_n_m  std_e_m  std_d_m
 //! ```
 //!
+//! **Nav** — whitespace-separated, 11 columns. `truth.nav`, the reference
+//! solution, and the library's own `*_nav.txt` share the layout:
+//!
+//! ```text
+//! week  tow_s  lat_deg  lon_deg  height_m  vn  ve  vd  roll_deg  pitch_deg  yaw_deg
+//! ```
+//!
 //! **Config** — a small YAML subset; see [`Config::parse`].
 
 use std::fs::File;
@@ -164,6 +171,131 @@ pub fn read_gnss(path: &Path, week: u32) -> Result<Vec<GnssFix>, DataError> {
         });
     }
     Ok(fixes)
+}
+
+/// One row of a KF-GINS `.nav` file.
+///
+/// The reference solution `truth.nav` and the library's own `*_nav.txt` share
+/// this layout, so one reader serves both.
+#[derive(Clone, Copy, Debug)]
+pub struct NavRow {
+    /// GPS seconds of week.
+    pub tow: f64,
+    /// Geodetic position of the IMU reference point.
+    pub position: Lla,
+    /// Ground velocity in NED, m/s.
+    pub velocity: Ned,
+    /// Roll, pitch and yaw, radians.
+    pub attitude: Euler,
+}
+
+/// Read a KF-GINS `.nav` file.
+///
+/// The week column is ignored: it is not consistent between the reference file
+/// and the IMU and GNSS files, which carry time of week alone, and every
+/// comparison here is between times of week.
+pub fn read_nav(path: &Path) -> Result<Vec<NavRow>, DataError> {
+    let file = File::open(path)?;
+    let mut rows = Vec::new();
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line?;
+        let Some(values) = columns(&line) else {
+            continue;
+        };
+        if values.len() < 11 {
+            return Err(DataError::Parse {
+                path: path.display().to_string(),
+                line: index + 1,
+                reason: format!("expected 11 columns, found {}", values.len()),
+            });
+        }
+        rows.push(NavRow {
+            tow: values[1],
+            position: Lla::from_degrees(values[2], values[3], values[4]),
+            velocity: Ned::new(values[5], values[6], values[7]),
+            attitude: Euler::new(
+                values[8].to_radians(),
+                values[9].to_radians(),
+                values[10].to_radians(),
+            ),
+        });
+    }
+    Ok(rows)
+}
+
+/// A reference trajectory, interpolated between its rows.
+///
+/// The reference is sampled at the IMU rate, so interpolation is only ever
+/// between adjacent samples, but the two streams' timestamps do not coincide.
+#[derive(Clone, Debug)]
+pub struct Reference {
+    rows: Vec<NavRow>,
+}
+
+impl Reference {
+    /// Wrap rows already in ascending time order.
+    pub fn new(rows: Vec<NavRow>) -> Self {
+        Self { rows }
+    }
+
+    /// Number of reference rows.
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the trajectory is empty.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// The interpolated reference at `tow`, or `None` outside its span.
+    ///
+    /// Yaw is interpolated through the shortest arc: the vehicle turns several
+    /// degrees a second, and a plain linear interpolation across the ±180°
+    /// boundary would sweep the long way round.
+    pub fn at(&self, tow: f64) -> Option<NavRow> {
+        let first = self.rows.first()?;
+        let last = self.rows.last()?;
+        if !(first.tow..=last.tow).contains(&tow) {
+            return None;
+        }
+        let i = self.rows.partition_point(|r| r.tow < tow);
+        if i == 0 {
+            return Some(*first);
+        }
+        let (a, b) = (self.rows[i - 1], self.rows[i]);
+        let span = b.tow - a.tow;
+        let k = if span.abs() < 1e-12 {
+            0.0
+        } else {
+            (tow - a.tow) / span
+        };
+        let lerp = |x: f64, y: f64| x + k * (y - x);
+        let mut dyaw = b.attitude.yaw - a.attitude.yaw;
+        if dyaw > core::f64::consts::PI {
+            dyaw -= core::f64::consts::TAU;
+        } else if dyaw < -core::f64::consts::PI {
+            dyaw += core::f64::consts::TAU;
+        }
+        Some(NavRow {
+            tow,
+            position: Lla::new(
+                lerp(a.position.lat, b.position.lat),
+                lerp(a.position.lon, b.position.lon),
+                lerp(a.position.height, b.position.height),
+            ),
+            velocity: Ned::new(
+                lerp(a.velocity.n, b.velocity.n),
+                lerp(a.velocity.e, b.velocity.e),
+                lerp(a.velocity.d, b.velocity.d),
+            ),
+            attitude: Euler::new(
+                lerp(a.attitude.roll, b.attitude.roll),
+                lerp(a.attitude.pitch, b.attitude.pitch),
+                a.attitude.yaw + k * dyaw,
+            ),
+        })
+    }
 }
 
 /// The KF-GINS YAML configuration.

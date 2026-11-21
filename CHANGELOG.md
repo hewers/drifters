@@ -362,6 +362,23 @@ the list below is what the release *is* rather than what changed.
 
 ### Added
 
+- **The KF-GINS reference solution is scored, and the dataset runs in CI.**
+  `truth.nav`, KF-GINS's own 200 Hz reference trajectory, is independent of this
+  library and of the RTK receiver, so it gives heading and velocity error and a
+  NEES that the prediction residual cannot. Over the demo run the ESKF reads
+  0.012 m horizontal and 0.009 m vertical position RMS, 0.003 m/s horizontal
+  velocity RMS, 0.018° heading RMS and a nine-state NEES of 20.9; the EqF reads
+  0.030 m, 0.045 m, 0.003 m/s, 0.011° and 57.3 — the flat-Earth model costs
+  position and the self-calibrating attitude buys heading. Both NEES sit above
+  the ideal 9 because the reference has an error of its own, at the level of the
+  filters' error against it. `kfgins::read_nav` and `kfgins::Reference` read and
+  interpolate a `.nav` file. The alignment test scores against the same file
+  instead of the library's own output. A new `dataset` CI job fetches the
+  dataset with `scripts/fetch-kf-gins.sh` — pinned to a commit and verified by
+  SHA-256, where the old instructions tracked `main` — caches it, and sets
+  `DRIFTERS_DATASET_REQUIRED` so a failed fetch fails the job rather than
+  skipping every dataset test and reporting ok.
+
 - **Both engines count what the IMU stream drops.**
   `Estimator::invalid_imu_count` counts samples refused as invalid — dropped
   and carried on, and before this counted nowhere, unlike a stale fix.

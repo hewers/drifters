@@ -251,6 +251,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask licences --check
 
+  # The dataset tests skip and pass when the data is absent, which is right for
+  # a fresh clone but means CI never ran them — the "test-enforced" accuracy
+  # figures were not, in fact, enforced by anything. This job fetches the
+  # KF-GINS demo dataset, pinned to a commit and verified by checksum so an
+  # upstream change cannot silently move the measurement, caches it, and sets
+  # `DRIFTERS_DATASET_REQUIRED` so a broken fetch fails the job instead of
+  # quietly skipping every test.
+  dataset:
+    name: KF-GINS reference solution
+    runs-on: ubuntu-latest
+    env:
+      DRIFTERS_DATASET_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: datasets/kf-gins
+          key: kf-gins-${{ hashFiles('scripts/fetch-kf-gins.sh') }}
+      - name: fetch the dataset, pinned and checksummed
+        run: scripts/fetch-kf-gins.sh
+      # `--nocapture` puts the accuracy, heading and NEES figures in the log,
+      # so a regression is readable without re-running anything.
+      - run: cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
+      - run: cargo test -p drifters-cli --test kf_gins_truth -- --nocapture
+      - run: cargo test -p drifters-cli --test alignment -- --nocapture
+
   # The fuzz targets need nightly, so they cannot run in the main test job. A
   # short run on every push catches a target that stopped compiling and anything
   # shallow; depth comes from running them out of band. The engine target runs

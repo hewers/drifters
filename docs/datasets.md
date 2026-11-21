@@ -10,7 +10,7 @@ is never a broken checkout.
 
 | what | size | needed for |
 |---|---|---|
-| [KF-GINS demo dataset](#kf-gins-demo-dataset) | 67 MB | the 3.3 cm accuracy regression, `drifters replay`, `drifters eqf`, the [initial-alignment test](testing.md#layer-13--initial-alignment) |
+| [KF-GINS demo dataset](#kf-gins-demo-dataset) | 160 MB | the 3.3 cm accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), `drifters replay`, `drifters eqf`, the [initial-alignment test](testing.md#layer-13--initial-alignment) |
 | [GSDC 2023 phone trace](#gsdc-2023-phone-trace) | ~3.7 GB archive | the ground-truth comparison, `drifters gsdc`, the initial-alignment test (which also uses the [held-out traces](#held-out-traces)) |
 | [comma2k19](#comma2k19) | 1 MB, or 228 MB for 64 segments | the comma2k19 regression, `drifters comma` |
 | [Source papers](#source-papers) | 2 MB | reading along with `drifters-eqf`; the code does not need them |
@@ -21,13 +21,19 @@ Tactical-grade IMU (Leador-A15) at 200 Hz with RTK GNSS, 57 minutes of driving,
 from the [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) authors.
 
 ```bash
-mkdir -p datasets/kf-gins && cd datasets/kf-gins && for f in kf-gins.yaml GNSS-RTK.txt Leador-A15.txt; do curl -fLO "https://raw.githubusercontent.com/i2Nav-WHU/KF-GINS/main/dataset/$f"; done
+scripts/fetch-kf-gins.sh
 ```
+
+The script pins the upstream commit and verifies each file's SHA-256, so a
+change on `main` cannot silently move what CI measures. It fetches the IMU
+(67 MB), the RTK fixes, the configuration, and `truth.nav` — the authors'
+95 MB reference trajectory, which the accuracy figures are scored against.
 
 Then:
 
 ```bash
 cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
+cargo test -p drifters-cli --test kf_gins_truth -- --nocapture
 ```
 
 The `test` profile is optimised, so the same run takes about **2.5 s against 11 s

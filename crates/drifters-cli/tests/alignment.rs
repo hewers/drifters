@@ -637,7 +637,9 @@ fn replay<E: Estimator>(
     }
 }
 
-/// `drifters_nav.txt`: time, position, velocity and attitude in degrees.
+/// A KF-GINS `.nav` file — `truth.nav`, the authors' reference solution, which
+/// is independent of this library. Columns: `time, lat, lon, height, vn, ve,
+/// vd, roll, pitch, yaw`, the angles in degrees.
 fn read_reference(path: &Path) -> Option<Vec<[f64; 10]>> {
     let text = std::fs::read_to_string(path).ok()?;
     let rows = text
@@ -666,8 +668,8 @@ fn reference_row(rows: &[[f64; 10]], tow: f64) -> Option<&[f64; 10]> {
         .find(|r| (r[0] - tow).abs() <= 0.0026)
 }
 
-/// The reference at `tow`, interpolated between its one-second rows. The
-/// vehicle turns at several degrees a second, so the nearest row will not do.
+/// The reference at `tow`, interpolated between its rows. The vehicle turns at
+/// several degrees a second, so the nearest row will not do.
 fn reference_at(rows: &[[f64; 10]], tow: f64) -> Option<[f64; 10]> {
     let i = rows.partition_point(|r| r[0] < tow);
     let (before, after) = (rows.get(i.checked_sub(1)?)?, rows.get(i)?);
@@ -688,12 +690,20 @@ fn reference_at(rows: &[[f64; 10]], tow: f64) -> Option<[f64; 10]> {
 #[test]
 fn kf_gins_aligns_from_nothing() {
     let Some(dir) = dataset("kf-gins") else {
+        assert!(
+            std::env::var_os("DRIFTERS_DATASET_REQUIRED").is_none(),
+            "the KF-GINS dataset is required but datasets/kf-gins is absent"
+        );
         return;
     };
     let config = kfgins::Config::read(&dir.join("kf-gins.yaml")).expect("config parses");
     let imu = kfgins::read_imu(&dir.join("Leador-A15.txt"), 2119).expect("imu parses");
     let gnss = kfgins::read_gnss(&dir.join("GNSS-RTK.txt"), 2119).expect("gnss parses");
-    let Some(reference) = read_reference(&dir.join("drifters_nav.txt")) else {
+    let Some(reference) = read_reference(&dir.join("truth.nav")) else {
+        assert!(
+            std::env::var_os("DRIFTERS_DATASET_REQUIRED").is_none(),
+            "the KF-GINS reference solution truth.nav is required but absent"
+        );
         eprintln!("skipping: no reference solution");
         return;
     };
