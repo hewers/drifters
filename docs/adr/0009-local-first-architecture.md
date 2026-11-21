@@ -126,30 +126,28 @@ is 3.6e-13 at `f64` and 1.1e-7 at `f32`.
 **The premise, measured.** Position as `f32` metres about an anchor, over KF-GINS,
 where the `f64` filter's NIS is 1.459:
 
-| anchor range | horizontal | NIS |
-|---|---|---|
-| 0 m | 0.0330 m | 1.486 |
-| 500 m | 0.0330 m | 1.523 |
-| 1 km | 0.0331 m | 1.562 |
-| 2 km | 0.0334 m | 1.668 |
-| 3 km | 0.0335 m | 1.722 |
-| 5 km | 0.0362 m | 2.941 |
-| 10 km | 0.0525 m | 12.809 |
+| anchor range | NIS |
+|---|---|
+| 0 m | 1.486 |
+| 500 m | 1.523 |
+| 1 km | 1.562 |
+| 2 km | 1.668 |
+| 3 km | 1.722 |
+| 5 km | 2.941 |
+| 10 km | 12.809 |
 
-The horizontal column was scored as the replay scored it when this was measured,
-against the antenna where the engine stood when each fix was queued. That adds
-the distance the car travels before the fix, the same in every row, and reads
-0.0329 m where the residual at the fix's epoch is 0.0127 m
-([testing.md](../testing.md#what-is-measured)). The prototype behind these rows
-no longer exists to be re-scored, so the column understates how soon accuracy
-follows NIS. NIS was never affected.
+The sweep also recorded a horizontal-error column, but on the replay's old
+scoring — the antenna at the epoch the fix was queued, not at the fix's own
+epoch — and the prototype behind it no longer exists to re-score, so it is not
+quoted. NIS was never affected, because the engine computes it at the epoch, and
+it is the column the decision rests on.
 
 `f32` position works and the anchor range is the only parameter: the frame is the
-obstacle, not the precision. NIS fails before accuracy does. At 5 km the RMS is ten
-per cent off and the NIS has doubled, because quantisation enters the innovations as
-unmodelled noise. So NIS sets the threshold: re-anchor at **1 km**, which costs
-0.0001 m and 7 % of NIS. Velocity is free at any range. A latitude costs 0.76 m per
-ULP anywhere, and a local coordinate costs `6e-8 × range`.
+obstacle, not the precision. NIS fails before accuracy does: the horizontal error
+was flat to 5 km, where the NIS had already doubled, because quantisation enters
+the innovations as unmodelled noise. So NIS sets the threshold: re-anchor at
+**1 km**, which costs 7 % of NIS. Velocity is free at any range. A latitude costs
+0.76 m per ULP anywhere, and a local coordinate costs `6e-8 × range`.
 
 **Why it is parked.** What remains is the state representation, the position rows of
 the transition matrix, every position measurement Jacobian and the protobuf schema.

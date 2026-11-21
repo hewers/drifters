@@ -93,16 +93,16 @@ Three consequences:
 - **The filter must have headroom, not just keep up.** After a burst, the
   backlog drains at `T − s` per period. At `s ≥ T` it never drains, and every
   burst adds to it. With the default `f64` covariance a step is 1.6 million
-  instructions, about 13 ms in this model, still longer than `T`. The figures
-  that follow were measured when it was 3.9 million and have not been re-run.
-  Built that way, the queue fills within
-  the first second and stays full. 1 385 of the 2 000 samples are dropped,
-  telemetry never runs because the filter never yields, and the run fails at
-  0.75 m. That is why `f32-covariance` is enabled in `Cargo.toml`, and it is
-  the same conclusion `cortex-m-harness` reaches from instruction counts.
-- **A dropped sample is not a small error.** In that run the estimated
-  velocity reaches about 47 m/s against a true 13. The engine integrates each
-  sample over its own `dt`; it counts the gap in `imu_gap_count` and does not
+  instructions, about 13 ms in this model, still longer than `T`, so the queue
+  fills within the first second and stays full, and telemetry never runs because
+  the filter never yields. That is why `f32-covariance` is enabled in
+  `Cargo.toml`, and it is the same conclusion `cortex-m-harness` reaches from
+  instruction counts. The drop count and final error from a run at the older
+  3.9-million-instruction step predate the time-update speed-up and are not
+  quoted here; re-measuring them needs QEMU.
+- **A dropped sample is not a small error.** The estimated velocity absorbs the
+  missing time — tens of m/s against a true 13 — because the engine integrates
+  each sample over its own `dt`, counts the gap in `imu_gap_count`, and does not
   close it. The fixes drag the position along, and the velocity absorbs
   the difference. Count drops, and treat any as a fault.
 - **A larger rewind window costs queue as well as RAM.** Doubling `SAMPLES`

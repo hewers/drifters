@@ -866,7 +866,8 @@ replay is 27 samples and the IMU backlog peaks at 12 of 32.
 What it proves is the integration. The engine runs correctly when it is
 preempted, a late fix arrives between two samples, and the queue absorbs a
 rewind burst. The failure it guards against is real: the same firmware built
-without `f32-covariance` cannot keep up, drops 1 385 of 2 000 samples and fails.
+without `f32-covariance` cannot keep up, because its step is longer than the IMU
+period, so the queue fills and it fails.
 Its timing is a model, for the reasons under
 [What QEMU cannot measure](#what-qemu-cannot-measure), so the margin it shows still
 needs silicon.
