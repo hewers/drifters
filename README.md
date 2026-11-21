@@ -26,7 +26,7 @@ under QEMU.
 
 | | measured |
 |---|---|
-| **Accuracy** | **3.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
+| **Accuracy** | **1.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 2.3 s |
 | | per-axis bias below 1 mm |
 | **Footprint** | **8.7 KiB** peak stack (15-state), 13.2 KiB (21-state), on Cortex-M4, late fixes included |
@@ -34,11 +34,14 @@ under QEMU.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 837 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 844 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
-Accuracy is an open-loop check: the filter's predicted antenna position before
-each fix is applied, so between fixes it runs on inertial dead reckoning alone.
-Method and tolerances are in [docs/testing.md](docs/testing.md).
+Accuracy is an open-loop check: the filter's predicted antenna position at each
+fix's epoch, before the fix is applied, so between fixes it runs on inertial
+dead reckoning alone. Against KF-GINS's own reference solution the same run
+agrees to 1.2 cm, 0.003 m/s and 0.018° of heading. Method, tolerances and what
+that reference is and is not independent of are in
+[docs/testing.md](docs/testing.md#layer-6--golden-dataset-regression).
 
 ## Two estimators, compared
 
@@ -59,9 +62,9 @@ no state can follow it. The 1 Hz RTK fixes hold what is left to 0.94 m, with a
 NIS of 6 718: bounded, and very confident about the wrong thing.
 
 Compensating the input — gyro by `R̂ᵀ(ω_ie + ω_en)`, accelerometer for Coriolis —
-takes it to **3.5 cm** with a NIS of 1.55, against the ESKF's 3.3 cm and 1.46:
-within 6 % of an Earth-referenced filter, and twenty-seven times better than
-uncompensated. The replay picks that for this IMU by itself, from
+takes it to **1.6 cm** with a NIS of 1.55, against the ESKF's 1.3 cm and 1.46:
+fifty-eight times better than uncompensated, and 28 % short of an
+Earth-referenced filter. The replay picks that for this IMU by itself, from
 the gyro's grade, as [adr/0008](docs/adr/0008-earth-model-by-sensor-grade.md)
 decides.
 
@@ -80,12 +83,16 @@ covariance update is the paper's, counting the inflation as measurement noise. W
 both, every GCU rate converges. See
 [docs/eqf.md](docs/eqf.md#what-the-compensated-filter-needs).
 
-The EqF also calibrates the GNSS antenna lever arm from a zero start, where the
-ESKF is handed it from config: `[+0.163, −0.305]` m horizontally against a
-configured `[+0.136, −0.301]`. The 2.7 cm along the vehicle is the configuration's
-error, not the filter's: the ESKF's own residuals sit 2.6 cm behind the fixes along
-the direction of travel, and handed the EqF's value it improves from 3.30 to
-3.25 cm. The ESKF cannot estimate the lever arm at all.
+The EqF also calibrates the GNSS antenna lever arm, where the ESKF is handed it
+from config. Started with no lever arm in its prior at all, it holds zero until
+the car moves and then finds `[+0.162, −0.305]` m horizontally against a
+configured `[+0.136, −0.301]`. The 2.6 cm along the vehicle is the
+configuration's error, not the filter's. With the configured arm the ESKF's
+residual across the vehicle follows the yaw rate, 7.5 mm one way in left turns
+and 5.4 mm the other in right ones, which is what an arm wrong along the
+vehicle does; handed the EqF's it stops, and every fix is predicted better,
+1.28 to 1.21 cm. The ESKF cannot estimate the lever arm at all. The evidence is
+[a test](docs/testing.md#what-the-recording-says-about-its-lever-arm).
 
 ![ESKF and EqF against ground truth on a GSDC 2023 phone trace](docs/figures/gsdc-comparison.svg)
 
@@ -406,7 +413,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 
 - **21 error states** — position, velocity, attitude, gyro bias, accel bias,
   gyro and accel scale factors. `--features reduced-state` drops the scale
-  factors for 15 states, halving every matrix for 3 % accuracy.
+  factors for 15 states, halving every matrix for 4 % accuracy.
 - **Quaternions** for attitude (Hamilton, scalar-first). Euler angles are output
   only, never round-tripped through.
 - **Two-sample coning and sculling** compensation with midpoint earth terms.
@@ -421,7 +428,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   convention, not ROS's ENU/FLU. Conversion belongs at the boundary; reasoning
   in [docs/adr/0006](docs/adr/0006-frame-convention.md).
 - **`f64` for position**, deliberately — `f32` latitude costs 0.76 m per ULP
-  against a 3.3 cm error budget. The *covariance* is a separate question, and
+  against a 1.3 cm error budget. The *covariance* is a separate question, and
   because it is stored factored the answer differs: `--features f32-covariance`
   halves it to 924 bytes and puts its arithmetic on the Cortex-M4F's
   single-precision FPU instead of in soft-float — 78 % of the instructions

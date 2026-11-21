@@ -435,7 +435,7 @@ fn run_replay_command(
         let comparison = plot::Comparison {
             dataset: "KF-GINS demo — Leador-A15, 57 min of driving, RTK",
             subtitle: match earth {
-                eqf::EarthTreatment::Compensated => "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF is twenty-seven times worse.",
+                eqf::EarthTreatment::Compensated => "Open-loop antenna residual before each fix. Tactical grade: without the Earth compensation shown here, the flat-Earth EqF is fifty-eight times worse.",
                 eqf::EarthTreatment::InGroup => "Open-loop antenna residual before each fix. Tactical grade, with the Earth's rotation held in the EqF's symmetry group.",
                 eqf::EarthTreatment::Flat => "Open-loop antenna residual before each fix. Tactical grade: the flat-Earth EqF cannot follow the horizontal Earth rate, and carries it as a metre of error.",
             },

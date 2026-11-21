@@ -277,6 +277,7 @@ jobs:
       # so a regression is readable without re-running anything.
       - run: cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
       - run: cargo test -p drifters-cli --test kf_gins_truth -- --nocapture
+      - run: cargo test -p drifters-cli --test kf_gins_lever_arm -- --nocapture
       - run: cargo test -p drifters-cli --test alignment -- --nocapture
 
   # The fuzz targets need nightly, so they cannot run in the main test job. A

@@ -8,10 +8,15 @@
 //! # What this does and does not prove
 //!
 //! It compares the filter's *predicted* antenna position against each GNSS fix
-//! immediately **before** that fix is applied. That is a real open-loop check:
-//! between fixes the solution is pure inertial dead reckoning, so the residual
-//! measures one second of mechanization plus whatever error the filter had not
-//! yet corrected.
+//! immediately **before** that fix is applied, and **at the fix's own epoch**.
+//! That is a real open-loop check: between fixes the solution is pure inertial
+//! dead reckoning, so the residual measures one second of mechanization plus
+//! whatever error the filter had not yet corrected.
+//!
+//! The epoch matters. A fix is queued while the engine stands at the end of the
+//! previous IMU sample, up to 5 ms before the fix here, and a car at 13 m/s
+//! covers 6.5 cm in 5 ms. Scored where the engine stood, this replay read
+//! 3.3 cm; scored at the epoch it reads 1.3 cm. See `drifters_cli::antenna_at`.
 //!
 //! It is **not** a comparison against KF-GINS's own output. Producing that
 //! requires building and running their C++ implementation, which this test
@@ -28,7 +33,7 @@ use drifters_cli::{kfgins, replay};
 /// Tolerances, chosen roughly 3x looser than the values observed on a known
 /// -good run so that ordinary numerical drift does not fail CI, while any real
 /// regression does. Observed values are recorded in `docs/testing.md`.
-const MAX_HORIZONTAL_RMS_M: f64 = 0.10;
+const MAX_HORIZONTAL_RMS_M: f64 = 0.04;
 const MAX_VERTICAL_RMS_M: f64 = 0.06;
 /// A systematic offset would indicate a lever-arm or frame error rather than
 /// noise, so the mean is held much tighter than the RMS.
@@ -114,6 +119,15 @@ fn the_demo_dataset_replays_within_tolerance() {
     assert!(
         horizontal < MAX_HORIZONTAL_RMS_M,
         "horizontal residual RMS {horizontal:.4} m exceeds {MAX_HORIZONTAL_RMS_M} m"
+    );
+    // The residual held where the engine stood when each fix was queued reads
+    // 3.3 cm on this recording, 2.6 times the residual at the epoch, and the
+    // difference is the car's travel. If the two ever agree here, the
+    // prediction has stopped being taken to the epoch.
+    assert!(
+        report.held_horizontal.rms() > 2.0 * horizontal,
+        "held {:.4} m against {horizontal:.4} m at the epoch",
+        report.held_horizontal.rms()
     );
     assert!(
         report.residual_down.rms() < MAX_VERTICAL_RMS_M,

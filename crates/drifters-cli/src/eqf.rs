@@ -225,7 +225,7 @@ impl EarthModel {
 ///   is a 250 mGal bias against a configured bias prior of 15 mGal.
 ///
 /// `earth` is what to do about the Earth's rotation: on this tactical-grade
-/// IMU, compensating the input is worth a factor of twenty-seven over leaving
+/// IMU, compensating the input is worth a factor of fifty-eight over leaving
 /// it out. `alpha` is the GCU rate, `None` for off.
 pub fn kfgins_options(
     config: &kfgins::Config,

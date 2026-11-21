@@ -231,6 +231,37 @@ the list below is what the release *is* rather than what changed.
 
 ### Fixed
 
+- **The KF-GINS replay scored each fix against a prediction up to one IMU
+  interval old, and the headline residual was 3.3 cm where the filter's is
+  1.3 cm.** A fix is queued just before the IMU sample that contains it, when
+  the engine stands at the end of the previous one. The replay compared the
+  antenna there with the fix, two instants up to 5 ms apart, and a car at
+  13 m/s covers 6.5 cm in 5 ms. `drifters_cli::antenna_at` now takes the
+  prediction to the fix's epoch on a copy of the engine, which is the state the
+  engine forms its innovation from. The ESKF reads **0.0127 m** horizontal for
+  0.0329, the 15-state build 0.0132 for 0.0338, the EqF 0.0163 for 0.0350 and
+  0.0172 for 0.0353 with the Earth in its group. Vertical figures, NIS, and
+  everything scored against truth on GSDC and comma2k19 are unchanged; the GSDC
+  figure's residual panel moves by 0.2 %. The regression's horizontal tolerance
+  tightens from 0.10 to 0.04 m, and both KF-GINS figures are regenerated.
+
+  The old figure hid what it measured. The two estimators read 6 % apart
+  because most of both residuals was the same travel, and they are 28 % apart.
+  The gap to the flat-Earth filter is fifty-eight times, not twenty-seven. And
+  the ESKF's mean residual of −2.58 cm along the direction of travel, read as a
+  lever arm that much short, is 0.02 cm at the epoch. Residuals quoted in the
+  entries of this release that predate this one are on the old scoring; the
+  replay still prints it, labelled, so they can be reproduced.
+
+- **`invalid_imu_count` went backwards behind the rewind layer.** A late fix is
+  applied by restoring an earlier copy of the engine, and the count was held in
+  the engine. The layer now refuses invalid samples itself and keeps the count.
+
+- **`drifters nees --runs 1` called one run "consistent" run to run.** One run
+  has no run-to-run scatter, so its interval is `[0, inf]`. It reads "needs two
+  runs". An unknown argument now also lists what the subcommand takes, and the
+  replay summary reports the IMU stream counters when either is non-zero.
+
 - **The CLI now rejects a flag it does not know, handles `--help`, and refuses a
   NEES campaign that scores nothing.** The hand-rolled parser ignored unknown
   arguments, so `nees --run 2` ran the 40-run default in silence, and `--help`
@@ -285,17 +316,20 @@ the list below is what the release *is* rather than what changed.
   `EqfOptions::with_accel_scale_factor` carries the scale-factor prior the
   ESKF is given in the bias prior, and with both fixed every α converges —
   0.053, 0.106 and 0.73 m — in the paper's order. At α = 0 the compensated
-  filter is **0.035 m** against the ESKF's 0.033, NIS 1.55 against 1.46; flat,
-  0.943 m with a NIS of 6 718, and still diverging above α = 0, which is the
+  filter is **0.016 m** against the ESKF's 0.013, NIS 1.55 against 1.46; flat,
+  0.944 m with a NIS of 6 718, and still diverging above α = 0, which is the
   part of the Earth-rate account that stands. The old loop's 14.7 m against
   the engine's 29.2 at α = 0.5 was fix timing — the old loop applied each fix
   4.4 ms late — acting on one divergence.
 - **The KF-GINS configuration's lever arm is 2.6 cm short along the vehicle,
-  and the EqF found it.** Its estimate is `[+0.163, −0.305]` horizontally
-  against a configured `[+0.136, −0.301]`. The ESKF, handed the configured
-  value, shows a mean along-track residual of −2.58 cm and none across, not
-  scaling with speed; handed the EqF's, it improves from 0.0330 to 0.0325 m.
-  The vertical component is unobservable on this drive.
+  and the EqF found it.** From a start with no lever arm in it, its estimate is
+  `[+0.162, −0.305]` horizontally against a configured `[+0.136, −0.301]`. The
+  ESKF, handed the configured value, has a residual across the vehicle that
+  follows the yaw rate, −0.041 m per rad/s; handed the EqF's it has +0.002, and
+  improves from 0.0128 to 0.0121 m with its NIS 1.46 to 1.33. The vertical
+  component is unobservable on this drive. `kf_gins_lever_arm.rs` holds all of
+  it. The argument first given for this, a mean along-track residual of
+  −2.58 cm, was the replay's scoring and not the lever arm; see below.
 - **Neither engine re-reads its pending fix to split a sample.** The ESKF's
   read it through an `expect` that only the optimiser kept off the data path,
   the EqF's through a `map_or` with a fallback epoch; both now classify by
@@ -364,14 +398,19 @@ the list below is what the release *is* rather than what changed.
 
 - **The KF-GINS reference solution is scored, and the dataset runs in CI.**
   `truth.nav`, KF-GINS's own 200 Hz reference trajectory, is independent of this
-  library and of the RTK receiver, so it gives heading and velocity error and a
-  NEES that the prediction residual cannot. Over the demo run the ESKF reads
-  0.012 m horizontal and 0.009 m vertical position RMS, 0.003 m/s horizontal
-  velocity RMS, 0.018° heading RMS and a nine-state NEES of 20.9; the EqF reads
-  0.030 m, 0.045 m, 0.003 m/s, 0.011° and 57.3 — the flat-Earth model costs
-  position and the self-calibrating attitude buys heading. Both NEES sit above
-  the ideal 9 because the reference has an error of its own, at the level of the
-  filters' error against it. `kfgins::read_nav` and `kfgins::Reference` read and
+  library, so it gives heading and velocity error and a NEES that the
+  prediction residual cannot. Upstream does not say how it was produced, and it
+  agrees with the dataset's configured lever arm to 0.3 mm where the recording
+  itself does not, so it is not independent of that configuration. Over the
+  demo run the ESKF reads 0.012 m horizontal and 0.009 m vertical position RMS,
+  0.003 m/s horizontal velocity RMS, 0.018° heading RMS and a nine-state NEES
+  of 20.9; the EqF reads 0.030 m, 0.045 m, 0.003 m/s, 0.011° and 57.3. The
+  EqF's larger position error is its estimated lever arm: a constant
+  `[−0.025, +0.004, +0.041]` m in the body frame, the negative of that arm's
+  distance from the configured one to 0.4 mm, which the test holds within 2 mm.
+  The test also reports NEES by block: the ESKF's excess over 9 is attitude,
+  12.8 against 3, and the EqF's is position, 22.8, the lever arm again.
+  `kfgins::read_nav` and `kfgins::Reference` read and
   interpolate a `.nav` file. The alignment test scores against the same file
   instead of the library's own output. A new `dataset` CI job fetches the
   dataset with `scripts/fetch-kf-gins.sh` — pinned to a commit and verified by

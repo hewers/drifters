@@ -406,8 +406,8 @@ factor of ten is reporting a modelling error, not noise.
 
 57 minutes of real driving, a tactical-grade Leador-A15 at 200 Hz, 3 363 RTK
 fixes. Same inputs, same loop and same scoring as the ESKF's own regression —
-the open-loop antenna residual *before* each fix is applied — so the two are
-directly comparable. Run it with
+the open-loop antenna residual *before* each fix is applied, at the fix's own
+epoch — so the two are directly comparable. Run it with
 `drifters replay --engine eqf --config <kf-gins.yaml>`, or `drifters eqf` for
 short; `--engine eskf,eqf` runs both. The Earth model is the one
 [adr/0008](adr/0008-earth-model-by-sensor-grade.md) picks for the gyroscope —
@@ -416,13 +416,13 @@ compensated, for this one — and `--flat-earth`, `--earth-rate` or
 
 | | horizontal RMS | vertical RMS | NIS |
 |---|---|---|---|
-| ESKF (Earth-referenced, handed the lever arm) | **0.033 m** | 0.018 m | 1.46 |
-| EqF, + input-side Earth compensation (the default here) | 0.035 m | 0.019 m | 1.55 |
-| EqF, Earth rotation in the group (`--earth-in-group`) | 0.035 m | 0.019 m | 1.76 |
-| EqF, flat Earth as written (`--flat-earth`) | 0.943 m | 0.069 m | 6 718 |
+| ESKF (Earth-referenced, handed the lever arm) | **0.013 m** | 0.018 m | 1.46 |
+| EqF, + input-side Earth compensation (the default here) | 0.016 m | 0.019 m | 1.55 |
+| EqF, Earth rotation in the group (`--earth-in-group`) | 0.017 m | 0.019 m | 1.76 |
+| EqF, flat Earth as written (`--flat-earth`) | 0.944 m | 0.069 m | 6 718 |
 
 At GCU's α = 0, the engine's default. With GCU off altogether,
-`--alpha off`, the compensated filter reads 0.0342 m and a NIS of 1.44. Both
+`--alpha off`, the compensated filter reads 0.0149 m and a NIS of 1.44. Both
 filters sit near 1.5 against an expected 3, and agree about it: the RTK fixes'
 quoted sigmas are pessimistic. The window opens on a fix 4.4 ms before the
 first IMU sample, which both engines report as stale rather than use.
@@ -443,9 +443,9 @@ times better than they are. With GCU at any α above zero it diverges, to
 `1.5 × 10⁶ m`: inflating against the fixes that bound a forcing that never
 stops.
 
-**Compensating the input closes the gap to the ESKF.** Correcting the gyro by
+**Compensating the input closes most of the gap to the ESKF.** Correcting the gyro by
 `R̂ᵀ(ω_ie + ω_en)` and the accelerometer for Coriolis, `R̂ᵀ[(2ω_ie + ω_en) × v̂]`,
-takes it to 3.5 cm against the ESKF's 3.3, twenty-seven times better than flat.
+takes it to 1.6 cm against the ESKF's 1.3, fifty-eight times better than flat.
 Both corrections are deviations from the paper, and both make the input depend
 on the estimate, which the lift's derivation does not contemplate. See
 [`local.rs`](../crates/drifters-eqf/src/local.rs).
@@ -476,15 +476,16 @@ Compensated, horizontal RMS:
 
 | α | horizontal RMS |
 |---|---|
-| off | 0.0342 m |
-| **0** | **0.0350 m** |
-| 0.25 | 0.053 m |
-| 0.5 | 0.106 m |
+| off | 0.0149 m |
+| **0** | **0.0163 m** |
+| 0.25 | 0.038 m |
+| 0.5 | 0.097 m |
 | 1 | 0.73 m |
 
 Every α converges — the residual at the last fix is 8 to 21 mm at each — and in the
-order the paper gives, "the lower, the faster". Each is worse than α = 0, which on
-RTK is right: GCU insures against measurements that are wrong, and these are not.
+order the paper gives, "the lower, the faster". Each is worse than the one before,
+off included, which on RTK is right: GCU insures against measurements that are
+wrong, and these are not.
 
 ### Lever-arm self-calibration, and the configured value is the one that is off
 
@@ -495,23 +496,41 @@ estimated  [+0.163, -0.305, -0.250] m
 configured [+0.136, -0.301, -0.184] m
 ```
 
-4 mm across the vehicle, 2.7 cm along it and 6.6 cm vertically, recovered from
-GNSS and an IMU alone, of an antenna offset the filter was never told.
+4 mm across the vehicle, 2.7 cm along it and 6.6 cm vertically.
 
-**The along-track 2.7 cm is the configuration's.** The ESKF is handed the
-configured value, and its own residuals say it is short. Over the 2 651 fixes
-taken above 3 m/s, its antenna residual projected on the direction of travel
-has a mean of −2.58 cm, and across it 0.00: its predicted antenna sits behind
-the measured one by what the EqF says the lever arm is missing. It is not a
-timing offset, which would scale with speed — regressed on speed, the slope is
-−0.29 ms and the intercept −2.28 cm. Handed the EqF's horizontal estimate, the
-ESKF improves, 0.0329 → 0.0324 m, and its NIS 1.46 → 1.33.
+**That start hands the filter the configured arm.** The replay gives it the
+configured initial position of the IMU, to 5 mm, and the first fixes place the
+antenna. Within five seconds of standing still the estimate reads
+`[+0.137, −0.287, −0.219]`: the difference of two things it was told, and not
+a calibration. Only once the car turns does it move, 2.7 cm forward. Started
+instead with the IMU where the first fix puts the *antenna*, a metre uncertain,
+the estimate holds zero until the car moves and then reaches
+`[+0.162, −0.305]` horizontally: the same arm, from GNSS and an IMU alone, of
+an offset the filter was not told in any form.
+
+**The along-track 2.7 cm is the configuration's.** A lever arm wrong along the
+vehicle shows in turns, where the vehicle's rotation carries the misplaced
+antenna round between fixes: the ESKF's residual *across* the vehicle follows
+the yaw rate. With the configured arm it does, at −0.041 m per rad/s, +7.5 mm
+in left turns and −5.4 mm in right ones. Handed the EqF's horizontal estimate
+it does not, at +0.002 m per rad/s, and the ESKF improves on every fix,
+0.0128 → 0.0121 m, with its NIS 1.46 → 1.33. Both tests are
+`kf_gins_lever_arm.rs`, and
+[testing.md](testing.md#what-the-recording-says-about-its-lever-arm) has the
+tables.
+
+The mean of the ESKF's residual along the direction of travel is not evidence
+either way. Scored against the antenna where the engine stood when a fix was
+queued it is −2.58 cm over the 2 651 fixes above 3 m/s, which reads exactly
+like a lever arm that much short. It is the distance the car travels between
+the previous IMU sample and the fix; scored at the fix's epoch it is 0.02 cm.
 
 **The vertical is not observable on this drive.** A car that stays level
 barely rotates its lever arm in pitch or roll, so a vertical offset never
-shows in the antenna's position. The ESKF reads the same to four figures with
-either vertical value, so this dataset cannot say which is right. With GCU off
-the EqF puts it at −0.223 m.
+shows in the antenna's position. Handed −0.184, −0.250 or −0.311 m the ESKF's
+horizontal residual moves by 0.1 mm, so this dataset cannot say which is
+right. The EqF puts it at −0.250 m from the replay's start, −0.311 m from the
+uninformed one and −0.223 m with GCU off.
 
 This is the paper's headline capability (Sec. VII-A) reproduced on data it was
 never tuned for, where it found an error in the dataset's own configuration.
@@ -523,12 +542,12 @@ of something it does.
 ### This comparison is unfair by construction, and in a knowable direction
 
 It is a flat-Earth estimator on hardware precise enough to see the Earth turn.
-Uncompensated, the gap to the ESKF is a factor of twenty-seven and it is an
-**Earth model**, not an estimator. Compensated, the two are within 6 %, and
-that residual difference is not one this dataset resolves into a cause: the
-EqF also has a flat tangent plane, constant gravity, no scale-factor states
-and an estimated lever arm, where the ESKF is simply given one — one 2.6 cm
-short.
+Uncompensated, the gap to the ESKF is a factor of seventy-four and it is an
+**Earth model**, not an estimator. Compensated, the EqF's residual is 28 %
+above the ESKF's, 1.6 cm against 1.3, and that difference is not one this
+dataset resolves into a cause: the EqF also has a flat tangent plane, constant
+gravity, no scale-factor states and an estimated lever arm, where the ESKF is
+simply given one — one 2.6 cm short.
 
 The appropriate venue for comparing estimators is consumer-grade hardware,
 where the assumptions hold. That is the next section.
@@ -589,7 +608,7 @@ metres:
 **α = 0 is best in seven of the eight columns, and GCU off is worse than α = 0
 in all eight.** α = 0 is not off: `β` still doubles the state's share of the
 innovation covariance for most fixes, and on phone GNSS, whose innovations are
-heavy-tailed, that is worth between 4 and 36 %. On RTK it costs 2 %
+heavy-tailed, that is worth between 4 and 36 %. On RTK it costs 9 %
 ([KF-GINS](#measured-the-eqf-on-the-kf-gins-dataset)).
 
 **The exception does not travel.** On trace A at ×300 every α up to 0.75 beats
@@ -771,7 +790,7 @@ the input space, which is a larger group and a full re-derivation of the lift
 and linearisation, not an extra block.
 
 The empirical case points the same way. The 15-state configuration drops exactly
-these six states and costs **3 % horizontal RMS** on the KF-GINS dataset, while the
+these six states and costs **4 % horizontal RMS** on the KF-GINS dataset, while the
 NIS ratio *improves* (0.486 → 0.554): dropping states the data cannot observe makes
 the filter less conservative. Scale factors need dynamics to be observable at all.
 
@@ -895,8 +914,8 @@ A still navigation-grade unit, 0.003 °/h at 30° latitude, starting 3° off in 
 and told only that it is not moving, reaches 0.026° RMS after 900 s with an error 1.03
 times its claimed sigma. The ESKF reaches 0.025°, the limit set by the gyro-bias prior
 is 0.022°, and the filter with its input compensated stays about 4° off. On KF-GINS, a
-tactical IMU that does not need the model, it matches compensation at 0.0353 m
-against 0.0350 m. Its NIS is higher, 1.76 against 1.55, which has not been
+tactical IMU that does not need the model, it reads 0.0172 m against
+compensation's 0.0163 m. Its NIS is higher, 1.76 against 1.55, which has not been
 investigated. It costs 4.7 % more instructions per sample dense and 2.4 % factored,
 and no more stack. The evidence is in
 [testing.md](testing.md#layer-17--the-earth-inside-the-group).
@@ -1053,7 +1072,7 @@ handed, which makes it exactly the paper's GCU update. See
 |---|---|
 | factored `f64`, a minute of closed loop | 6 × 10⁻¹² m; every covariance element within 3 × 10⁻¹² of its scale |
 | factored `f32`, the same | 8 µm, against the filter's own 13 mm from the truth; within 1.1 × 10⁻⁴ |
-| factored `f32`, KF-GINS, 57 minutes | 0.029 mm, 0.007 mm/s and 0.2″ at worst; 0.0350 m RMS and NIS 1.554 for both |
+| factored `f32`, KF-GINS, 57 minutes | 0.029 mm, 0.007 mm/s and 0.2″ at worst; 0.0163 m RMS and NIS 1.554 for both |
 | factored `f32`, GSDC, four traces at two tunings | equal to the third decimal in every column |
 | factored `f32`, `drifters nees --factored`, 200 runs | **20.825**, against 20.824; every block within 0.001 |
 

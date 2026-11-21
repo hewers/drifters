@@ -6,15 +6,28 @@
 //! perfectly reports a small residual while being wrong by whatever the fixes
 //! were.
 //!
-//! `truth.nav` is KF-GINS's own reference solution — 200 Hz position, velocity
-//! and roll/pitch/yaw from a high-grade unit — and it is independent of both
-//! this library and the RTK receiver. Scoring against it gives heading and
-//! velocity error, which the residual cannot, and a NEES over the navigation
-//! states on real data.
+//! `truth.nav` is KF-GINS's own reference solution: position, velocity and
+//! roll/pitch/yaw at 200 Hz. It is independent of this library. Upstream does
+//! not say how it was produced, so it is **not** known to be independent of the
+//! IMU and the RTK fixes this test replays, and agreement closer than the fixes'
+//! own noise suggests it shares at least the fixes. Read the figures as
+//! agreement with another implementation's solution, which is still what makes
+//! heading and velocity error measurable: the residual cannot see either.
 //!
 //! Both estimators run: the ESKF, whose error state is compared with
 //! `error_between`, and the EqF, whose physical error and covariance come from
 //! `drifters_eqf::physical`.
+//!
+//! Three things are reported beyond the errors themselves, because the totals
+//! hide them:
+//!
+//! - **The position error in the body frame.** A constant there is a lever arm,
+//!   not a filter error, and that is what the EqF's is: it estimates the antenna
+//!   lever arm, ends 2.6 cm along the vehicle and 4.2 cm vertically from the
+//!   configured one, and sits that far from the reference. The test holds the
+//!   two to each other within 2 mm.
+//! - **NEES by block**, which says where a total above nine comes from.
+//! - **The EqF's lever arm** against the configured one.
 //!
 //! The dataset is **not committed**; `docs/datasets.md` says how to fetch it,
 //! pinned to a commit and a checksum. When it is absent this test reports that
@@ -49,12 +62,13 @@ const SCORE_EVERY: u64 = 200;
 /// Tolerances, roughly three times the values observed on a known-good run, so
 /// that ordinary numerical drift does not fail CI while a real regression does.
 /// The observed values are in docs/testing.md. The two estimators get their own
-/// numbers because their models differ — the EqF is flat-Earth by default, and
-/// its position error is larger and its heading smaller than the ESKF's.
+/// numbers because they place the IMU differently: the ESKF from the configured
+/// lever arm, the EqF from the one it estimates.
 ///
-/// The NEES band is wide on purpose: it averages nine only against an exact
-/// truth, and `truth.nav` has an error of its own, so the score sits above nine.
-/// It catches an order-of-magnitude covariance fault, not a factor of two.
+/// The NEES band is wide on purpose. It averages nine only against an exact
+/// truth, the reference has an error of its own that nobody has stated, and the
+/// score sits above nine. It catches an order-of-magnitude covariance fault,
+/// not a factor of two.
 struct Tolerances {
     horizontal_m: f64,
     vertical_m: f64,
@@ -62,6 +76,13 @@ struct Tolerances {
     heading_deg: f64,
     nees: (f64, f64),
 }
+
+/// How far the mean body-frame position error may sit from where it is expected
+/// to be, per axis, metres. For the ESKF that is zero, observed at 0.3 mm. For
+/// the EqF it is the distance between its lever arm and the configured one,
+/// observed to match within 0.4 mm. A constant in the body frame is what a
+/// lever-arm, mounting or frame fault produces, so the bound is tight.
+const BODY_OFFSET_M: f64 = 0.002;
 
 const ESKF_TOLERANCES: Tolerances = Tolerances {
     horizontal_m: 0.04,
@@ -105,12 +126,51 @@ impl Errors {
     }
 }
 
+/// A vector's three components, accumulated separately.
+struct Axes([Running; 3]);
+
+impl Axes {
+    fn new() -> Self {
+        Self([Running::new(), Running::new(), Running::new()])
+    }
+
+    fn push(&mut self, v: Vec3) {
+        self.0[0].push(v.x);
+        self.0[1].push(v.y);
+        self.0[2].push(v.z);
+    }
+
+    fn mean(&self) -> Vec3 {
+        Vec3::new(self.0[0].mean(), self.0[1].mean(), self.0[2].mean())
+    }
+
+    fn sigma(&self) -> Vec3 {
+        Vec3::new(
+            self.0[0].std_dev(),
+            self.0[1].std_dev(),
+            self.0[2].std_dev(),
+        )
+    }
+}
+
+/// NEES over the nine navigation states, and over each block of three alone.
+struct Nees {
+    total: f64,
+    position: f64,
+    velocity: f64,
+    attitude: f64,
+}
+
 /// One estimator's error against the reference over the whole run.
 struct Score {
     position: Errors,
+    /// The position error in the reference's body frame: forward, right, down.
+    body: Axes,
     velocity: Errors,
     heading: Running,
     nees: Running,
+    /// NEES of position, velocity and attitude, each as its own marginal.
+    nees_blocks: [Running; 3],
     epochs: u64,
 }
 
@@ -118,24 +178,38 @@ impl Score {
     fn new() -> Self {
         Self {
             position: Errors::new(),
+            body: Axes::new(),
             velocity: Errors::new(),
             heading: Running::new(),
             nees: Running::new(),
+            nees_blocks: [Running::new(), Running::new(), Running::new()],
             epochs: 0,
         }
     }
 
     /// The navigation errors both engines report the same way, through
-    /// [`Estimator::nav_state`], plus one NEES the caller computed.
-    fn push(&mut self, nav: &NavState, truth: &kfgins::NavRow, nees: f64) {
-        self.position
-            .push(nav.pva.position.ned_from(truth.position).to_vec3());
+    /// [`Estimator::nav_state`], plus the NEES the caller computed.
+    fn push(&mut self, nav: &NavState, truth: &kfgins::NavRow, nees: &Nees) {
+        let position = nav.pva.position.ned_from(truth.position).to_vec3();
+        self.position.push(position);
+        // The same error seen from the vehicle. Rotated by the reference's
+        // attitude, so that the estimate's own attitude error is not in it.
+        let c_nb = Quat::from_euler(
+            truth.attitude.roll,
+            truth.attitude.pitch,
+            truth.attitude.yaw,
+        )
+        .to_dcm();
+        self.body.push(c_nb.transpose() * position);
         self.velocity
             .push(nav.pva.velocity.to_vec3() - truth.velocity.to_vec3());
         // Yaw error, the term a position residual cannot see at all.
         self.heading
             .push(wrap_pi(nav.pva.attitude.euler().yaw - truth.attitude.yaw));
-        self.nees.push(nees);
+        self.nees.push(nees.total);
+        self.nees_blocks[0].push(nees.position);
+        self.nees_blocks[1].push(nees.velocity);
+        self.nees_blocks[2].push(nees.attitude);
         self.epochs += 1;
     }
 
@@ -143,14 +217,22 @@ impl Score {
         println!(
             "\n--- {name} against truth.nav, {} epochs ---\n\
              position error (m)  : north {:.4}  east {:.4}  down {:.4}  horizontal {:.4}\n\
+             \x20 in the body frame  : mean [{:+.4}, {:+.4}, {:+.4}]  sigma [{:.4}, {:.4}, {:.4}]\n\
              velocity error (m/s): north {:.4}  east {:.4}  down {:.4}  horizontal {:.4}\n\
              heading error (deg) : RMS {:.4}  mean {:+.4}\n\
-             NEES, {NAV_STATES} states     : mean {:.2}  (expected {NAV_STATES})",
+             NEES, {NAV_STATES} states     : mean {:.2}  (expected {NAV_STATES})\n\
+             \x20 by block, 3 each   : position {:.2}  velocity {:.2}  attitude {:.2}",
             self.epochs,
             self.position.north.rms(),
             self.position.east.rms(),
             self.position.down.rms(),
             self.position.horizontal.rms(),
+            self.body.mean().x,
+            self.body.mean().y,
+            self.body.mean().z,
+            self.body.sigma().x,
+            self.body.sigma().y,
+            self.body.sigma().z,
             self.velocity.north.rms(),
             self.velocity.east.rms(),
             self.velocity.down.rms(),
@@ -158,6 +240,23 @@ impl Score {
             self.heading.rms() * RAD_TO_DEG,
             self.heading.mean() * RAD_TO_DEG,
             self.nees.mean(),
+            self.nees_blocks[0].mean(),
+            self.nees_blocks[1].mean(),
+            self.nees_blocks[2].mean(),
+        );
+    }
+
+    /// The mean body-frame position error must be `expected`, per axis, within
+    /// [`BODY_OFFSET_M`].
+    fn assert_body_offset(&self, name: &str, expected: Vec3) {
+        let off = self.body.mean() - expected;
+        assert!(
+            off.amax() < BODY_OFFSET_M,
+            "{name}: the mean body-frame position error is {:?}, {:?} from the \
+             {expected:?} expected; a constant in the body frame is a lever-arm, \
+             mounting or frame fault",
+            self.body.mean(),
+            off
         );
     }
 
@@ -197,17 +296,33 @@ impl Score {
     }
 }
 
-/// NEES over the leading [`NAV_STATES`] of a covariance, or `None` when that
-/// block is not positive definite.
-fn nees_of<const N: usize>(p: &Matrix<N, N>, e: &[f64]) -> Option<f64> {
-    let block = p.block::<NAV_STATES, NAV_STATES>(0, 0);
+/// `eᵀ P⁻¹ e` over the `M` states from `start`, as their own marginal, or
+/// `None` when that block of the covariance is not positive definite.
+fn marginal_nees<const N: usize, const M: usize>(
+    p: &Matrix<N, N>,
+    e: &[f64],
+    start: usize,
+) -> Option<f64> {
+    let block = p.block::<M, M>(start, start);
     let chol = Cholesky::new(&block)?;
-    let mut col = Matrix::<NAV_STATES, 1>::zeros();
-    for i in 0..NAV_STATES {
-        col[(i, 0)] = e[i];
+    let mut col = Matrix::<M, 1>::zeros();
+    for i in 0..M {
+        col[(i, 0)] = e[start + i];
     }
     let solved = chol.solve(&col);
-    Some((0..NAV_STATES).map(|i| e[i] * solved[(i, 0)]).sum())
+    Some((0..M).map(|i| e[start + i] * solved[(i, 0)]).sum())
+}
+
+/// NEES over the leading [`NAV_STATES`] of a covariance and over each block of
+/// three, whose offsets `[position, velocity, attitude]` name the engine's
+/// state order. `None` when a block is not positive definite.
+fn nees_of<const N: usize>(p: &Matrix<N, N>, e: &[f64], blocks: [usize; 3]) -> Option<Nees> {
+    Some(Nees {
+        total: marginal_nees::<N, NAV_STATES>(p, e, 0)?,
+        position: marginal_nees::<N, 3>(p, e, blocks[0])?,
+        velocity: marginal_nees::<N, 3>(p, e, blocks[1])?,
+        attitude: marginal_nees::<N, 3>(p, e, blocks[2])?,
+    })
 }
 
 fn dataset_dir() -> Option<PathBuf> {
@@ -237,7 +352,7 @@ fn drive<E: Estimator>(
     gnss: &[GnssFix],
     config: &kfgins::Config,
     reference: &kfgins::Reference,
-    mut nees_at: impl FnMut(&E, &NavState, &kfgins::NavRow) -> f64,
+    mut nees_at: impl FnMut(&E, &NavState, &kfgins::NavRow) -> Nees,
 ) -> Score {
     let mut next_fix = 0usize;
     while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
@@ -270,7 +385,7 @@ fn drive<E: Estimator>(
         };
         let nav = engine.nav_state();
         let nees = nees_at(&engine, &nav, &truth);
-        score.push(&nav, &truth, nees);
+        score.push(&nav, &truth, &nees);
     }
     score
 }
@@ -358,7 +473,8 @@ fn the_filter_agrees_with_the_reference_solution() {
             };
             let dx = error_between(&truth_state, nav);
             let e: Vec<f64> = (0..N_STATE).map(|i| dx[(i, 0)]).collect();
-            nees_of(&engine.covariance(), &e).expect("covariance is positive definite")
+            // The ESKF's order: position, velocity, attitude.
+            nees_of(&engine.covariance(), &e, [0, 3, 6]).expect("covariance is positive definite")
         },
     );
 
@@ -367,6 +483,11 @@ fn the_filter_agrees_with_the_reference_solution() {
     let earth = eqf::EarthModel::default().resolve(config.options.imu_noise.gyro_bias_std.amax());
     let alpha = eqf::parse_alpha(None).expect("the default GCU rate parses");
     let eqf_options = eqf::kfgins_options(&config, &gnss, earth, alpha);
+    // Where the EqF puts the antenna, against where the configuration does,
+    // at the epochs scored. The reference is at the IMU, so a filter that
+    // moves its lever arm moves its IMU the other way.
+    let configured = config.options.antenna_lever_arm;
+    let mut lever = Axes::new();
     let eqf = drive(
         EqfEngine::new(eqf_options).expect("engine"),
         &imu,
@@ -374,6 +495,7 @@ fn the_filter_agrees_with_the_reference_solution() {
         &config,
         &reference,
         |engine, _nav, truth| {
+            lever.push(engine.lever_arm() - configured);
             let truth_state = eqf_truth_state(engine, truth);
             let e = drifters_eqf::physical::error(&truth_state, &engine.state());
             let p = drifters_eqf::physical::covariance(
@@ -381,12 +503,30 @@ fn the_filter_agrees_with_the_reference_solution() {
                 engine.filter().frame.earth_rate,
                 &engine.covariance(),
             );
-            nees_of(&p, &e).expect("covariance is positive definite")
+            // The EqF's order: attitude, velocity, position.
+            nees_of(&p, &e, [6, 3, 0]).expect("covariance is positive definite")
         },
     );
 
     eskf.print("ESKF");
     eqf.print("EqF");
+    let moved = lever.mean();
+    println!(
+        "  lever arm, estimated less configured (m): mean [{:+.4}, {:+.4}, {:+.4}]  \
+         sigma [{:.4}, {:.4}, {:.4}]",
+        moved.x,
+        moved.y,
+        moved.z,
+        lever.sigma().x,
+        lever.sigma().y,
+        lever.sigma().z,
+    );
+
     eskf.assert_within("ESKF", &ESKF_TOLERANCES);
     eqf.assert_within("EqF", &EQF_TOLERANCES);
+    // The ESKF is handed the lever arm the reference agrees with, and has no
+    // offset. The EqF estimates its own, and its whole offset is that
+    // estimate's distance from the configured one, with the sign reversed.
+    eskf.assert_body_offset("ESKF", Vec3::ZERO);
+    eqf.assert_body_offset("EqF", -moved);
 }

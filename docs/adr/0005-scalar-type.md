@@ -32,8 +32,8 @@ Resolution of `f32` at the magnitudes this filter carries:
 
 Storing the demo dataset's latitude as `f32`, before any arithmetic, costs
 **0.134 m**, and its longitude **0.311 m**. The filter's measured position
-residual against RTK GNSS over that dataset is **0.033 m RMS**, so rounding
-position to `f32` once, at rest, is four times the entire error budget.
+residual against RTK GNSS over that dataset is **0.013 m RMS**, so rounding
+position to `f32` once, at rest, is ten times the entire error budget.
 
 Velocity, attitude and the IMU error states have several orders of magnitude of
 headroom. Nothing in the table disqualifies them.
@@ -67,7 +67,7 @@ Measured across the campaign at both precisions:
 
 | | `f64` | `f32-covariance` |
 |---|---|---|
-| KF-GINS horizontal residual | 0.0329 m | 0.0329 m |
+| KF-GINS horizontal residual | 0.0127 m | 0.0127 m |
 | KF-GINS NIS over 3 362 fixes | 1.459 | 1.459 |
 | GSDC competition score, `gsdc2023` at `--imu-scale 300` | 5.150 | 5.150 |
 | Monte-Carlo NEES, 40 runs | 13.874 / 15 | 13.874 / 15 |

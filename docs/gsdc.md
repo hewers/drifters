@@ -122,7 +122,7 @@ of extrinsic, which makes this a natural place to compare the two estimators.
 ## Reading it correctly
 
 This is not evidence that the filter is broken; the KF-GINS regression puts it
-at 3.3 cm on tactical-grade data with RTK. It is evidence about **what
+at 1.3 cm on tactical-grade data with RTK. It is evidence about **what
 inertial fusion is worth**, which depends entirely on the grade of the inputs.
 With a 6 m GNSS bias and a phone gyro, there is very little for an IMU to add
 over one-second fix intervals. The place a phone IMU earns its keep is bridging

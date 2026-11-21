@@ -106,7 +106,11 @@ impl EngineKind {
 }
 
 /// What a replay needs of an engine, beyond [`Estimator`].
-pub trait ReplayEngine: Estimator {
+///
+/// `Clone`, because scoring a fix needs the engine's prediction at the fix's
+/// own epoch, which is a step the engine has not taken yet: the replay takes it
+/// on a copy. See [`crate::antenna_at`].
+pub trait ReplayEngine: Estimator + Clone {
     /// Which engine this is.
     const KIND: EngineKind;
 

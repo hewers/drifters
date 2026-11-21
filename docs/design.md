@@ -497,11 +497,11 @@ Measured on the KF-GINS dataset it costs very little:
 
 | | 21-state | 15-state |
 |---|---|---|
-| horizontal residual RMS | 0.0329 m | 0.0338 m |
+| horizontal residual RMS | 0.0127 m | 0.0132 m |
 | vertical residual RMS | 0.0184 m | 0.0199 m |
 | NIS ratio | 0.486 | **0.554** |
 
-Three percent worse horizontally — and the NIS ratio *improves*, moving closer
+Four percent worse horizontally — and the NIS ratio *improves*, moving closer
 to 1.0, because dropping states the data cannot observe makes the filter less
 conservative. Scale factors need dynamics to be observable at all: a vehicle
 driving in a straight line at constant speed observes neither.

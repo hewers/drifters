@@ -114,7 +114,7 @@ pub struct EqfOptions {
     /// [`FlatEarthVerdict::compensates_input`](crate::local::FlatEarthVerdict::compensates_input)
     /// makes the call from the bias stability, as adr/0008 decides it.
     /// Without it the horizontal Earth rate is an error the covariance knows
-    /// nothing about: on the KF-GINS IMU, 0.943 m against 0.035 m compensated,
+    /// nothing about: on the KF-GINS IMU, 0.94 m against 0.016 m compensated,
     /// with a NIS of 6 718, and a divergence as `t³` if
     /// [`gcu_alpha`](Self::gcu_alpha) is above zero.
     /// [`compensate_earth`](crate::local::compensate_earth) states what the

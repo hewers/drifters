@@ -14,12 +14,12 @@ its Jacobians do not depend on the current estimate being close. Six of its 21
 states are spent on self-calibration: it recovers the GNSS antenna lever arm and
 the magnetometer reference from a zero start.
 
-Measured on 57 minutes of driving, it reaches 3.5 cm horizontal RMS with Earth
-rotation compensated at the input, against the ESKF's 3.3 cm, and recovers a
-lever arm of `[+0.163, −0.305]` m horizontally from a zero start — 2.7 cm
-longer than the configured `[+0.136, −0.301]`, which the ESKF's own residuals
-show is short by the same amount. Without that compensation it is twenty-seven
-times worse: the published filter assumes a flat, non-rotating Earth, which a
+Measured on 57 minutes of driving, it reaches 1.6 cm horizontal RMS with Earth
+rotation compensated at the input, against the ESKF's 1.3 cm, and recovers a
+lever arm of `[+0.162, −0.305]` m horizontally from a start that holds none —
+2.6 cm longer than the configured `[+0.136, −0.301]`, which the ESKF's own
+residuals in turns show is short by that much. Without that compensation it is
+fifty-eight times worse: the published filter assumes a flat, non-rotating Earth, which a
 tactical-grade IMU resolves. `FlatEarthVerdict::compensates_input` says which a
 given gyroscope needs. [`docs/eqf.md`](https://github.com/hewers/drifters/blob/main/docs/eqf.md)
 covers that and the six places the published derivation could not be followed

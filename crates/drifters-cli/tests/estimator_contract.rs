@@ -287,6 +287,50 @@ fn a_fix_where_the_antenna_is_predicted_has_no_innovation<F: Fixture>() {
     );
 }
 
+fn a_moving_antenna_is_predicted_at_the_fix_epoch<F: Fixture>() {
+    // The test above stands still, where the antenna is in one place whenever
+    // it is asked. Moving, it is not. A fix is queued while the engine stands
+    // at the end of the previous sample, up to one IMU interval before the
+    // fix's epoch, and the engine forms its innovation at the epoch. So a
+    // replay that scores a fix against `antenna_position()` as it stands is
+    // comparing two instants, and reports the distance travelled between them
+    // as the filter's error. `drifters_cli::antenna_at` is the prediction at
+    // the epoch, and this holds it to the engine's own.
+    let velocity = Ned::new(12.0, 5.0, 0.0);
+    let mut e = F::engine(velocity);
+    let t = coast::<F>(&mut e, 0.0, 1.0);
+    let sample = F::sample(&e, 0.01, t + 0.01);
+    let epoch = GpsTime::from_tow(t + 0.005);
+
+    let held = e.antenna_position();
+    let predicted = drifters_cli::antenna_at(&e, &sample, epoch);
+    assert_eq!(e.timestamp(), GpsTime::from_tow(t), "the engine was moved");
+    assert_eq!(e.antenna_position(), held, "the engine was moved");
+
+    // 13 m/s for 5 ms: 6.5 cm, along the velocity.
+    let travelled = predicted.ned_from(held);
+    assert!(
+        (travelled.n - 0.060).abs() < 1e-3 && (travelled.e - 0.025).abs() < 1e-3,
+        "the prediction moved {travelled:?} in 5 ms at {velocity:?}"
+    );
+
+    // A fix where the antenna is predicted at the epoch is a null
+    // measurement. One where the engine had it 5 ms earlier is not.
+    let nis_of = |position: Lla| {
+        let mut engine = e;
+        let _ = engine.add_gnss(fix_at(t + 0.005, position, 0.01));
+        engine.add_imu(sample).unwrap();
+        engine.last_nis().expect("the fix must have been applied")
+    };
+    let at_epoch = nis_of(predicted);
+    let stale = nis_of(held);
+    assert!(at_epoch < 1e-6, "NIS {at_epoch} at the predicted antenna");
+    assert!(
+        stale > 1e4 * at_epoch.max(1e-12),
+        "NIS {stale} held against {at_epoch} at the epoch"
+    );
+}
+
 fn a_fix_pulls_the_antenna_towards_it_and_tightens_the_position<F: Fixture>() {
     let mut e = F::engine(Ned::ZERO);
     let t = coast::<F>(&mut e, 0.0, 1.0);
@@ -517,6 +561,7 @@ contract! {
     a_fix_is_classified_at_ingest,
     a_fix_is_consumed_by_the_sample_whose_interval_contains_it,
     a_fix_where_the_antenna_is_predicted_has_no_innovation,
+    a_moving_antenna_is_predicted_at_the_fix_epoch,
     a_fix_pulls_the_antenna_towards_it_and_tightens_the_position,
     repeated_fixes_drive_the_antenna_to_the_fix,
     a_wild_velocity_is_gated_out_and_a_consistent_one_readmitted,

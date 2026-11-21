@@ -513,7 +513,7 @@ impl Eskf {
         // what runs, because the refinement is worth nothing here and costs
         // nearly double: it needs `[ΦG, G]` rather than `G`, so the
         // Gram-Schmidt carries eighteen more columns. Measured across the
-        // change, KF-GINS reports the same 0.0330 m horizontal and the same
+        // change, KF-GINS reports the same horizontal residual and the same
         // 1.459 NIS to four figures, and the NEES campaign moves from 14.569
         // to 14.565, which is inside its own Monte Carlo noise. The difference
         // is second order in `dt`, and at 200 Hz that is nothing to keep.

@@ -52,12 +52,12 @@ use crate::state::{
 ///
 /// The factorisation is what makes the choice available: `U` and `D` are
 /// conditioned as the square root of `P`. Holding them to single precision
-/// changes no measured result — NEES 13.874, KF-GINS 0.0330 m, GSDC 3.244, each
+/// changes no measured result — NEES 13.874, KF-GINS 0.0127 m, GSDC 3.244, each
 /// matching `f64`.
 ///
 /// This does not make the filter single precision. Position stays `f64`,
 /// because a latitude in radians rounded to `f32` moves 0.76 m against an error
-/// budget of 0.033 m. See [`adr/0005`].
+/// budget of 0.013 m. See [`adr/0005`].
 ///
 /// [`adr/0005`]: https://github.com/hewers/drifters/blob/main/docs/adr/0005-scalar-type.md
 #[cfg(feature = "f32-covariance")]

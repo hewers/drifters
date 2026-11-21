@@ -17,9 +17,9 @@
 //!
 //! Measured over the KF-GINS dataset, carrying position as `f32` metres about
 //! an anchor, NIS degrades before accuracy does and sets the threshold at
-//! **1 km**: 0.0331 m horizontal and NIS 1.562 there, against 0.0330 m and
-//! 1.459 in `f64`. Velocity is free at any range. The full sweep is in
-//! [`adr/0009`].
+//! **1 km**: NIS 1.562 there against 1.459 in `f64`, with the horizontal
+//! residual moving in its fourth figure. Velocity is free at any range. The
+//! full sweep is in [`adr/0009`].
 //!
 //! [`adr/0009`]: https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md
 

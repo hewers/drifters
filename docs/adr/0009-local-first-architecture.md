@@ -51,7 +51,7 @@ does not fail within eleven seconds the way a dense one would.
 Over the full run the same extrapolation gives 7.7, which is outside it — half a
 digit of margin short, where dense `f64` has half a digit spare. The measurement
 disagrees: the 57-minute KF-GINS run is the case in question, and
-`f32-covariance` returns 0.0329 m and NIS 1.459, identical to `f64` in every
+`f32-covariance` returns 0.0127 m and NIS 1.459, identical to `f64` in every
 summary figure. Either the `t³` extrapolation overstates the late growth, or the
 ill-conditioned directions are ones the reported position does not depend on.
 Neither is established here, and a longer dataset would separate them. See
@@ -135,6 +135,14 @@ where the `f64` filter's NIS is 1.459:
 | 3 km | 0.0335 m | 1.722 |
 | 5 km | 0.0362 m | 2.941 |
 | 10 km | 0.0525 m | 12.809 |
+
+The horizontal column was scored as the replay scored it when this was measured,
+against the antenna where the engine stood when each fix was queued. That adds
+the distance the car travels before the fix, the same in every row, and reads
+0.0329 m where the residual at the fix's epoch is 0.0127 m
+([testing.md](../testing.md#what-is-measured)). The prototype behind these rows
+no longer exists to be re-scored, so the column understates how soon accuracy
+follows NIS. NIS was never affected.
 
 `f32` position works and the anchor range is the only parameter: the frame is the
 obstacle, not the precision. NIS fails before accuracy does. At 5 km the RMS is ten
@@ -308,7 +316,7 @@ Jacobian and the serialization schema would all change. Doing it incrementally m
 maintaining two representations, which is worse than doing it once.
 
 **The accuracy results would have to be re-established, not assumed.** The KF-GINS
-3.3 cm and the GSDC holdout table are the project's evidence, and both are scored
+1.3 cm and the GSDC holdout table are the project's evidence, and both are scored
 against geodetic truth. They would be the regression tests for that work and the
 first thing to re-run.
 

@@ -24,7 +24,7 @@ re-deriving them from a base of texts that do not use the new one.
 
 **The reference implementation is NED/FRD.** [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS)
 is the architecture this project follows and the dataset it validates against.
-The 3.3 cm result is established in this frame; a conversion would have to be
+The 1.3 cm result is established in this frame; a conversion would have to be
 inserted into the one comparison that anchors the project's accuracy claim.
 
 **Half a change is worse than none.** FLU pairs with ENU. Adopting FLU for the

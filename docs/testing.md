@@ -161,16 +161,48 @@ will ignore the next measurement that could correct it.
 ### What is measured
 
 For each fix, the filter's predicted **antenna** position immediately *before*
-that fix is applied, against the fix itself. Between fixes the solution is pure
-inertial dead reckoning, so this measures one second of mechanization plus
-whatever error the filter had not yet corrected. It is an open-loop check, not a
-self-fulfilling one.
+that fix is applied, **at the fix's own epoch**, against the fix itself. Between
+fixes the solution is pure inertial dead reckoning, so this measures one second
+of mechanization plus whatever error the filter had not yet corrected. It is an
+open-loop check, not a self-fulfilling one.
 
 Comparing at the antenna rather than at the IMU reference point is essential.
 They differ by the lever arm, which is 0.18 m vertically in this dataset —
-around eight times the residual being measured. Comparing the wrong one reports
-that offset as a bias and looks exactly like a real defect. Use
+ten times the residual being measured. Comparing the wrong one reports that
+offset as a bias and looks exactly like a real defect. Use
 `GinsEngine::antenna_position()`, not `nav_state().position()`.
+
+Comparing at the epoch is as essential, and for a long time this replay did not.
+A fix is queued just before the IMU sample whose interval contains it, so at
+that moment the engine stands at the end of the *previous* sample: up to 5 ms
+before the fix on this recording, 2.55 ms on average. A car at 13 m/s covers
+6.5 cm in 5 ms. `antenna_position()` read then is where the antenna was, the fix
+is where it is, and the difference between the two instants was being reported
+as the filter's error.
+
+[`drifters_cli::antenna_at`](../crates/drifters-cli/src/lib.rs) takes the
+prediction to the epoch first: a copy of the engine is propagated over the part
+of the sample that precedes the fix, which is the state the engine itself forms
+its innovation from when it splits the sample there. Scored that way the
+horizontal residual is **1.3 cm**. Scored the old way it is 3.3 cm, and the
+replay still prints that figure, labelled, because it is quoted in the ADRs and
+in earlier changelog entries and has to stay reproducible.
+
+The old figure was not a uniform exaggeration, which is why it went unnoticed.
+The IMU clock drifts against the GNSS second across this recording. For the
+first half the previous sample ends a fraction of a millisecond before each fix
+and the two scorings agree. For the second half it ends 4.4 to 5.0 ms before,
+and the old scoring read three to four times the filter's error there. NIS was
+never affected, because the engine computes it at the epoch; neither is any
+figure scored against truth, on GSDC or comma2k19, where the estimate and the
+truth were always taken at one instant.
+
+Two conclusions drawn from the old residual went with it. The ESKF and the EqF
+looked 6 % apart because most of both figures was the same travel: they are
+28 % apart. And the ESKF's residual had a mean of −2.6 cm along the direction
+of travel, which was read as a lever arm 2.6 cm short; that mean is the travel
+too, and at the epoch it is 0.02 cm. What the recording does say about its lever
+arm is in [the next section but one](#what-the-recording-says-about-its-lever-arm).
 
 ### Observed values
 
@@ -178,9 +210,9 @@ Measured on the demo dataset:
 
 | quantity | observed | tolerance | rationale |
 |---|---|---|---|
-| north residual RMS | 0.022 m | — | |
-| east residual RMS | 0.025 m | — | |
-| horizontal residual RMS | 0.033 m | 0.10 m | ~3x observed |
+| north residual RMS | 0.009 m | — | |
+| east residual RMS | 0.009 m | — | |
+| horizontal residual RMS | 0.013 m | 0.04 m | ~3x observed |
 | vertical residual RMS | 0.018 m | 0.06 m | ~3x observed |
 | per-axis bias | < 0.001 m | 0.01 m | a bias is a defect, not noise |
 | fixes applied | 3362 of 3363 | > 3000 | |
@@ -199,42 +231,111 @@ so a filter tracking them perfectly reports a small residual while being wrong
 by whatever the fixes were. What it establishes is that the mechanization, the
 transition matrix and the GNSS update are mutually consistent to centimetres
 over an hour of real data — an implementation error in any of the three would be
-orders of magnitude larger than these tolerances. The next section closes the
-truth gap.
+orders of magnitude larger than these tolerances. The next section compares with
+KF-GINS's own reference solution, which narrows that gap and does not close it.
 
 ### Against the reference solution
 
 `crates/drifters-cli/tests/kf_gins_truth.rs` replays the same dataset and
 compares each estimator's **IMU-reference-point** solution with `truth.nav`,
-KF-GINS's own reference trajectory, once a second after a 30 s settle.
-`truth.nav` is independent of both this library and the RTK receiver, which is
-what makes heading and velocity error — invisible to a prediction residual —
-measurable:
+KF-GINS's own reference trajectory, once a second after a 30 s settle. That
+makes heading and velocity error measurable, which a prediction residual cannot
+see at all.
+
+**What the reference is.** It is independent of this library. Upstream
+documents its columns and not how it was produced, so it is not known to be
+independent of the IMU and the fixes replayed here, and two things say it is
+not independent of the dataset's configuration. The ESKF is handed the
+configured lever arm and sits within 0.3 mm of the reference on every body axis,
+while [the recording itself](#what-the-recording-says-about-its-lever-arm) puts
+the antenna 2.6 cm further forward than that configuration. And the agreement in
+position, 0.8 cm an axis, is closer than the fixes' own noise. Read the figures
+as agreement with another implementation's solution of largely the same inputs.
 
 | quantity | ESKF | EqF |
 |---|---|---|
 | horizontal position RMS | 0.012 m | 0.030 m |
 | vertical position RMS | 0.009 m | 0.045 m |
+| position, mean in the body frame: forward, right, down | −0.0001, +0.0002, −0.0003 m | −0.025, +0.004, +0.041 m |
+| position, scatter about that mean | 0.009, 0.007, 0.009 m | 0.011, 0.008, 0.019 m |
 | horizontal velocity RMS | 0.003 m/s | 0.003 m/s |
 | heading RMS | 0.018° | 0.011° |
 | NEES, 9 navigation states | 20.9 | 57.3 |
+| NEES by block of 3: position, velocity, attitude | 4.6, 5.7, 12.8 | 22.8, 6.3, 15.6 |
 
-The EqF is flat-Earth by default, so it carries the metre-level tangent-plane
-error the ESKF does not — the larger position error — while its self-calibrating
-attitude gives the smaller heading. Tolerances are ~3x each engine's observed
-values, the convention the rest of the suite uses.
+**The EqF's larger position error is its lever arm, not its Earth model.** In
+the body frame its error is nearly a constant. The reference is at the IMU, and
+the EqF places the IMU from the antenna by the lever arm it estimates, which
+over the scored epochs averages `[+0.026, −0.004, −0.042]` m from the
+configured one. Its mean offset from the reference is the negative of that to
+0.4 mm, and the test holds the two together within 2 mm. With the constant
+removed its scatter is the ESKF's horizontally and twice it vertically, where
+its vertical lever arm is still moving, by 1.7 cm sigma over the run.
 
-NEES is the filter's error against that truth in its own covariance, over
+Its heading error is 40 % smaller than the ESKF's. The cause has not been
+looked for.
+
+NEES is the error against the reference in the filter's own covariance, over
 position, velocity and attitude, and an exact truth would read 9. Both read
-above it because `truth.nav` is itself a reference with an error, not a truth
-without one: the errors against it are at the level of the reference's own
-error, while the covariance each claims is smaller. The EqF's is the higher of
-the two. The bands are wide for that reason — they catch an order-of-magnitude
-covariance fault, not a factor of two. On simulated data with exact truth the
-ESKF reads 8.9 to 11.0 (Layer 7).
+above it, and the blocks say where. The ESKF's excess is attitude, 12.8 against
+3: its heading differs from the reference by 0.018° RMS where it claims
+0.006°. Nothing states the reference's own accuracy, so whether that is the
+filter's overconfidence or the reference's error cannot be told from here. The
+EqF's is position, 22.8, which is the lever arm again: a 4 cm constant against
+a claimed sigma near 1 cm. The bands are wide for those reasons — they catch an
+order-of-magnitude covariance fault, not a factor of two. On simulated data
+with exact truth the ESKF reads 8.9 to 11.0 (Layer 7).
 
-The [initial-alignment test](#layer-13--initial-alignment) scores against the
-same file rather than the library's own output.
+Tolerances are ~3x each engine's observed values, the convention the rest of
+the suite uses, and 2 mm on the two body-frame means. The
+[initial-alignment test](#layer-13--initial-alignment) scores against the same
+file.
+
+### What the recording says about its lever arm
+
+The EqF estimates the antenna lever arm, and here it settles 2.6 cm further
+along the vehicle than the dataset's configuration has it.
+`crates/drifters-cli/tests/kf_gins_lever_arm.rs` asks the recording which is
+right, in the two ways that hold up.
+
+**A start that cannot know.** The replay hands the EqF the configured initial
+position of the IMU, to 5 mm, and the first fixes say where the antenna is. So
+within five seconds of standing still the filter has the configured lever arm:
+it is the difference of two things it was told, and not a calibration. The test
+starts the IMU where the first fix puts the *antenna*, a metre uncertain, so no
+lever arm is in the prior at all:
+
+| | forward | right | down |
+|---|---|---|---|
+| after 30 s standing | −0.001 m | −0.002 m | +0.003 m |
+| at the end of the drive | **+0.162 m** | **−0.305 m** | −0.311 m |
+| configured | +0.136 m | −0.301 m | −0.184 m |
+
+It learns nothing until the car moves, and then finds the horizontal arm the
+replay's own start also ends at, `[+0.163, −0.305]`.
+
+**Turns.** A lever arm that is wrong along the vehicle misplaces the predicted
+antenna by a vector fixed in the body. The filter's position absorbs it at each
+fix, and until the next the vehicle's rotation carries it round, so the residual
+*across* the vehicle follows the yaw rate, with opposite signs in left and
+right turns. A clock offset cannot do that: it moves the antenna along the
+track. The ESKF, with each arm, scored at the fix epoch:
+
+| | configured | the EqF's |
+|---|---|---|
+| horizontal residual RMS | 0.0128 m | 0.0121 m |
+| NIS | 1.459 | 1.329 |
+| lateral residual, mean over left turns and over right turns | +7.5 mm, −5.4 mm | −0.7 mm, +1.8 mm |
+| lateral residual per rad/s of yaw rate, 326 fixes above 0.05 rad/s | −0.041 m | +0.002 m |
+
+So the configured arm is about 2.6 cm short along the vehicle, and that is the
+recording's verdict and not only the EqF's.
+
+**The vertical is not observable on this drive.** A car that stays level never
+turns its lever arm into the horizontal. The EqF ends at −0.250 m from the
+configured start and −0.311 m from the uninformed one, and handed −0.184,
+−0.250 or −0.311 the ESKF's horizontal residual moves by 0.1 mm and its NIS by
+0.013.
 
 ## Layer 7 — statistical consistency
 
@@ -281,8 +382,8 @@ the ratio `mean NIS / m` and interprets it via `practical_verdict`:
 ### Observed on the demo dataset
 
 Mean NIS **1.459** against an expected 3.0, a ratio of **0.486** — conservative
-by roughly 1.4x in sigma. The filter believes its position uncertainty is about
-3.5 cm while the residuals it actually makes are about 2.5 cm.
+by roughly 1.4x in sigma. The innovations the filter sees are about 0.7 of what
+its own covariance and the fixes' stated noise together allow.
 
 That is a real, if mild, finding rather than a defect: it means the process
 noise from `kf-gins.yaml` is a little generous for this IMU, and being
@@ -910,7 +1011,7 @@ filter helps, and gsdc.md diagnoses why.
 
 A smoother cannot be validated on a real dataset. The measurements are the
 reference there, and a backward pass fits them better by construction whether
-or not the recursion is right — the KF-GINS "3.3 cm" figure is a residual
+or not the recursion is right — the KF-GINS "1.3 cm" figure is a residual
 against the very fixes being fitted, so it would improve under a smoother that
 was wholly wrong.
 
@@ -1112,13 +1213,14 @@ displacements alone.
 
 | | roll | pitch | yaw |
 |---|---|---|---|
-| error | 0.049° | 0.029° | 1.482° |
+| error | 0.043° | 0.031° | 1.534° |
 | sigma | 0.057° | 0.056° | 2.677° |
 
 The ESKF then runs for 600 s from nothing but that alignment. Horizontal RMS is
-0.061 m and the worst 0.331 m, and after 120 s the heading stays within 0.016°.
-The reference is this project's own full solution of the same recording, so it
-shows agreement with that solution and is not independent truth.
+0.011 m and the worst 0.047 m, and after 120 s the heading stays within 0.036°.
+The reference is KF-GINS's `truth.nav`, another implementation's solution of the
+same recording; [what it is and is not independent of](#against-the-reference-solution)
+applies here too.
 
 ### Against phones
 
@@ -1534,9 +1636,9 @@ compensation, so this asks only whether the model does harm where it is not need
 
 | Earth model | horizontal RMS | NIS |
 |---|---|---|
-| in the group | 0.0353 m | 1.76 |
-| input compensated | 0.0350 m | 1.55 |
-| flat | 0.943 m | 6 718 |
+| in the group | 0.0172 m | 1.76 |
+| input compensated | 0.0163 m | 1.55 |
+| flat | 0.944 m | 6 718 |
 
 ### Whether it can detect anything
 

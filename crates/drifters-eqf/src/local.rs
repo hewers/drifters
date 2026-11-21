@@ -263,9 +263,9 @@ pub fn gyrocompass_accuracy(gyro_bias_stability: F, latitude: F) -> F {
 /// bias stability is 0.027 °/h, so Earth rate is 557 times larger. The
 /// gyro-bias state absorbs the vertical half, which is constant about a level
 /// vehicle's down axis; the horizontal half turns with the vehicle and no state
-/// can follow it. Uncompensated, the fixes hold it to 0.943 m horizontal RMS
-/// with a NIS of 6 718. Compensated, 0.035 m with a NIS of 1.55, against the
-/// ESKF's 0.033 m and 1.46.
+/// can follow it. Uncompensated, the fixes hold it to 0.944 m horizontal RMS
+/// with a NIS of 6 718. Compensated, 0.016 m with a NIS of 1.55, against the
+/// ESKF's 0.013 m and 1.46.
 ///
 /// With GCU above α = 0 the uncompensated filter diverges as `t³`, to `10⁶ m`:
 /// the inflation discounts the corrections that bound a forcing which never

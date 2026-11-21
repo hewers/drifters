@@ -36,7 +36,8 @@ What the library does, what checks it, and what is open. The reasoning is in
 | `msrv` | Rust 1.85 for `drifters-core`, `-filter`, `-eqf`, `-gnss` and `-interop`, and 1.88 for the workspace |
 | `docs` | rustdoc with `-D warnings` |
 | `proto` | the checked-in bindings match the `.proto` sources |
-| `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution) and the alignment test, with a missing dataset failing the job |
+| `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), the [lever-arm test](testing.md#what-the-recording-says-about-its-lever-arm) and the alignment test, with a missing dataset failing the job |
+| `licences` | every package's copy of `UNLICENSE` matches the root |
 | `fuzz` | the decode target, and the engine target in three filter configurations, 60 s each |
 | `interop` | the permissive `nav-types` adapter |
 | `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit and agreement between builds |
@@ -98,8 +99,20 @@ emulation. This repository claims nothing about time until these items run.
 - **The Earth-in-group filter's NIS.** It reads 1.76 on KF-GINS against 1.55 with the
   input compensated, and the difference has not been investigated.
 - **A comparison against KF-GINS's own filter output,** which needs their C++
-  build in the loop. `truth.nav` now gives independent truth, scored in
-  `kf_gins_truth.rs`, but it is their reference trajectory and not their filter.
+  build in the loop. `truth.nav` is their reference trajectory and not their
+  filter, and it is scored in `kf_gins_truth.rs`.
+- **Truth for a tactical-grade unit that shares nothing with the run.**
+  `truth.nav` is another implementation's solution, and upstream does not say
+  how it was made. It agrees with the dataset's configured lever arm to 0.3 mm
+  where [the recording does not](testing.md#what-the-recording-says-about-its-lever-arm),
+  so it is not independent of that configuration, and its agreement in position
+  is closer than the fixes' noise.
+- **The ESKF's heading sigma on KF-GINS.** It claims 0.006° and differs from the
+  reference by 0.018° RMS, an attitude NEES of 12.8 against 3. Nothing states
+  the reference's own accuracy, so this is either the filter or the reference,
+  and it has not been separated.
+- **Why the EqF's heading is closer to that reference than the ESKF's,** 0.011°
+  against 0.018°.
 - **Fuzzing beyond the engines.** The aligner, the smoother and the CLI's parsers are
   not fuzzed.
 

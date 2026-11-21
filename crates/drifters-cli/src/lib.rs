@@ -28,12 +28,47 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use drifters_core::estimator::Estimator;
+use drifters_core::frames::Lla;
 use drifters_core::math::RAD_TO_DEG;
+use drifters_core::time::GpsTime;
+use drifters_core::types::ImuSample;
 use drifters_filter::{GinsEngine, GinsOptions};
 
 pub use engines::{EngineKind, ReplayEngine};
 
 use stats::{assess, Consistency, Running};
+
+/// Where `engine` will put the GNSS antenna at `epoch`, which lies in the
+/// interval `sample` covers. The engine itself is not moved.
+///
+/// A fix is queued just before the IMU sample whose interval contains its
+/// epoch, so at that moment the engine stands at the end of the *previous*
+/// sample: up to one IMU interval before the fix. Comparing the antenna there
+/// with the fix compares two instants, and the difference between them is the
+/// distance the vehicle travels in between. At 200 Hz and 13 m/s that is up to
+/// 6.5 cm, along the direction of travel, and on the KF-GINS recording it was
+/// most of the residual this tool used to report: 3.3 cm RMS scored that way
+/// against 1.3 cm scored at the epoch, with half the fixes 4.4 to 5.0 ms after
+/// the prediction they were held against.
+///
+/// So the prediction is taken to the epoch first, by the engine's own
+/// propagation over the part of the sample that precedes it, on a copy. That is
+/// the state the engine forms its innovation from when it splits the sample at
+/// the fix.
+pub fn antenna_at<E: Estimator + Clone>(engine: &E, sample: &ImuSample, epoch: GpsTime) -> Lla {
+    let mut probe = engine.clone();
+    // How far into the sample's interval the epoch lies.
+    let elapsed = epoch.seconds_since(sample.time) + sample.dt;
+    // A step the copy refuses leaves it where it was, which is the best
+    // prediction left, so the result is not needed.
+    if elapsed >= sample.dt {
+        let _ = probe.add_imu(*sample);
+    } else if let (Some(before), _) = sample.split_at(epoch) {
+        let _ = probe.add_imu(before);
+    }
+    probe.antenna_position()
+}
 
 /// What a replay produced, beyond the output files.
 ///
@@ -72,6 +107,16 @@ pub struct Report {
     pub residual_down: Running,
     /// See [`Report`].
     pub horizontal: Running,
+    /// The horizontal residual as this tool scored it before [`antenna_at`]:
+    /// against the antenna where the engine stood when the fix was queued, up
+    /// to one IMU interval before the fix's epoch. Kept so that the figures
+    /// quoted from that scoring can still be reproduced and told apart from
+    /// these; it is not a measure of the filter.
+    pub held_horizontal: Running,
+    /// How long before each fix's epoch the engine stood when the fix was
+    /// queued, seconds: the age of the prediction [`Self::held_horizontal`]
+    /// scored.
+    pub held_age: Running,
     /// One row per GNSS epoch, for plotting and offline analysis.
     ///
     /// Kept because the aggregate statistics above throw away exactly what is
@@ -127,7 +172,7 @@ impl Report {
             );
         }
 
-        println!("\n--- position residual against GNSS (metres) ---");
+        println!("\n--- position residual against GNSS, at each fix's epoch (metres) ---");
         println!("            rms       mean      sigma     max");
         for (name, r) in [
             ("north ", &self.residual_north),
@@ -150,6 +195,13 @@ impl Report {
             self.horizontal.max()
         );
         println!("residual at the last fix: {:.3} m", self.final_residual);
+        println!(
+            "as scored before, against the antenna where the engine stood when the fix\n\
+             was queued ({:.2} ms before its epoch on average, {:.2} at most): horizontal rms {:.4}",
+            self.held_age.mean() * 1e3,
+            self.held_age.max() * 1e3,
+            self.held_horizontal.rms()
+        );
 
         println!("\n--- filter consistency ---");
         let verdict = assess(&self.nis, 3);
@@ -256,6 +308,8 @@ pub fn replay_with<E: ReplayEngine>(
         residual_east: Running::new(),
         residual_down: Running::new(),
         horizontal: Running::new(),
+        held_horizontal: Running::new(),
+        held_age: Running::new(),
         epochs: Vec::new(),
         final_residual: 0.0,
         lever: engine.lever_arm(),
@@ -299,7 +353,20 @@ pub fn replay_with<E: ReplayEngine>(
             // differ by the lever arm, which for this dataset is 0.18 m
             // vertically — using `nav_state().position()` here reports that as
             // a systematic bias that has nothing to do with filter quality.
-            let predicted = engine.antenna_position();
+            //
+            // And compared at the fix's EPOCH, not where the engine stands
+            // now, which is up to one IMU interval earlier. See `antenna_at`.
+            report.held_horizontal.push(
+                engine
+                    .antenna_position()
+                    .ned_from(fix.position)
+                    .horizontal_norm(),
+            );
+            // The engine stands at the start of this sample's interval.
+            report
+                .held_age
+                .push((fix.time.seconds_since(sample.time) + sample.dt).clamp(0.0, sample.dt));
+            let predicted = antenna_at(&engine, sample, fix.time);
             let residual = predicted.ned_from(fix.position);
             report.residual_north.push(residual.n);
             report.residual_east.push(residual.e);
@@ -966,8 +1033,8 @@ fn gsdc_pass<E: ReplayEngine>(
 
             // Before the update: what the filter predicted, against what the
             // receiver said. After it, the difference is mostly the fix's own
-            // error.
-            let predicted = engine.antenna_position().ned_from(fix.position);
+            // error. Predicted at the fix's epoch; see `antenna_at`.
+            let predicted = antenna_at(&engine, sample, fix.time).ned_from(fix.position);
 
             // Tight coupling consumes the ranges the epoch was solved from,
             // so a position solution is never formed. Velocity still arrives

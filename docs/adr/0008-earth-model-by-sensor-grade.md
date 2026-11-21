@@ -18,12 +18,12 @@ which is constant about a level vehicle's down axis: it converges to
 `−3.66 × 10⁻⁵ rad/s` against the `3.69 × 10⁻⁵` that is vertical at this latitude.
 The horizontal component turns with the vehicle, and no state can follow it. With
 the EqF's GCU convergence rate α = 0, the 1 Hz fixes hold the result to a metre:
-0.943 m RMS with a NIS of 6 718, twenty-seven times worse than the compensated filter
+0.944 m RMS with a NIS of 6 718, fifty-eight times worse than the compensated filter
 and forty-seven times overconfident. Above α = 0 it diverges, because GCU inflates
 against fixes that bound a forcing which never stops. At α = 0.5 it ends
 `3.9 × 10⁶ m` from the last fix.
 
-Compensated, the same filter is within 6 % of the ESKF and converges at every α,
+Compensated, the same filter's residual is 28 % above the ESKF's and it converges at every α,
 given what [eqf.md](../eqf.md#what-the-compensated-filter-needs) describes. On a
 phone-grade trace the flat-Earth filter is within about 20 % of the ESKF, because a
 20 °/h phone gyroscope sees Earth rate at 0.75 times its own noise floor.
@@ -56,8 +56,8 @@ Input-side compensation, as implemented in
 a' = ᴵa − R̂ᵀ[(2ω_ie + ω_en) × v̂]
 ```
 
-Measured on KF-GINS, this takes the filter to 3.5 cm horizontal RMS against
-the ESKF's 3.3 cm, with a NIS of 1.55 against the ESKF's 1.46, from 0.943 m and
+Measured on KF-GINS, this takes the filter to 1.6 cm horizontal RMS against
+the ESKF's 1.3 cm, with a NIS of 1.55 against the ESKF's 1.46, from 0.944 m and
 a NIS of 6 718 uncompensated.
 
 It is a deviation from the published filter, so the library leaves
