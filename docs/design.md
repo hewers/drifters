@@ -24,7 +24,7 @@ which makes it a good thing to be *comparable to* — see
 - Fixed, statically-known memory footprint. Every type is `Copy` and sized.
 - Sans-IO. The filter is a state machine that samples are pushed into; file
   formats, sockets, and threads live in separate crates.
-- Auditable numerics: every frame convention, unit and sign is stated in the
+- Auditable numerics: every frame convention, unit, and sign is stated in the
   type that carries it, and checked by a test.
 - Minimum dependencies. `drifters-core` has exactly one, `libm`, and
   `drifters-filter` and `drifters-eqf` add nothing to it. `drifters-proto` needs
@@ -69,7 +69,7 @@ accidentally pull in a host-only dependency.
 ```
 drifters-core      no_std, no alloc, deps: libm
                    math (Matrix/Vec3/Quat), WGS-84 earth model, frames, local
-                   frame, time, sensor and state types, and the Estimator
+                   frame, time, sensor, and state types, and the Estimator
                    trait with what the two engines share
         ▲
         ├────────────────────────┐
@@ -306,7 +306,7 @@ Three things are deliberately not in it.
   separate, strongly anti-correlated terms, so its position block is not a
   position uncertainty. `Estimator::pva_std` is the question both can answer
   in one unit; `drifters_eqf::physical` is the map that lets the EqF answer.
-- **Aiding.** ZUPT, zero rate, non-holonomic, wheel speed, height and heading
+- **Aiding.** ZUPT, zero rate, non-holonomic, wheel speed, height, and heading
   are the ESKF's alone. Both take a magnetometer, through a method of the same
   name and arguments, but not the same measurement: the ESKF reads the field in
   the body frame, so its sensor must already be aligned, and the EqF estimates
@@ -384,7 +384,7 @@ CI checks.
 | item | dense `f64` | factored `f32` |
 |---|---|---|
 | `Σ` | 3 528, a `Matrix<21, 21>` | 924, `U` and `D` |
-| `EqFilter<C>` (observer state + `Σ` + gravity, Earth rate and gravity gradient + GCU rate) | 3 864 | 1 264 |
+| `EqFilter<C>` (observer state + `Σ` + gravity, Earth rate, and gravity gradient + GCU rate) | 3 864 | 1 264 |
 | `EqfOptions` | 648 | 648 |
 | `EqfEngine<C>` total | **4 720** | **2 120** |
 
@@ -429,7 +429,7 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 | `apply_magnetometer` | 7 600 |
 | **peak** | **13 520** |
 
-The harness firmware, holding both engines, the aligner, semihosting and the panic
+The harness firmware, holding both engines, the aligner, semihosting, and the panic
 handler, links to 206 408 bytes of `.text` and 4 084 of `.rodata`.
 
 ### How the stack is kept down
@@ -467,7 +467,7 @@ filter to 15 states. Every matrix halves, and so does the stack:
 | `GinsEngine` | 3 336 B | 2 400 B |
 | peak stack | 13 520 B | **8 888 B** |
 
-Both halve again under `f32-covariance`: 480, 608 and 1 920 bytes.
+Both halve again under `f32-covariance`: 480, 608, and 1 920 bytes.
 
 Peak stack by operation, in bytes:
 
@@ -577,7 +577,7 @@ locked out. It is off by default, because the recovery lets in whatever is being
 refused: in simulation, with the mounting left aligned on a sensor about 4° off,
 the error after a 60 s outage goes from 4.6 m to 100.9 m.
 [comma2k19.md](comma2k19.md) has what it gives when the mounting is right. Scaling
-preserves symmetry, positive definiteness and every correlation — the conservative
+preserves symmetry, positive definiteness, and every correlation — the conservative
 choice when the *direction* of the error is exactly what is unknown.
 
 Read [state-model.md](state-model.md) on accelerometer bias and tilt before
@@ -622,7 +622,7 @@ millimetre, in both directions.
 
 `gnss-rtk` exposes DOP and no covariance, and DOP is pure constellation geometry,
 so its adapter takes a UERE from the caller. Only the caller knows whether the
-solution is single-point, differential or RTK, and the filter weights every fix by
+solution is single-point, differential, or RTK, and the filter weights every fix by
 the resulting sigmas.
 
 ## Error handling

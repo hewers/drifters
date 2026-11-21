@@ -8,7 +8,7 @@ inertial navigation library.
 Strapdown mechanization with two-sample coning and sculling compensation, a
 21-state error-state EKF over a `U D Uᵀ`-factored covariance, loosely- and
 tightly-coupled GNSS, RTS smoothing, and auxiliary sensors: ZUPT, non-holonomic
-constraints, odometer, barometric height and magnetometer heading.
+constraints, odometer, barometric height, and magnetometer heading.
 
 Sans-IO: push samples in, pull state out. It never allocates, blocks, reads a
 clock or touches a file, so the same code runs inside an interrupt handler and

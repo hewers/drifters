@@ -79,7 +79,7 @@ the list below is what the release *is* rather than what changed.
   row, which gives the same result. On a Cortex-M4 the peak goes from 20 808 bytes
   to 17 088, from 20 824 to 13 124 with `f32-covariance`, and at 15 states from
   11 536 to 10 360 and from 11 552 to 7 956. `apply_zupt` goes from 20 656 to 7 216.
-  The CI ceilings tighten to 18, 14, 11 and 9 KiB to hold the gain.
+  The CI ceilings tighten to 18, 14, 11, and 9 KiB to hold the gain.
 - **`add_imu` can now return `FilterError::Diverged`, and invalid input is refused
   rather than absorbed, in both engines.** A finite sample that would overflow the
   mechanization leaves the state and covariance as they were, and the next sample
@@ -309,13 +309,13 @@ the list below is what the release *is* rather than what changed.
 - **The EqF on KF-GINS: three things the Earth was blamed for.** First the
   flat-Earth divergence was put down to Earth rate, then to GCU at the 0.5 the
   replay never overrode. With compensation, every α above zero still diverged
-  — 2.78, 29.2 and 216 m — and that was neither: the IMU's −260 ppm vertical
+  — 2.78, 29.2, and 216 m — and that was neither: the IMU's −260 ppm vertical
   accelerometer scale factor, which the ESKF estimates and the EqF has no
   state for, reached it as a 250 mGal bias seventeen sigma outside its 15 mGal
   prior; and the covariance update above. The new
   `EqfOptions::with_accel_scale_factor` carries the scale-factor prior the
   ESKF is given in the bias prior, and with both fixed every α converges —
-  0.053, 0.106 and 0.73 m — in the paper's order. At α = 0 the compensated
+  0.053, 0.106, and 0.73 m — in the paper's order. At α = 0 the compensated
   filter is **0.016 m** against the ESKF's 0.013, NIS 1.55 against 1.46; flat,
   0.944 m with a NIS of 6 718, and still diverging above α = 0, which is the
   part of the Earth-rate account that stands. The old loop's 14.7 m against
@@ -623,7 +623,7 @@ the list below is what the release *is* rather than what changed.
   position, position/velocity/attitude sigmas in common units, and the health
   counters; `place`, the rule for where a GNSS epoch falls in an IMU interval,
   which was private to `drifters-filter` and is now the one copy both use; and
-  `EPOCH_TOLERANCE`. Construction, the covariance and aiding are not in the
+  `EPOCH_TOLERANCE`. Construction, the covariance, and aiding are not in the
   trait, and its documentation says why each is not. One contract test, generic
   over the trait, runs against both engines.
 - **`GinsEngine::pva_std` and `GinsEngine::is_healthy`**, the two things the
@@ -640,7 +640,7 @@ the list below is what the release *is* rather than what changed.
   state; a rewind costs the samples it replays — 242 µs on the host for 300 ms
   of lateness at 200 Hz — and the whole layer is 21 312 bytes at that size.
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
-  geodetic position, answering gravity, earth rate, transport rate and the radii
+  geodetic position, answering gravity, earth rate, transport rate, and the radii
   of curvature from a single `sin_cos`. The free functions on `Wgs84` each
   compute their own, and the mechanization calls them about twelve times per
   IMU sample. Bit-identical results, and 10.4 % off the instructions retired per
@@ -661,12 +661,12 @@ the list below is what the release *is* rather than what changed.
   that `--all-features` on stable is unaffected. Worth 17.5 % of the
   instructions retired per `add_imu` on Cortex-M4 with `f32-covariance`.
 - **`drifters-filter::anchor`** — the re-anchoring transform: the
-  block-diagonal Jacobian (rotation on position, velocity and attitude error;
+  block-diagonal Jacobian (rotation on position, velocity, and attitude error;
   identity on the body-frame IMU errors) and `P ← J P Jᵀ` over the factored
   covariance.
 
 - **`drifters-core`** — `no_std`, allocation-free foundations: fixed-size
-  matrices with Cholesky, quaternions and rotation conversions, the WGS-84
+  matrices with Cholesky, quaternions, and rotation conversions, the WGS-84
   ellipsoid and gravity model, ECEF/geodetic/NED frames, and GPS time as an
   integer nanosecond count with constructors that each name the epoch and scale
   they expect. Feature: `std`.
@@ -674,7 +674,7 @@ the list below is what the release *is* rather than what changed.
 - **`drifters-filter`** — a 21-state error-state Kalman filter over a
   local-level (NED) mechanization, estimating position, velocity, attitude and
   the IMU's biases and scale factors. Loosely-coupled GNSS position and
-  velocity; zero-velocity, non-holonomic, wheel-speed, height and magnetic
+  velocity; zero-velocity, non-holonomic, wheel-speed, height, and magnetic
   heading aiding; chi-squared gating with covariance inflation on repeated
   rejection. Features: `reduced-state` drops the scale factors for a 15-state
   filter; `f32-covariance` carries the covariance factors in single precision;
@@ -726,7 +726,7 @@ the list below is what the release *is* rather than what changed.
   `extern crate alloc`. Everything that needs a heap is in `drifters-gnss` and
   the tooling, on the other side of a deliberate line.
 - **One dependency** in the shipped stack: `libm`, for the `no_std` float math.
-- **Measured, not asserted.** The accuracy, footprint and consistency figures in
+- **Measured, not asserted.** The accuracy, footprint, and consistency figures in
   the documentation come from tests in this repository, and the results that did
   not work are recorded alongside the ones that did. See
   [`docs/testing.md`](docs/testing.md).

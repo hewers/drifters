@@ -32,7 +32,7 @@
 //! position block is not a position uncertainty at all. [`Estimator::pva_std`]
 //! is the part of the question both can answer in the same units.
 //!
-//! **Aiding.** Zero-velocity, non-holonomic, wheel speed, height and heading
+//! **Aiding.** Zero-velocity, non-holonomic, wheel speed, height, and heading
 //! are the ESKF's alone. Both take a magnetometer, through a method of the same
 //! name and arguments, but not the same measurement: the ESKF reads the field
 //! in the body frame, so its sensor must already be aligned, and the EqF
@@ -235,7 +235,7 @@ pub mod chi_squared {
     ];
 }
 
-/// One-sigma uncertainty of position, velocity and attitude, in the units and
+/// One-sigma uncertainty of position, velocity, and attitude, in the units and
 /// frames [`NavState`] reports them in.
 ///
 /// The marginals only. Each estimator's full covariance is its own, in its own
@@ -249,13 +249,13 @@ pub struct PvaStd {
     pub position: Vec3,
     /// Velocity, NED m/s.
     pub velocity: Vec3,
-    /// Attitude, as a rotation about the north, east and down axes, radians.
+    /// Attitude, as a rotation about the north, east, and down axes, radians.
     pub attitude: Vec3,
 }
 
 /// A GNSS/INS estimator an application pushes samples into.
 ///
-/// Sans-IO: an implementation never reads a file, allocates, blocks or looks
+/// Sans-IO: an implementation never reads a file, allocates, blocks, or looks
 /// at a clock. Samples go in, state comes out, and the same sample sequence
 /// always produces the same output.
 ///
@@ -318,7 +318,7 @@ pub trait Estimator {
     /// configured or estimated.
     fn antenna_position(&self) -> Lla;
 
-    /// One-sigma uncertainty of position, velocity and attitude.
+    /// One-sigma uncertainty of position, velocity, and attitude.
     fn pva_std(&self) -> PvaStd;
 
     /// Normalised innovation squared of the most recent applied measurement.

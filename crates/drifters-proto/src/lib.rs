@@ -1,6 +1,6 @@
 //! Protobuf serialization for the drifters navigation types.
 //!
-//! Extended pose, sensor samples and filter configuration, on the wire, for
+//! Extended pose, sensor samples, and filter configuration, on the wire, for
 //! both estimators: the ESKF ([`pb::GinsOptions`], [`pb::NavSolution`]) and the
 //! EqF ([`pb::EqfOptions`], [`pb::EqfSolution`], carrying the GNSS lever arm and
 //! magnetometer calibration it estimates).

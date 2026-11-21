@@ -1060,7 +1060,7 @@ fn gsdc_pass<E: ReplayEngine>(
                     // pseudorange is good to 16 m, and it reads NIS 1.4 while
                     // barely correcting anything.
                     //
-                    // Fitted on trace A, holding B, C and D out: sigma =
+                    // Fitted on trace A, holding B, C, and D out: sigma =
                     // 0.06 + 3.2/sin(el) metres, so 3.3 m at zenith against the
                     // 2.55 m measured there, and deliberately optimistic toward
                     // the horizon because the Huber weighting below is what

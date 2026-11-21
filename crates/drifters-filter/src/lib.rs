@@ -1,6 +1,6 @@
 //! Error-state Kalman filter for aided inertial navigation.
 //!
-//! Estimates extended pose — position, velocity and attitude — plus IMU biases
+//! Estimates extended pose — position, velocity, and attitude — plus IMU biases
 //! and scale factors, from an inertial core with GNSS, barometric, magnetic and
 //! odometric aiding.
 //!
@@ -44,7 +44,7 @@
 //!
 //! - [`mechanization`] — the strapdown INS integration.
 //! - [`measurement`] — auxiliary sensor models (ZUPT, NHC, odometer, …).
-//! - [`eskf`] — transition matrix, predict and the factored update.
+//! - [`eskf`] — transition matrix, predict, and the factored update.
 //! - [`engine`] — the orchestration, including GNSS epoch alignment.
 //! - [`rewind`] — applying a GNSS fix that arrived after its epoch.
 //! - [`state`] — the error-state index map.

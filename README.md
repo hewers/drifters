@@ -5,7 +5,7 @@ position, velocity, attitude — along with the sensor errors that corrupt it.
 Rust `no_std` and allocation-free, from a microcontroller on up.
 
 *Aided* because the IMU drives the propagation with corrections from GNSS,
-barometric, magnetic and odometric. *Extended* pose because velocity is a state
+barometric, magnetic, and odometric. *Extended* pose because velocity is a state
 and not a by-product.
 
 Two estimators share one interface:
@@ -42,7 +42,7 @@ under QEMU.
 Accuracy is an open-loop check: the filter's predicted antenna position at each
 fix's epoch, before the fix is applied, so between fixes it runs on inertial
 dead reckoning alone. Against KF-GINS's own reference solution the same run
-agrees to 1.2 cm, 0.003 m/s and 0.018° of heading. Method, tolerances and what
+agrees to 1.2 cm, 0.003 m/s, and 0.018° of heading. Method, tolerances, and what
 that reference is and is not independent of are in
 [docs/testing.md](docs/testing.md#layer-6--golden-dataset-regression).
 
@@ -105,7 +105,7 @@ it. No Earth compensation is applied; this is the paper's filter as written.
 
 Horizontal RMS against survey-grade truth, in metres. The process-noise scale
 was fitted on **trace A only** and applied unchanged to three held-out traces
-from the same phone, so B, C and D are out-of-sample. Bold marks the rows that
+from the same phone, so B, C, and D are out-of-sample. Bold marks the rows that
 beat doing nothing.
 
 | | A *(fitted)* | B | C | D |
@@ -223,7 +223,7 @@ hard and soft iron calibration), IMU-to-vehicle mounting estimation, initial
 alignment, protobuf serialization, bare-metal Cortex-M, KF-GINS dataset regression.
 
 The equivariant filter runs end to end on both datasets: symmetry group, lift,
-linearisation, group exponential, GCU and the propagate/update loop, with every
+linearisation, group exponential, GCU, and the propagate/update loop, with every
 Jacobian checked against a numerical one. `EqfEngine` is driven exactly as the
 ESKF's engine is: sans-IO, validated configuration, the IMU sample split at the GNSS
 epoch, gated updates. Both engines implement
@@ -271,10 +271,10 @@ drifters-eqf       no_std, no alloc — equivariant filter, Lie groups,
                    self-calibration, EqfEngine
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
 drifters-gnss      std — robust positioning, carrier phase, RINEX, trajectory fit
-drifters-cli       std — replay, estimator comparison, NEES and tuning
+drifters-cli       std — replay, estimator comparison, NEES, and tuning
 examples/rtic-imu  firmware — IMU interrupt to engine to telemetry under RTIC,
                    run on QEMU's STM32F405 in CI
-cortex-m-harness   firmware — stack, size and panic measurements under QEMU
+cortex-m-harness   firmware — stack, size, and panic measurements under QEMU
 cortex-m-hil       firmware — DWT cycle counts and a live IMU on a NUCLEO-H743ZI2
 ```
 
@@ -425,7 +425,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   subtracting two nearly-equal matrices. Positive-definiteness is a property of
   the representation rather than something to test for and repair. Held states
   stay in the factors too, by one rank-one update per measurement row.
-- **Sans-IO.** The engine never allocates, blocks, reads a clock or touches a
+- **Sans-IO.** The engine never allocates, blocks, reads a clock, or touches a
   file. That is what lets the same code run inside an interrupt handler.
 - **NED navigation frame, FRD body frame** — the navigation-literature
   convention, not ROS's ENU/FLU. Conversion belongs at the boundary; reasoning
@@ -435,7 +435,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
   because it is stored factored the answer differs: `--features f32-covariance`
   halves it to 924 bytes and puts its arithmetic on the Cortex-M4F's
   single-precision FPU instead of in soft-float — 78 % of the instructions
-  an IMU sample costs there — with KF-GINS, GSDC and NEES all unchanged. See
+  an IMU sample costs there — with KF-GINS, GSDC, and NEES all unchanged. See
   [docs/adr/0005](docs/adr/0005-scalar-type.md).
 
 ## Minimum supported Rust
@@ -461,7 +461,7 @@ help.
 - [datasets.md](docs/datasets.md) — every external dataset and paper, and how to fetch it
 - [milestones.md](docs/milestones.md) — what works, what CI checks, and what is open
 - [adr/](docs/adr/) — decisions and why
-- [papers/](docs/papers/) — the source papers: citations, DOIs and how to fetch them
+- [papers/](docs/papers/) — the source papers: citations, DOIs, and how to fetch them
 
 Three worth reading if you are evaluating this seriously:
 [why an accelerometer bias and a tilt are the same measurement to a stationary

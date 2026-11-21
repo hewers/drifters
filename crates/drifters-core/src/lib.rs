@@ -24,8 +24,8 @@
 //!
 //! # Layout
 //!
-//! - [`math`] — fixed-size matrices, 3-vectors and unit quaternions.
-//! - [`earth`] — WGS-84 ellipsoid, normal gravity and earth-rotation terms.
+//! - [`math`] — fixed-size matrices, 3-vectors, and unit quaternions.
+//! - [`earth`] — WGS-84 ellipsoid, normal gravity, and earth-rotation terms.
 //! - [`frames`] — geodetic/ECEF/local-level conversions and frame conventions.
 //! - [`time`] — GPS time of week arithmetic.
 //! - [`types`] — sensor samples and navigation state shared by every crate.
@@ -65,7 +65,7 @@ pub mod rewind;
 pub mod time;
 pub mod types;
 
-/// The scalar type used by every state, measurement and matrix in the stack.
+/// The scalar type used by every state, measurement, and matrix in the stack.
 ///
 /// This is deliberately a single alias rather than a generic parameter. A
 /// geodetic latitude carries roughly 1e-9 rad of meaningful resolution (~6 mm),

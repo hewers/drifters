@@ -79,7 +79,7 @@ Term by term:
 - **`C_nb·diag(f^b)·δs_a`** — scale-factor error, proportional to the sensed
   specific force. Only observable under acceleration.
 
-`F_vr` collects the derivatives of gravity, Coriolis and transport with respect
+`F_vr` collects the derivatives of gravity, Coriolis, and transport with respect
 to position:
 
 ```

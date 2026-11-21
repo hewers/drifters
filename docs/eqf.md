@@ -78,7 +78,7 @@ deterministic system is defined as follows"*, giving (1):
 
 `drifters`' ESKF is a full Earth-referenced INS: geodetic position on WGS-84,
 Earth rotation `ω_ie`, transport rate `ω_en`, latitude- and height-dependent
-normal gravity, meridian and transverse radii of curvature.
+normal gravity, meridian, and transverse radii of curvature.
 
 **Decision: implement the paper's model as written.** Adding Earth terms would
 break the group-affine structure that the entire equivariance argument rests on
@@ -405,7 +405,7 @@ factor of ten is reporting a modelling error, not noise.
 ## Measured: the EqF on the KF-GINS dataset
 
 57 minutes of real driving, a tactical-grade Leador-A15 at 200 Hz, 3 363 RTK
-fixes. Same inputs, same loop and same scoring as the ESKF's own regression —
+fixes. Same inputs, same loop, and same scoring as the ESKF's own regression —
 the open-loop antenna residual *before* each fix is applied, at the fix's own
 epoch — so the two are directly comparable. Run it with
 `drifters replay --engine eqf --config <kf-gins.yaml>`, or `drifters eqf` for
@@ -496,7 +496,7 @@ estimated  [+0.163, -0.305, -0.250] m
 configured [+0.136, -0.301, -0.184] m
 ```
 
-4 mm across the vehicle, 2.7 cm along it and 6.6 cm vertically.
+4 mm across the vehicle, 2.7 cm along it, and 6.6 cm vertically.
 
 **That start hands the filter the configured arm.** The replay gives it the
 configured initial position of the IMU, to 5 mm, and the first fixes place the
@@ -546,7 +546,7 @@ Uncompensated, the gap to the ESKF is a factor of seventy-four and it is an
 **Earth model**, not an estimator. Compensated, the EqF's residual is 28 %
 above the ESKF's, 1.6 cm against 1.3, and that difference is not one this
 dataset resolves into a cause: the EqF also has a flat tangent plane, constant
-gravity, no scale-factor states and an estimated lever arm, where the ESKF is
+gravity, no scale-factor states, and an estimated lever arm, where the ESKF is
 simply given one — one 2.6 cm short.
 
 The appropriate venue for comparing estimators is consumer-grade hardware,
@@ -662,7 +662,7 @@ it assumes, and the verdicts here are from the second.
 
 The harness builds its prior with `physical::covariance_from_std`, the map the engine
 uses. The exact map, `physical::jacobian_inverse`, which a numerical Jacobian checks,
-has `−Ad_B̂`, `−Â` and `Ê` on the bias, lever-arm and magnetometer blocks. The first
+has `−Ad_B̂`, `−Â`, and `Ê` on the bias, lever-arm, and magnetometer blocks. The first
 is not close to `−I` here. `Ad_B̂ = [[R̂, 0], [v̂^R̂, R̂]]`, and at the 8 m/s this truth
 moves at, `v̂^ δb_ω` is as large as the accelerometer-bias sigma. With `−I` in its
 place, over 200 runs, the overall reads 21.718 and the accelerometer-bias block
@@ -897,7 +897,7 @@ from it:
 | rate the lift turns by | `ω_m − b_ω` | `ω_m − b_ω − R̂ᵀω` |
 | lift's velocity input | `a_m − b_a + R̂ᵀg` | `a_m − b_a + R̂ᵀ(g − ω × v')` |
 | lift's position input | `R̂ᵀv` | `R̂ᵀ(v' − ω × p)` |
-| `A_t⁰`, attitude, velocity and position diagonals | 0 | `−ω^` |
+| `A_t⁰`, attitude, velocity, and position diagonals | 0 | `−ω^` |
 | `A_t⁰`, the lever arm's and magnetometer's diagonals | `(Âω_m + γ̂_ω)^` | `(Âω_m + γ̂_ω − ω)^` |
 | GNSS velocity fix `y_v` | as measured | `y_v + ω × y_p`, noise `R_v + ω^ R_p ω^ᵀ` |
 | velocity reported | `v` | `v' − ω × p` |
@@ -980,7 +980,7 @@ does, so that the two are driven identically. What it adds, and what it
 deliberately does not.
 
 **The prior is in physical units.** `EqfOptions` takes one-sigma position,
-velocity, attitude, bias, lever-arm and calibration uncertainties, as
+velocity, attitude, bias, lever-arm, and calibration uncertainties, as
 `GinsOptions` does, and `physical::covariance_from_std` builds the `Σ` they
 describe. That is not `diag(σ²)`, for the reason
 [the consistency section](#the-prior-belongs-in-the-filters-coordinates) gives, and
@@ -1023,7 +1023,7 @@ counted, as `GinsEngine` refuses one.
 
 **A late fix goes through `EqfRewindEngine`.** It is the ESKF's rewind
 machinery, which lives in `drifters_core::rewind` and wraps either engine:
-two snapshots, a ring of samples and magnetometer readings, and a replay from
+two snapshots, a ring of samples, and magnetometer readings, and a replay from
 the snapshot before the fix's epoch. Its tests run a stream with Earth
 compensation on — so the input itself depends on the estimate, and a replay
 from the wrong snapshot would read different rates — with magnetometer
@@ -1072,7 +1072,7 @@ handed, which makes it exactly the paper's GCU update. See
 |---|---|
 | factored `f64`, a minute of closed loop | 6 × 10⁻¹² m; every covariance element within 3 × 10⁻¹² of its scale |
 | factored `f32`, the same | 8 µm, against the filter's own 13 mm from the truth; within 1.1 × 10⁻⁴ |
-| factored `f32`, KF-GINS, 57 minutes | 0.029 mm, 0.007 mm/s and 0.2″ at worst; 0.0163 m RMS and NIS 1.554 for both |
+| factored `f32`, KF-GINS, 57 minutes | 0.029 mm, 0.007 mm/s, and 0.2″ at worst; 0.0163 m RMS and NIS 1.554 for both |
 | factored `f32`, GSDC, four traces at two tunings | equal to the third decimal in every column |
 | factored `f32`, `drifters nees --factored`, 200 runs | **20.825**, against 20.824; every block within 0.001 |
 
@@ -1123,7 +1123,7 @@ footprint and measured firmware budget are untouched.
   Jacobian's small-angle branch is wide on purpose. The direct forms lose about
   `log₁₀(1/θ²)` significant digits, four at `θ = 10⁻⁶`, so the threshold is
   `θ < 10⁻²`: a 200 Hz IMU turning at 1 rad/s gives `θ = 5 × 10⁻³` every sample.
-- **Symmetry group, state and actions, `group.rs`.** The composite `G`, its product,
+- **Symmetry group, state, and actions, `group.rs`.** The composite `G`, its product,
   inverse and `21 × 21` Adjoint, `φ` and `ρ_*`, and the three output maps. The Adjoint
   is checked against a numerical conjugation of `X exp(su) X⁻¹`, all 21 columns, which
   is what makes it usable as ground truth for the linearisation.

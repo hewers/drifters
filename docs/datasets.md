@@ -188,8 +188,8 @@ Area, and `SLAC` (Stanford, 37.4165 N, −122.2042 W) is 11–31 km from them.
 mkdir -p datasets/cors && cd datasets/cors && for d in 139 143 145 249; do curl -fLO "https://geodesy.noaa.gov/corsdata/rinex/2023/$d/slac/slac${d}0.23o.gz"; done && gunzip -f *.gz
 ```
 
-The day-of-year in the filename must match the trace: 139, 143 and 145 are
-2023-05-19, 05-23 and 05-25; 249 is 2023-09-06. The replay reads uncompressed
+The day-of-year in the filename must match the trace: 139, 143, and 145 are
+2023-05-19, 05-23, and 05-25; 249 is 2023-09-06. The replay reads uncompressed
 files, hence the `gunzip` — the CLI has no external dependencies and adding a
 compression crate to save one command is a poor trade.
 

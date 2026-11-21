@@ -4,7 +4,7 @@
 
 ## Context
 
-Both engines start from a position, velocity and attitude the caller supplies,
+Both engines start from a position, velocity, and attitude the caller supplies,
 with sigmas the caller also supplies. A real deployment has none of these at
 power-on. It has an IMU and, usually, a receiver.
 
@@ -41,7 +41,7 @@ each case.
 course over ground.** Course is the direction of travel, which is the vehicle's
 heading only if it moves along its body axis and the sensor is mounted square.
 The fit compares a strapdown track, integrated in the body frame at rest, with
-the GNSS velocities or displacements. Reversing, sideslip and a sensor at any
+the GNSS velocities or displacements. Reversing, sideslip, and a sensor at any
 yaw all work.
 
 **The receiver's sigmas are checked against the fit.** The fit has more equations

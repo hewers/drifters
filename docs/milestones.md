@@ -19,11 +19,11 @@ What the library does, what checks it, and what is open. The reasoning is in
 | Smoothing | Rauch–Tung–Striebel backward pass into a caller's slice; the `smoothing` feature adds the engine's recorder | `drifters_filter::smoother` |
 | Equivariant filter | `SE₂(3)` filter with lever-arm and magnetometer self-calibration, GCU, dense or factored covariance, Earth compensation, or the Earth's rotation in the group with an optional horizontal gravity gradient | `drifters-eqf` |
 | Common interface | `Estimator`, the epoch placement rule, gates and errors shared by both engines; one contract test runs against each | `drifters_core::estimator` |
-| Initial alignment | levelling, biases at rest, gyrocompass or heading from motion, with a sigma for each output | `drifters_core::align` |
+| Initial alignment | levelling, biases at rest, gyrocompass, or heading from motion, with a sigma for each output | `drifters_core::align` |
 | Serialization | protobuf schemas and validated conversions, no allocator, generated code checked in | `drifters-proto` |
 | GNSS processing | robust pseudorange positioning, time-differenced carrier phase, RINEX, reference-station corrections, a banded trajectory fit | `drifters-gnss` (`std`) |
 | Tools | `replay`, `plot`, `eqf`, `gsdc`, `tune`, `comma` and `nees` commands | `drifters-cli` |
-| Firmware | stack, size, instruction and panic measurements under QEMU; an RTIC example; hardware-in-the-loop firmware | `cortex-m-harness`, `examples/rtic-imu`, `cortex-m-hil` |
+| Firmware | stack, size, instruction, and panic measurements under QEMU; an RTIC example; hardware-in-the-loop firmware | `cortex-m-harness`, `examples/rtic-imu`, `cortex-m-hil` |
 
 ## What CI checks
 
@@ -36,11 +36,11 @@ What the library does, what checks it, and what is open. The reasoning is in
 | `msrv` | Rust 1.85 for `drifters-core`, `-filter`, `-eqf`, `-gnss` and `-interop`, and 1.88 for the workspace |
 | `docs` | rustdoc with `-D warnings` |
 | `proto` | the checked-in bindings match the `.proto` sources |
-| `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), the [lever-arm test](testing.md#what-the-recording-says-about-its-lever-arm) and the alignment test, with a missing dataset failing the job |
+| `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), the [lever-arm test](testing.md#what-the-recording-says-about-its-lever-arm), and the alignment test, with a missing dataset failing the job |
 | `licences` | every package's copy of `UNLICENSE` matches the root |
 | `fuzz` | the decode target, and the engine target in three filter configurations, 60 s each |
 | `interop` | the permissive `nav-types` adapter |
-| `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit and agreement between builds |
+| `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit, and agreement between builds |
 | `hil_firmware` | the hardware-in-the-loop firmware builds for its board and runs under QEMU with a simulated sensor |
 | `rtic_example` | the RTIC example runs under QEMU and meets its own accuracy and no-drop checks |
 | `nightly_simd` | the `core::simd` path, allowed to fail |
@@ -67,7 +67,7 @@ hand on a self-hosted runner, and it has not been run.
 ### Needs a board
 
 Nothing here has run on silicon or on a physical IMU. Every result in this
-repository is a dataset replay, a simulation or an emulation.
+repository is a dataset replay, a simulation, or an emulation.
 [`cortex-m-hil`](../cortex-m-hil/README.md) is the firmware for the cycle counts and
 for a run on a physical IMU. It is checked under QEMU.
 
@@ -80,8 +80,8 @@ for a run on a physical IMU. It is checked under QEMU.
 - Power per filter step.
 - A run on a physical IMU.
 
-QEMU models no pipeline, cache, flash wait states or FPU latency, so a time taken
-from it means nothing. Stack, code size and instructions retired are exact under
+QEMU models no pipeline, cache, flash wait states, or FPU latency, so a time taken
+from it means nothing. Stack, code size, and instructions retired are exact under
 emulation. This repository claims nothing about time until these items run.
 
 ### Estimators
@@ -113,7 +113,7 @@ emulation. This repository claims nothing about time until these items run.
   and it has not been separated.
 - **Why the EqF's heading is closer to that reference than the ESKF's,** 0.011°
   against 0.018°.
-- **Fuzzing beyond the engines.** The aligner, the smoother and the CLI's parsers are
+- **Fuzzing beyond the engines.** The aligner, the smoother, and the CLI's parsers are
   not fuzzed.
 
 ### Precision
@@ -144,16 +144,16 @@ its datasets, and none is started.
 - **Model the GNSS error as time-correlated.** comma2k19's u-blox error is
   mostly a slowly varying offset. Bryson and Henrikson's measurement
   differencing (1968) handles that with no new states, which suits a fixed-size
-  filter; Petovello et al. (2009) and Wang, Li and Rizos (2012) give practical
+  filter; Petovello et al. (2009) and Wang, Li, and Rizos (2012) give practical
   variants. Lands in the GNSS update. Expect honest covariances and a more
   useful smoother rather than better accuracy, since the offset itself is
   unobservable.
 - **Invariant error definitions in the ESKF** (Barrau and Bonnabel, 2017, 2018;
-  Scherzinger and Reid, 1994; Sun, Chen and Cui, 2024). Better convergence from
+  Scherzinger and Reid, 1994; Sun, Chen, and Cui, 2024). Better convergence from
   large heading errors, at the cost of touching `F`, `G`, every Jacobian, the
   feedback, `error_between` and the smoother. The most expensive item here.
 - **Attitude covariance reset after large corrections** (NASA/TP-2018-219822
-  §9.9.2; Reynolds, 2008; Mueller, Hehn and D'Andrea, 2017). Only above some
+  §9.9.2; Reynolds, 2008; Mueller, Hehn, and D'Andrea, 2017). Only above some
   `|δθ|`, which keeps it off the per-sample path.
 - **Underweight measurements while the state is uncertain** (Zanetti, DeMars and
   Bishop, 2010). At 28 m/s a 10° heading error puts 0.43 m/s of second-order error
@@ -168,7 +168,7 @@ its datasets, and none is started.
   Huang et al., 2018; Duran-Martin et al., 2024). These adapt to the innovations,
   which is a risk wherever a large innovation means drift rather than a bad
   measurement.
-- **Tuning tools** for `drifters tune` (Chen, Heckman, Julier and Ahmed, 2018;
+- **Tuning tools** for `drifters tune` (Chen, Heckman, Julier, and Ahmed, 2018;
   Guerrier et al., 2013), given that
   [the fitted tuning did not transfer on GSDC](gsdc.md#held-out-the-fitted-tuning-does-not-transfer).
 - **The equivariant filter's tangent-group symmetry** (Fornasier et al.,
@@ -178,49 +178,49 @@ Sources:
 
 - J. R. Carpenter and C. N. D'Souza (eds.), *Navigation Filter Best Practices*,
   NASA/TP-2018-219822, 2nd ed. (2025) — <https://ntrs.nasa.gov/citations/20250002787>
-- X. Niu, S. Nassar and N. El-Sheimy, "An Accurate Land-Vehicle MEMS IMU/GPS
+- X. Niu, S. Nassar, and N. El-Sheimy, "An Accurate Land-Vehicle MEMS IMU/GPS
   Navigation System Using 3D Auxiliary Velocity Updates", *NAVIGATION* 54(3), 2007
-- P. Chauchat, S. Bonnabel and A. Barrau, "Invariant filtering for wheeled vehicle
+- P. Chauchat, S. Bonnabel, and A. Barrau, "Invariant filtering for wheeled vehicle
   localization with unknown wheel radius and unknown GNSS lever arm", CDC 2024 —
   <https://arxiv.org/abs/2409.07050>
 - A. E. Bryson and L. J. Henrikson, "Estimation using sampled data containing
   sequentially correlated noise", *J. Spacecraft and Rockets* 5(6), 1968
-- M. G. Petovello, K. O'Keefe, G. Lachapelle and M. E. Cannon, "Consideration of
+- M. G. Petovello, K. O'Keefe, G. Lachapelle, and M. E. Cannon, "Consideration of
   time-correlated errors in a Kalman filter applicable to GNSS", *J. Geodesy* 83(1),
   2009 — <https://doi.org/10.1007/s00190-008-0231-z>
-- K. Wang, Y. Li and C. Rizos, "Practical approaches to Kalman filtering with
+- K. Wang, Y. Li, and C. Rizos, "Practical approaches to Kalman filtering with
   time-correlated measurement errors", *IEEE TAES* 48(2), 2012
 - A. Barrau and S. Bonnabel, "The Invariant Extended Kalman Filter as a Stable
   Observer", *IEEE TAC* 62(4), 2017 — <https://arxiv.org/abs/1410.1465>; and "Invariant
   Kalman Filtering", *Annu. Rev. Control Robot. Auton. Syst.* 1, 2018
 - B. M. Scherzinger and D. B. Reid, "Modified strapdown inertial navigator error
   models", PLANS 1994 — <https://doi.org/10.1109/PLANS.1994.303345>
-- J. Sun, Y. Chen and B. Cui, "An Improved Initial Alignment Method Based on
+- J. Sun, Y. Chen, and B. Cui, "An Improved Initial Alignment Method Based on
   SE2(3)/EKF for SINS/GNSS Integrated Navigation System with Large Misalignment
   Angles", *Sensors* 24(9), 2024 — <https://doi.org/10.3390/s24092945>
 - R. G. Reynolds, "Asymptotically optimal attitude filtering with guaranteed
-  convergence", *JGCD* 31(1), 2008; M. W. Mueller, M. Hehn and R. D'Andrea, "Covariance
+  convergence", *JGCD* 31(1), 2008; M. W. Mueller, M. Hehn, and R. D'Andrea, "Covariance
   Correction Step for Kalman Filtering with an Attitude", *JGCD*, 2017
-- R. Zanetti, K. J. DeMars and R. H. Bishop, "Underweighting Nonlinear Measurements",
+- R. Zanetti, K. J. DeMars, and R. H. Bishop, "Underweighting Nonlinear Measurements",
   *JGCD* 33(5), 2010 — <https://doi.org/10.2514/1.50596>
-- M. S. Chae, J. U. Kwon, E. Y. Cho and S. Y. Cho, "INS/GNSS/NHC Integrated Navigation
+- M. S. Chae, J. U. Kwon, E. Y. Cho, and S. Y. Cho, "INS/GNSS/NHC Integrated Navigation
   System Compensating for Lever Arm Effect between NHC Effective Point and IMU Mounting
   Location", *JPNT* 11(3), 2022 — <https://doi.org/10.11003/JPNT.2022.11.3.199>
-- I. Skog, P. Händel, J.-O. Nilsson and J. Rantakokko, "Zero-Velocity Detection—An
-  Algorithm Evaluation", *IEEE TBME* 57(11), 2010; A. Ramanandan, A. Chen and J. A.
+- I. Skog, P. Händel, J.-O. Nilsson, and J. Rantakokko, "Zero-Velocity Detection—An
+  Algorithm Evaluation", *IEEE TBME* 57(11), 2010; A. Ramanandan, A. Chen, and J. A.
   Farrell, "Inertial Navigation Aiding by Stationary Updates", *IEEE TITS* 13(1), 2012;
   J. Wahlström and I. Skog, "Fifteen Years of Progress at Zero Velocity: A Review",
   *IEEE Sensors J.* 21(2), 2021
 - A. H. Mohamed and K. P. Schwarz, "Adaptive Kalman filtering for INS/GPS", *J. Geodesy*
-  73, 1999; Y. Huang, Y. Zhang, Z. Wu, N. Li and J. Chambers, "A Novel Adaptive Kalman
+  73, 1999; Y. Huang, Y. Zhang, Z. Wu, N. Li, and J. Chambers, "A Novel Adaptive Kalman
   Filter With Inaccurate Process and Measurement Noise Covariance Matrices", *IEEE TAC*
   63(2), 2018; G. Duran-Martin et al., "Outlier-robust Kalman Filtering through
   Generalised Bayes", ICML 2024 — <https://arxiv.org/abs/2405.05646>
-- Z. Chen, C. Heckman, S. Julier and N. Ahmed, "Weak in the NEES?: Auto-tuning Kalman
+- Z. Chen, C. Heckman, S. Julier, and N. Ahmed, "Weak in the NEES?: Auto-tuning Kalman
   Filters with Bayesian Optimization", FUSION 2018 — <https://arxiv.org/abs/1807.08855>;
-  S. Guerrier, J. Skaloud, Y. Stebler and M.-P. Victoria-Feser, "Wavelet-Variance-Based
+  S. Guerrier, J. Skaloud, Y. Stebler, and M.-P. Victoria-Feser, "Wavelet-Variance-Based
   Estimation for Composite Stochastic Processes", *JASA* 108(503), 2013
-- A. Fornasier, Y. Ge, P. van Goor, R. Mahony and S. Weiss, "Equivariant Symmetries for
+- A. Fornasier, Y. Ge, P. van Goor, R. Mahony, and S. Weiss, "Equivariant Symmetries for
   Inertial Navigation Systems" — <https://arxiv.org/abs/2309.03765>
 
 ### Release

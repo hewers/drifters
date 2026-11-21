@@ -5,7 +5,7 @@ before a navigation filter sees them, and what to do with a whole trace
 afterwards.
 
 - [`wls`] — robust weighted least-squares position from raw pseudoranges, with
-  elevation weighting, Huber re-weighting and a clock state per constellation.
+  elevation weighting, Huber re-weighting, and a clock state per constellation.
 - [`tdcp`] — time-differenced carrier phase: how far the receiver moved between
   two epochs, to about a centimetre, including the cycle-slip detection the
   receiver's own flags do not provide.

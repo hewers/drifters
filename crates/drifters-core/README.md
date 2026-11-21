@@ -6,7 +6,7 @@ Part of [**drifters**](https://github.com/hewers/drifters), a `no_std` aided
 inertial navigation library.
 
 Fixed-size stack-allocated matrices with Cholesky, Hamilton quaternions, the
-WGS-84 earth model, geodetic/ECEF/NED and local Cartesian frames, GPS time as an
+WGS-84 earth model, geodetic/ECEF/NED, and local Cartesian frames, GPS time as an
 integer nanosecond count, and the sensor and state types the rest of the stack
 shares. Also the `Estimator` trait the two engines implement, with the pieces
 of driving a GNSS/INS filter that are common to both: where a fix

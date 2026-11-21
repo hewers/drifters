@@ -20,7 +20,7 @@
 //!
 //! The paper assumes a **flat, non-rotating Earth** with a constant gravity
 //! vector in a global Cartesian frame. The ESKF is a full Earth-referenced INS
-//! with geodetic position, Earth rotation, transport rate and normal gravity.
+//! with geodetic position, Earth rotation, transport rate, and normal gravity.
 //! The paper's model is what runs by default, and comparisons must account for
 //! the difference.
 //!

@@ -78,7 +78,7 @@ Simulated inputs whose exact answer is known analytically. In
   inputs must leave the quadratic part unchanged.
 
 Closed-form tests are the highest-value ones in the suite: they catch sign
-errors, frame confusions and missing terms that no amount of round-tripping
+errors, frame confusions, and missing terms that no amount of round-tripping
 would notice.
 
 ## Layer 4 — filter invariants
@@ -222,7 +222,7 @@ Measured on the demo dataset:
 Tolerances are ~3x the observed values: loose enough that ordinary numerical
 drift across platforms does not fail CI, tight enough that a real regression
 does. The **bias** bound is much tighter than the RMS bound on purpose — a
-systematic offset is what a lever-arm sign error, a frame mix-up or a geodetic
+systematic offset is what a lever-arm sign error, a frame mix-up, or a geodetic
 conversion bug produces, and none of those should be within tolerance.
 
 ### What this does not prove
@@ -277,7 +277,7 @@ Its heading error is 40 % smaller than the ESKF's. The cause has not been
 looked for.
 
 NEES is the error against the reference in the filter's own covariance, over
-position, velocity and attitude, and an exact truth would read 9. Both read
+position, velocity, and attitude, and an exact truth would read 9. Both read
 above it, and the blocks say where. The ESKF's excess is attitude, 12.8 against
 3: its heading differs from the reference by 0.018° RMS where it claims
 0.006°. Nothing states the reference's own accuracy, so whether that is the
@@ -522,7 +522,7 @@ by operation, in bytes, the same with the Earth's rotation in the group:
 A single operation's figure moves with how the optimiser inlines under whole-program
 LTO, which is why CI holds the peak to a ceiling and not this table.
 
-Each of propagation, the Joseph update and the reset's covariance transport runs
+Each of propagation, the Joseph update, and the reset's covariance transport runs
 in two buffers, with `Σ` itself the destination of the last product, and
 `G Q Gᵀ` is accumulated straight into `Σ` as a sum over its eighteen noise
 channels without `G Q` or the product ever being formed. The three are separate
@@ -544,7 +544,7 @@ observer state and all 441 covariance elements with `assert_eq!` at every step.
 | instructions retired | exact under `-icount shift=0`, once calibrated — see below |
 | **cycle counts, wall-clock timing** | **worthless** |
 
-QEMU models no pipeline, no cache, no flash wait states and no FPU latency. The
+QEMU models no pipeline, no cache, no flash wait states, and no FPU latency. The
 harness therefore reports stack and size and takes **no** timing measurement,
 rather than publishing a number that cannot be supported.
 
@@ -578,7 +578,7 @@ INSTRUCTIONS_ALIGN_WORST add_gnss = 58960 (1474 ticks; only under -icount shift=
 
 Without the flag these lines are emulator wall-clock and mean nothing.
 
-It cannot see pipeline stalls, flash wait states or FPU latency, so it is not a
+It cannot see pipeline stalls, flash wait states, or FPU latency, so it is not a
 cycle count. What it measures exactly is how much *work* a change removes — and
 on a part whose FPU is single-precision, that is the whole soft-float question,
 since an `__aeabi_dmul` is tens of instructions where a `vmul.f32` is one.
@@ -607,7 +607,7 @@ the dense form and 2.4 % to the factored one.
 #### The count is a floor on time
 
 Timing needs a board. But a Cortex-M4 retires about one instruction per cycle at
-best — loads, taken branches and divides take more — so instructions retired are
+best — loads, taken branches, and divides take more — so instructions retired are
 a lower bound on cycles, and a lower bound can rule a configuration out even
 though it cannot rule one in. At 168 MHz, which is as fast as the common M4 parts
 run:
@@ -755,10 +755,10 @@ carry over. A Cortex-M7 can issue two instructions in a cycle, so the most a cou
 supports is half a cycle per instruction: 0.11 ms for the ESKF at 400 MHz, 0.35 ms
 for the dense filter and 0.42 ms for the factored one. All are far inside a 200 Hz
 IMU's 5 ms, so the floor rules nothing out, and it rules nothing in, since FPU
-latency, cache misses and flash wait states all push the other way.
+latency, cache misses, and flash wait states all push the other way.
 
 **Check the part.** Many Cortex-M7s have a single-precision FPU, among them the
-STM32F72x, F73x, F74x and F75x; the STM32F76x, F77x and H7, the i.MX RT1050 and
+STM32F72x, F73x, F74x, and F75x; the STM32F76x, F77x, and H7, the i.MX RT1050 and
 RT1060 and the SAME70 have double precision. On a single-precision part this
 build faults at its first `f64` instruction, so the harness reads the core's
 feature register and refuses to start, and such a part belongs with the
@@ -775,7 +775,7 @@ start. It runs the ESKF and the equivariant filter in both covariance forms, and
 Cortex-M7, 21 and 15 states, covariance in `f64` and in `f32`.
 
 Each build first has to pass by itself: every filter healthy, no step or fix
-refused, and the final errors inside 0.15 m, 0.05 m/s, 1 mrad of tilt and 30 mrad
+refused, and the final errors inside 0.15 m, 0.05 m/s, 1 mrad of tilt, and 30 mrad
 of heading. It prints its final state in the shortest decimal that round-trips,
 so the report holds the exact bits, and `cargo xtask agreement` compares the
 eight reports:
@@ -822,8 +822,8 @@ What is verified is the firmware's logic, on QEMU's Cortex-M7, in CI: it builds
 for the board, it runs each estimator, it refuses a core without a
 double-precision FPU, and it drives a register-level model of the sensor that
 gives no data unless configured as the driver should configure it. Seven
-deliberate faults in the driver, alignment and statistics were each caught when
-this was written. The clock tree, I²C, RTT and the DWT path remain unproven until
+deliberate faults in the driver, alignment, and statistics were each caught when
+this was written. The clock tree, I²C, RTT, and the DWT path remain unproven until
 the first run on a board.
 
 ### Why this layer exists
@@ -875,7 +875,7 @@ needs silicon.
 
 The [`Aligner`](../crates/drifters-core/src/align.rs) runs before an engine
 exists, so its stack and the engine's do not add up. The harness aligns three
-times, from GNSS velocity, from positions alone and by gyrocompass, feeding a
+times, from GNSS velocity, from positions alone, and by gyrocompass, feeding a
 simulated vehicle one call at a time with the simulator outside the measured
 region. Each run must also reach the right answer: attitude within 0.5°,
 position within 0.5 m, velocity within 0.2 m/s, and the expected heading source.
@@ -956,14 +956,14 @@ one links them all.
 
 This covers the steady-state data path of both estimators. For the ESKF:
 `add_imu`; the seven aiding calls, ZUPT, zero rate, non-holonomic, wheel speed,
-height, heading and magnetometer; both magnetometer calibration fits; and a late fix
+height, heading, and magnetometer; both magnetometer calibration fits; and a late fix
 through `RewindEngine::add_gnss`, the rewind and the replay included. For the equivariant filter's engine: `add_imu` with a fix
 inside the interval that carries a velocity, so the split, both updates and
 both gates; `apply_magnetometer`; `pva_std`, which maps the covariance into
 physical units; and a late fix with a velocity through `EqfRewindEngine`,
 which is the shared rewind machinery monomorphised a second time. The same
 calls are made again on the factored single-precision engine and its rewind
-layer, whose Bierman, Thornton and whitening code is data path on the part it
+layer, whose Bierman, Thornton, and whitening code is data path on the part it
 is for. The aligner is covered as well: `add_imu`, `add_gnss`, `status`, `reset`
 and both engines' `with_alignment`. It does not link `apply_pseudoranges` or the
 smoother, and so says nothing about them.
@@ -1317,7 +1317,7 @@ After **every** call, whatever it was given:
 | property | what is checked |
 |---|---|
 | no panic | the call returned |
-| finite output | navigation state, IMU errors, antenna position, standard deviations, covariance and last NIS |
+| finite output | navigation state, IMU errors, antenna position, standard deviations, covariance, and last NIS |
 | non-negative `D` | every covariance factor is finite and every `D` is at least zero; the dense form has no `D`, and round-off may leave a variance a hair below zero, so it is held to being finite |
 | rejection, not absorption | input that is invalid was reported, and the engine is bit for bit what it was apart from the counter that records the drop — an invalid IMU sample bumps `invalid_imu_count` and nothing else, and the count is compared with the number pushed after every call, so that a late fix applied by rewinding cannot take it back |
 
@@ -1423,7 +1423,7 @@ and reaches less than this.
   [Layer 10](#layer-10--the-data-path-links-no-panic-machinery), and Layer 10 is
   what caught an indexing slip in the new limit checks that no script could have
   reached.
-- The aligner, the smoother or the CLI's parsers. None of them is driven here.
+- The aligner, the smoother, or the CLI's parsers. None of them is driven here.
 - Long-horizon behaviour. A script is at most 256 calls, enough to wrap the rewind
   rings and reach the rejection limit, and nowhere near a drive.
 
@@ -1463,7 +1463,7 @@ and the estimator reads it back.
 
 ### What this does not show
 
-- A real vehicle. The simulation has no tyre slip, no suspension movement and no
+- A real vehicle. The simulation has no tyre slip, no suspension movement, and no
   lever arm between the sensor and the rear axle, each of which puts real side
   velocity into a turn or a bump. The estimator's turn-rate gate is there for them,
   and has not been tested against them.

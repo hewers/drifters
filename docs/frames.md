@@ -1,4 +1,4 @@
-# Frames, units and sign conventions
+# Frames, units, and sign conventions
 
 Every ambiguity in a navigation filter eventually becomes a sign error. This
 file is the single source of truth; if code and this document disagree, one of

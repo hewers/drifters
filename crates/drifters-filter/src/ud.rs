@@ -202,7 +202,7 @@ impl Ud {
         ud.is_usable().then_some(ud)
     }
 
-    /// Multiply the factors out. For tests, reporting and the measurement
+    /// Multiply the factors out. For tests, reporting, and the measurement
     /// models that still want a dense `P`.
     pub fn to_covariance(&self) -> StateMatrix {
         let mut p = StateMatrix::zeros();
@@ -1340,7 +1340,7 @@ mod tests {
         assert!((p[(0, 0)] - 1.5).abs() < 1.0e-6 * SLACK);
     }
 
-    /// A transition, mapping and densities with the shape the filter's model
+    /// A transition, mapping, and densities with the shape the filter's model
     /// has: general dynamics for the navigation block, a navigation-to-
     /// parameter coupling, and parameters that decay on their own and are
     /// driven by their own channel. Everything else is zero.

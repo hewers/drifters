@@ -108,7 +108,7 @@ the Rust implementation is in `drifters-gnss`, behind `--raw-ranges` in the repl
 
 648-point grid over the elevation weighting `σ = a + b/sin(el) + c·10^(−(C/N₀−ref)/20)`,
 the robust threshold and cost, an elevation mask and a `C/N₀` cut. Fitted on
-trace A; B, C and D held out.
+trace A; B, C, and D held out.
 
 Best on A: `a = 0.3`, `b = 16`, **`c = 0`**, Huber `k = 1.0`, 10° elevation mask.
 
@@ -170,7 +170,7 @@ steeply — ×150 costs it 74 % — while the EqF is flat from ×50 to ×100 and
 falls away gently either side. The EqF extracts usable information from the IMU
 at a tenth of the process noise the ESKF can tolerate.
 
-Trace A's tuning applied unchanged to B, C and D:
+Trace A's tuning applied unchanged to B, C, and D:
 
 | trace | GNSS alone | ESKF ×600 | EqF ×60 |
 |---|---|---|---|
@@ -279,7 +279,7 @@ itself; it takes an independent measurement.**
 
 ### What it is worth
 
-Trace A's tuning applied unchanged to B, C and D, competition score in metres:
+Trace A's tuning applied unchanged to B, C, and D, competition score in metres:
 
 | trace | GNSS alone | ESKF, Doppler | ESKF, carrier | EqF, Doppler | EqF, carrier |
 |---|---|---|---|---|---|
@@ -322,7 +322,7 @@ the likeliest to be wrong. Checking each delta on its own against the same
 Doppler removes the last excursion: horizontal RMS 10.49 → 2.93 m, maximum
 251.8 → 17.8 m.
 
-Competition score, trace A's tuning applied unchanged to B, C and D:
+Competition score, trace A's tuning applied unchanged to B, C, and D:
 
 | trace | GNSS alone | ESKF | EqF | **batch fit** |
 |---|---|---|---|---|
@@ -458,7 +458,7 @@ The sub-metre entries in the Google challenge used a reference station, which
 is the one thing the competition files cannot supply. Building that is
 [`rinex.rs`](../crates/drifters-gnss/src/rinex.rs) and
 [`differential.rs`](../crates/drifters-gnss/src/differential.rs): a RINEX 2.11
-reader, satellite matching by constellation, id and band, and corrections
+reader, satellite matching by constellation, id, and band, and corrections
 built from a CORS station 11 km away.
 
 It works, in the sense that every part of it is right. Solving SLAC's own
@@ -466,7 +466,7 @@ position from its own pseudoranges — the check in
 `examples/base_selfcheck.rs`, against a surveyed coordinate — gives **1.87 m
 median**, which is what a geodetic receiver's code should give. That number
 validates the reader, the satellite matching, the band matching, the Sagnac
-convention, the transmission-time shift and the clock handling all at once.
+convention, the transmission-time shift, and the clock handling all at once.
 
 Applied to the phone, it makes things worse: the batch score goes 2.799 → 3.005
 on trace A. One measurement says why.
@@ -497,7 +497,7 @@ What a reference station has that a phone does not is **carrier phase**:
 millimetre precision rather than metre precision. That is why the winning
 entries used post-processed kinematic and not code differential, and it is the
 remaining route to sub-metre from here. This module is the groundwork for it —
-reader, matching, alignment and geometry all validated against a surveyed
+reader, matching, alignment, and geometry all validated against a surveyed
 answer — rather than a substitute for it.
 
 Three mistakes this module avoids, each visible in measurement:

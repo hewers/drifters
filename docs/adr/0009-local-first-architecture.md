@@ -37,7 +37,7 @@ single-precision covariance filter does not fail eventually, it fails immediatel
 And a raw `P` reaches 13.7 digits after fifteen minutes and is still climbing at
 roughly `t³`. Extrapolated over the 57-minute KF-GINS run that is `≈ 10¹⁵`, or
 15.4 digits, against `f64`'s 15.9. **A dense `f64` filter ends that dataset with a
-fraction of a digit of margin.** The Joseph form, explicit re-symmetrisation and the
+fraction of a digit of margin.** The Joseph form, explicit re-symmetrisation, and the
 solve-rather-than-invert discipline are mitigations for this and not a fix, which
 argues for the factored form independently of `f32`.
 
@@ -205,7 +205,7 @@ no abandoned runs.
 ### 3. Time is an integer; only intervals are floating point — **done**
 
 `u64` nanoseconds, monotonic, on a stated epoch. That spans 584 years at 1 ns
-resolution and is exact for ordering, equality and epoch alignment.
+resolution and is exact for ordering, equality, and epoch alignment.
 
 `dt` is computed as an **integer difference, then converted**. Precision then
 never depends on how long the system has been running, which is the same
@@ -238,7 +238,7 @@ receivers already speak.
 
 **The measurement models are shared, and that is the validation argument, not a
 convenience.** Every desktop run of the smoother or the batch tools exercises
-the identical Jacobians, whitening and gating that run on the target. A
+the identical Jacobians, whitening, and gating that run on the target. A
 divergence between the two paths is impossible by construction rather than by
 discipline. The CLI links the same crates firmware links, so the desktop testing is
 evidence about the embedded build.

@@ -19,7 +19,7 @@ sortable, and unambiguous about which paper an equation number refers to.
 > IEEE Transactions on Automatic Control, 2022.
 > **[arXiv:2010.14666](https://arxiv.org/abs/2010.14666)** (v3)
 
-Defines the symmetry group, lift, equivariant error and normal coordinates, and
+Defines the symmetry group, lift, equivariant error, and normal coordinates, and
 proves the two results the implementation rests on: the linearisation origin is
 **fixed** rather than the moving estimate, and equivariant outputs give
 `O(|ε|³)` error where the usual construction gives `O(|ε|²)` (Lemma 5.3). Shows

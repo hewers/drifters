@@ -32,7 +32,7 @@
 //!
 //! # Why the boundary is this narrow
 //!
-//! A GNSS solver's output is a position, a velocity, an uncertainty and a
+//! A GNSS solver's output is a position, a velocity, an uncertainty, and a
 //! timestamp. Coupling to a solver's whole type system to move that across
 //! would make swapping solvers a rewrite instead of an adapter, so these
 //! conversions deliberately touch as little of the upstream API as possible.

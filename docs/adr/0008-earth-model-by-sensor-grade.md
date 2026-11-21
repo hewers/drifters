@@ -67,7 +67,7 @@ CLI applies it: a replay decides by the gyroscope's bias stability from the
 dataset's own IMU model, and `--earth-rate`, `--flat-earth` or
 `--earth-in-group` overrides that.
 
-**Ratio above about 1000 — navigation, strategic and survey, below 0.01 °/h.**
+**Ratio above about 1000 — navigation, strategic, and survey, below 0.01 °/h.**
 Earth rotation inside the filter's group, `EqfOptions::earth_in_group`. Input-side
 compensation must not be extended to cover this band, for the reason in the next
 section. The CLI selects the model here by itself. The library leaves it off, like
@@ -207,7 +207,7 @@ group. Whether that work would lift the limit on distance from the anchor is ope
 it is where to look if this is taken further.
 
 **Use the ESKF above tactical grade and stop there.** Right for a unit that travels:
-the ESKF models Earth rotation, transport rate and normal gravity along the whole
+the ESKF models Earth rotation, transport rate, and normal gravity along the whole
 trajectory. The EqF keeps the gyrocompassing channel, so a unit at or near its anchor
 can choose either, and the EqF's advantages, a fixed linearisation origin and
 self-calibrating extrinsics, do not cost it true north.
