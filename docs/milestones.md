@@ -107,12 +107,6 @@ emulation. This repository claims nothing about time until these items run.
   where [the recording does not](testing.md#what-the-recording-says-about-its-lever-arm),
   so it is not independent of that configuration, and its agreement in position
   is closer than the fixes' noise.
-- **The ESKF's heading sigma on KF-GINS.** It claims 0.006° and differs from the
-  reference by 0.018° RMS, an attitude NEES of 12.8 against 3. Nothing states
-  the reference's own accuracy, so this is either the filter or the reference,
-  and it has not been separated.
-- **Why the EqF's heading is closer to that reference than the ESKF's,** 0.011°
-  against 0.018°.
 - **Fuzzing beyond the engines.** The aligner, the smoother, and the CLI's parsers are
   not fuzzed.
 

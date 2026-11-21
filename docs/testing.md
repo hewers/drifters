@@ -273,16 +273,23 @@ configured one. Its mean offset from the reference is the negative of that to
 removed its scatter is the ESKF's horizontally and twice it vertically, where
 its vertical lever arm is still moving, by 1.7 cm sigma over the run.
 
-Its heading error is 40 % smaller than the ESKF's. The cause has not been
-looked for.
+Its heading error is 40 % smaller than the ESKF's, and the cause is the gyro-bias
+model. The ESKF is told the bias is Gauss-Markov with a 4-hour correlation time,
+as `kf-gins.yaml` specifies. Over the 57-minute run that pulls the bias estimate
+toward zero, and the heading drifts at the residual; the EqF models the same
+bias as a random walk and does not. Replaying the ESKF with the correlation time
+raised to 100 000 hours — effectively a random walk — takes its heading error
+from 0.018° to 0.011°, the EqF's figure, and its claimed heading sigma from
+0.006° to 0.004°.
 
 NEES is the error against the reference in the filter's own covariance, over
 position, velocity, and attitude, and an exact truth would read 9. Both read
 above it, and the blocks say where. The ESKF's excess is attitude, 12.8 against
 3: its heading differs from the reference by 0.018° RMS where it claims
-0.006°. Nothing states the reference's own accuracy, so whether that is the
-filter's overconfidence or the reference's error cannot be told from here. The
-EqF's is position, 22.8, which is the lever arm again: a 4 cm constant against
+0.006°. Most of that is the bias model above — the random-walk replay reads
+0.011° against a claimed 0.004° — so what is left is about 2.7x overconfident,
+and whether that residual is the filter's or the reference's cannot be told
+from here. The EqF's is position, 22.8, which is the lever arm again: a 4 cm constant against
 a claimed sigma near 1 cm. The bands are wide for those reasons — they catch an
 order-of-magnitude covariance fault, not a factor of two. On simulated data
 with exact truth the ESKF reads 8.9 to 11.0 (Layer 7).
