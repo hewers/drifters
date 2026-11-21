@@ -64,11 +64,11 @@
 //!
 //! # Cost
 //!
-//! A replay is that many `add_imu`. On a Cortex-M4 that is 4.45 million
-//! instructions each with the dense covariance and 0.85 million with the
-//! factored `f32` one, against 479 thousand for the ESKF with
+//! A replay is that many `add_imu`. On a Cortex-M4 that is 4.51 million
+//! instructions each with the dense covariance and 0.89 million with the
+//! factored `f32` one, against 348 thousand for the ESKF with
 //! `f32-covariance` (docs/testing.md, Layer 9). A fix 20 samples late replays
-//! between 20 and 39 of them: 17 to 33 million instructions at once in the
+//! between 20 and 39 of them: 18 to 35 million instructions at once in the
 //! factored form, a burst of 0.1 to 0.2 s at 168 MHz that a device has to
 //! schedule around.
 //!

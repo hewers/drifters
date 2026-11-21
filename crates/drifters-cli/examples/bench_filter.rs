@@ -81,9 +81,13 @@ fn main() {
         t += 0.005;
         engine.add_imu(sample(t)).unwrap();
     }
+    // Unaided, the same sample for ever carries the engine out of the range it
+    // will hold, and it refuses the step. Start again when it does.
     let propagate = best(trials, 100_000, || {
         t += 0.005;
-        engine.add_imu(sample(t)).unwrap();
+        if engine.add_imu(sample(t)).is_err() {
+            engine = GinsEngine::new(options()).unwrap();
+        }
     });
 
     // A realistic second: 200 propagations at 200 Hz and one GNSS fix.

@@ -637,7 +637,7 @@ the list below is what the release *is* rather than what changed.
   Allocation-free, sized by two const parameters, and bit-identical to
   delivering the fix on time, which is what its tests check. A fix up to
   `SAMPLES / 2` samples late is always applicable. No propagation in steady
-  state; a rewind costs the samples it replays — 356 µs on the host for 300 ms
+  state; a rewind costs the samples it replays — 242 µs on the host for 300 ms
   of lateness at 200 Hz — and the whole layer is 21 312 bytes at that size.
 - **`drifters-core::earth::Local`** — the earth model evaluated once at a
   geodetic position, answering gravity, earth rate, transport rate and the radii

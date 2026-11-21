@@ -96,6 +96,9 @@ jobs:
       - run: cargo build -p drifters-filter --target ${{ matrix.target }}
       - run: cargo build -p drifters-proto --target ${{ matrix.target }}
       - run: cargo build -p drifters-eqf --target ${{ matrix.target }}
+      # The EqF's protobuf conversions are a feature of their own, so the
+      # default `drifters-proto` build above does not compile them.
+      - run: cargo build -p drifters-proto --target ${{ matrix.target }} --features eqf
       # The smoothing recorder is a feature because of its size, not because it
       # allocates. It has to build for a target too.
       - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features smoothing

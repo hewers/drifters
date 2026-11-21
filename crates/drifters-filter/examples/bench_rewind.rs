@@ -119,9 +119,15 @@ fn main() {
         i += 1;
         engine.add_imu(sample(i)).unwrap();
     }
+    // Nothing aids this engine, and the same sample for ever carries it out
+    // of the range an engine will hold, at which point it refuses the step.
+    // Start again when it does: once in some hundreds of thousands of samples,
+    // which the minimum over trials does not see.
     let propagate = best(trials, 100_000, || {
         i += 1;
-        engine.add_imu(sample(i)).unwrap();
+        if engine.add_imu(sample(i)).is_err() {
+            engine = GinsEngine::new(options()).unwrap();
+        }
     });
 
     // The same through the layer, nothing late: its steady-state cost.
@@ -133,7 +139,9 @@ fn main() {
     }
     let wrapped = best(trials, 100_000, || {
         i += 1;
-        rewind.add_imu(sample(i)).unwrap();
+        if rewind.add_imu(sample(i)).is_err() {
+            rewind = Rewind::new(options()).unwrap();
+        }
     });
 
     println!(

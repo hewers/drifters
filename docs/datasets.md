@@ -38,8 +38,8 @@ cargo test -p drifters-cli --test kf_gins_truth -- --nocapture
 cargo test -p drifters-cli --test kf_gins_lever_arm -- --nocapture
 ```
 
-The `test` profile is optimised, so the same run takes about **3 s in a plain
-`cargo test`, 2.3 s in release**; no `--release` and no environment variable are
+The `test` profile is optimised, so the same run takes about **2.6 s in a plain
+`cargo test`, 2.3 s in release** on the machine [testing.md](testing.md#getting-the-data) names; no `--release` and no environment variable are
 needed. Details in [testing.md](testing.md#getting-the-data).
 
 ## GSDC 2023 phone trace

@@ -57,7 +57,7 @@
 //! record per aiding call, and two engine copies per `W` samples — 172 bytes a
 //! sample at `W = 60`. On the host that does not resolve from the engine's own
 //! `add_imu`: the difference between the two changes sign from run to run,
-//! inside the few per cent by which a 4.5 µs `add_imu` itself varies.
+//! inside the few per cent by which a 2.2 µs `add_imu` itself varies.
 //!
 //! A rewind is a replay, and a replay is that many `add_imu`. A fix `L`
 //! samples late pushes between `L` and `L + W − 1` samples again, depending on
@@ -69,22 +69,25 @@
 //! | fix | samples replayed, mean (longest) | the rewind | per sample replayed |
 //! |---|---|---|---|
 //! | on time | 0 | — | — |
-//! | 1 late | 21 (41) | 93 µs | 4.44 µs |
-//! | 20 late | 40 (60) | 179 µs | 4.47 µs |
-//! | 60 late | 80 (100) | 356 µs | 4.45 µs |
+//! | 1 late | 21 (41) | 60 µs | 2.86 µs |
+//! | 20 late | 40 (60) | 121 µs | 3.04 µs |
+//! | 60 late | 80 (100) | 242 µs | 3.02 µs |
 //!
-//! against 4.47 µs for an `add_imu` on the same machine in the same run. The
-//! means are this benchmark's, whose fixes land on three phases of the
-//! refresh; over all phases the mean is `L + (W − 1) / 2`.
+//! against 2.23 µs for an `add_imu` alone in the same run; a replayed sample
+//! carries its share of the aiding calls repeated with it. The means are this
+//! benchmark's, whose fixes land on three phases of the refresh; over all
+//! phases the mean is `L + (W − 1) / 2`. Times are from
+//! a Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB,
+//! Linux under WSL2, Rust 1.100, release profile.
 //!
 //! No timing exists for a target, but the count does. An `add_imu` on
-//! Cortex-M4 retires 3.6 million instructions in the default build and
-//! 479 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
-//! the 300 ms case between 218 and 433 million instructions by default and
-//! between 29 and 57 million with `f32-covariance`, arriving at once. That is
+//! Cortex-M4 retires 1.6 million instructions in the default build and
+//! 348 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
+//! the 300 ms case between 96 and 190 million instructions by default and
+//! between 21 and 41 million with `f32-covariance`, arriving at once. That is
 //! the number to hold against the gap between two IMU samples, and it does
 //! not fit in one: at an instruction per cycle, which is the best that core
-//! does, the smaller range is 34 to 68 sample periods of work at 168 MHz and
+//! does, the smaller range is 25 to 49 sample periods of work at 168 MHz and
 //! 200 Hz. A replay is not spread over several calls, so on such a part the
 //! samples that arrive during one have to be queued by the caller.
 //!

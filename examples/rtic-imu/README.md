@@ -39,8 +39,8 @@ fix was applied, and exits 1 otherwise. CI runs it on every push.
 ```text
 t=  2.00 … sigma_h=0.895 err_h=0.026 rewound=1 queued=0 stale=0 longest=15 backlog_peak=7 dropped=0
 …
-t= 19.00 … sigma_h=0.033 err_h=0.032 rewound=18 queued=0 stale=0 longest=27 backlog_peak=12 dropped=0
-done: 2000 of 2000 samples filtered, 19 of 19 fixes applied, horizontal error 0.028 m, backlog peak 12 of 32, 0 dropped
+t= 19.00 … sigma_h=0.033 err_h=0.032 rewound=18 queued=0 stale=0 longest=27 backlog_peak=8 dropped=0
+done: 2000 of 2000 samples filtered, 19 of 19 fixes applied, horizontal error 0.028 m, backlog peak 8 of 32, 0 dropped
 ```
 
 `err_h` is the distance from the truth, which only a simulation knows.
@@ -84,24 +84,26 @@ A rewind is a burst. A fix `L` samples late replays between `L` and
 
 While those replay, the IMU keeps producing. If one step takes `s` and the IMU
 period is `T`, a replay of `n` steps queues about `n · s / T` samples. Here
-`s` is about 3.9 ms (487 thousand instructions at the 8 ns each that
-`-icount shift=3` gives) and `T` is 10 ms, so a 27-step replay queues about 11.
-The run peaks at 12. The queue holds 32.
+`s` is about 2.8 ms (348 thousand instructions at the 8 ns each that
+`-icount shift=3` gives) and `T` is 10 ms, so a 27-step replay queues about 8.
+The run peaks at 8. The queue holds 32.
 
 Three consequences:
 
 - **The filter must have headroom, not just keep up.** After a burst, the
   backlog drains at `T − s` per period. At `s ≥ T` it never drains, and every
-  burst adds to it. With the default `f64` covariance a step is 3.9 million
-  instructions, about 32 ms in this model. Built that way, the queue fills within
+  burst adds to it. With the default `f64` covariance a step is 1.6 million
+  instructions, about 13 ms in this model, still longer than `T`. The figures
+  that follow were measured when it was 3.9 million and have not been re-run.
+  Built that way, the queue fills within
   the first second and stays full. 1 385 of the 2 000 samples are dropped,
   telemetry never runs because the filter never yields, and the run fails at
   0.75 m. That is why `f32-covariance` is enabled in `Cargo.toml`, and it is
   the same conclusion `cortex-m-harness` reaches from instruction counts.
 - **A dropped sample is not a small error.** In that run the estimated
   velocity reaches about 47 m/s against a true 13. The engine integrates each
-  sample over its own `dt` and does not notice that consecutive timestamps
-  are tens of milliseconds apart. The fixes drag the position along, and the velocity absorbs
+  sample over its own `dt`; it counts the gap in `imu_gap_count` and does not
+  close it. The fixes drag the position along, and the velocity absorbs
   the difference. Count drops, and treat any as a fault.
 - **A larger rewind window costs queue as well as RAM.** Doubling `SAMPLES`
   roughly doubles the longest replay, and the queue has to grow with it.
