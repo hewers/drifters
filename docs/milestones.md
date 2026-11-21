@@ -105,8 +105,11 @@ emulation. This repository claims nothing about time until these items run.
   `truth.nav` is another implementation's solution, and upstream does not say
   how it was made. It agrees with the dataset's configured lever arm to 0.3 mm
   where [the recording does not](testing.md#what-the-recording-says-about-its-lever-arm),
-  so it is not independent of that configuration, and its agreement in position
-  is closer than the fixes' noise.
+  so it is not independent of that configuration. The [forward/RTS and
+  withheld-fix checks](testing.md#where-the-heading-discrepancy-comes-from)
+  identify a heading consistency problem without assuming exact truth. To
+  measure *absolute* heading calibration still takes a separately surveyed
+  heading with known uncertainty.
 - **Fuzzing beyond the engines.** The aligner, the smoother, and the CLI's parsers are
   not fuzzed.
 

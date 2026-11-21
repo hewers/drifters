@@ -273,31 +273,81 @@ configured one. Its mean offset from the reference is the negative of that to
 removed its scatter is the ESKF's horizontally and twice it vertically, where
 its vertical lever arm is still moving, by 1.7 cm sigma over the run.
 
-Its heading error is 40 % smaller than the ESKF's, and the cause is the gyro-bias
-model. The ESKF is told the bias is Gauss-Markov with a 4-hour correlation time,
-as `kf-gins.yaml` specifies. Over the 57-minute run that pulls the bias estimate
-toward zero, and the heading drifts at the residual; the EqF models the same
-bias as a random walk and does not. Replaying the ESKF with the correlation time
-raised to 100 000 hours — effectively a random walk — takes its heading error
-from 0.018° to 0.011°, the EqF's figure, and its claimed heading sigma from
-0.006° to 0.004°.
-
-NEES is the error against the reference in the filter's own covariance, over
-position, velocity, and attitude, and an exact truth would read 9. Both read
-above it, and the blocks say where. The ESKF's excess is attitude, 12.8 against
-3: its heading differs from the reference by 0.018° RMS where it claims
-0.006°. Most of that is the bias model above — the random-walk replay reads
-0.011° against a claimed 0.004° — so what is left is about 2.7x overconfident,
-and whether that residual is the filter's or the reference's cannot be told
-from here. The EqF's is position, 22.8, which is the lever arm again: a 4 cm constant against
-a claimed sigma near 1 cm. The bands are wide for those reasons — they catch an
-order-of-magnitude covariance fault, not a factor of two. On simulated data
-with exact truth the ESKF reads 8.9 to 11.0 (Layer 7).
+NEES measures the discrepancy in the filter's covariance units. Against exact
+truth a calibrated nine-state estimate would average 9. The ESKF's largest
+excess is attitude (12.8 against 3); the EqF's is position (22.8), where its
+lever arm contributes a 4 cm offset against a sigma near 1 cm. These are
+regression bands, not tests that assume the reference has zero error.
 
 Tolerances are ~3x each engine's observed values, the convention the rest of
 the suite uses, and 2 mm on the two body-frame means. The
 [initial-alignment test](#layer-13--initial-alignment) scores against the same
 file.
+
+#### Where the heading discrepancy comes from
+
+**The reference heading is nearly reproducible offline.** Run the configured
+4-hour ESKF forward, then apply the RTS backward pass to its GNSS checkpoints.
+Neither pass reads `truth.nav`. At the checkpoint epochs after settle, the
+smoothed heading agrees with that file to **0.00083° RMS**. Future fixes revise
+forward headings by **0.01804° RMS**; the covariance reduction predicts
+**0.00587°**. With the 100 000-hour tuning, the revision is **0.00909°** against
+**0.00470°** predicted, and the smoothed discrepancy is **0.00606°**. The
+configured smoother's agreement is evidence about what the recording supports,
+not proof that upstream used RTS or that either solution knows absolute north
+to a millidegree.
+
+**Both forward filters underestimate how much fixes will change heading.**
+Every 60 s, copy the aided filter. Give both copies identical IMU samples for
+the next minute, but give RTK fixes to only one. After the first minute there
+are 55 complete windows. This comparison needs no reference heading. For an
+optimal linear filter with nested observations the covariance of the revision
+is `P_coast − P_aided`, not their sum: the two started from the same posterior
+and share their IMU. We use this as a first-order diagnostic, projecting the
+attitude block onto Euler yaw, including tilt and the off-diagonal terms.
+
+| filter | forward − reference RMS | RMS(Δ/σ), vs reference | aided − coast RMS | predicted revision σ, RMS | RMS(Δ/σ), no reference |
+|---|---:|---:|---:|---:|---:|
+| ESKF, 4 h | 0.01786° | 2.77 | 0.01575° | 0.00753° | 3.15 |
+| ESKF, 100 000 h | 0.01090° | 2.80 | 0.00694° | 0.00558° | 3.69 |
+| EqF | 0.01053° | 3.19 | 0.00542° | 0.00328° | 3.34 |
+
+Each normalized column **divides at the epoch or window before taking RMS**.
+The former “2.7×” was RMS disagreement divided by *mean* sigma, not this
+statistic. For filter and reference errors `f` and `r`, `Var(f − r)` also
+contains `Var(r) − 2 Cov(f, r)`, neither of which is supplied. The reference
+column alone cannot calibrate a filter, nor are 3,331 samples of one drive
+independent trials.
+
+**The fixes push heading repeatedly in the same direction.** Omit one fix at
+a time on a copy and measure its effect `d` on heading at the same IMU epoch.
+In each minute let `V` be the sum of the single-fix predicted revision
+variances. The normalized RMS of the signed sums, `sum(d)/√V`, is **3.17,
+3.68, and 3.33** in table order. Keep exactly the same magnitudes but give the
+changes independent fair signs: the cross terms vanish, so the corresponding
+RMS is computable without random sampling, `√mean(sum(d²)/V)`. It falls to
+**0.95, 1.03, and 0.91**. The individual changes have enough variance in this
+check; what the model misses is how they add up. This diagnoses correlated
+heading corrections, not necessarily correlated *receiver noise*: IMU errors
+or timing can also make successive fixes pull the same way. A reference error
+alone cannot produce it. Absolute error shared by all the solutions is still
+invisible; these numbers are not a prescription to multiply heading sigmas.
+
+**Why increasing τ helped the ESKF.** It did *not* isolate gyro-bias decay.
+The ESKF holds nominal calibration between updates. In the error model, τ
+changes both the transition and the driving-noise density `2σ²/τ` for **all**
+biases and scale factors. Increasing τ from 4 to 100 000 hours cuts those
+densities by 25,000; this is not the EqF's finite-noise random walk. At 4 hours,
+keeping all initial priors fixed and cutting **only body-z gyro scale** driving
+noise by that factor gives **0.01098°** forward RMS, almost the entire change.
+Cutting only the three gyro-bias driving densities gives **0.01780°**, barely
+changed from 0.01786°. Neither result makes the reference an independent
+heading observation.
+
+The [heading diagnostic](../crates/drifters-cli/tests/kf_gins_truth/heading.rs)
+runs with `cargo test -p drifters-cli --test kf_gins_truth -- --nocapture` on
+the pinned data. It checks the configured smoother's reference agreement, not
+that the forward filters must remain inconsistent.
 
 ### What the recording says about its lever arm
 
@@ -1119,8 +1169,9 @@ It also pins two ordering requirements, both invisible on residuals:
 ### The reference the smoother is checked against
 
 There is no published test set for RTS smoothing. KF-GINS is a forward filter
-and ships no backward pass, and no navigation dataset comes with a *smoothed*
-reference trajectory — so there is nothing to diff against. Worse, the obvious
+and ships no backward pass. Its reference agrees closely with [our smoothed
+heading](#where-the-heading-discrepancy-comes-from), but has no documented
+smoothing method or absolute heading uncertainty. Worse, the obvious
 substitute is actively misleading: scoring a smoother on its residual against
 the measurements it was fitted to rewards a smoother that is wholly wrong.
 

@@ -1,4 +1,4 @@
-//! Score the estimators against KF-GINS's independent reference solution.
+//! Score the estimators against KF-GINS's reference trajectory.
 //!
 //! `kf_gins_regression.rs` scores the filter's predicted antenna position
 //! against the very RTK fixes it consumes. That is an open-loop check of the
@@ -29,11 +29,18 @@
 //! - **NEES by block**, which says where a total above nine comes from.
 //! - **The EqF's lever arm** against the configured one.
 //!
+//! The 21-state run also checks heading revisions from withheld fixes and
+//! future fixes without using the reference, then scores the smoothed heading
+//! against the file. See `docs/testing.md` for the distinction.
+//!
 //! The dataset is **not committed**; `docs/datasets.md` says how to fetch it,
 //! pinned to a commit and a checksum. When it is absent this test reports that
 //! and passes, so a fresh clone is not broken by not having it. Set
 //! `DRIFTERS_DATASET_REQUIRED=1` to make its absence a failure instead, which
 //! is what the CI job does.
+
+#[path = "kf_gins_truth/heading.rs"]
+mod heading;
 
 use std::path::{Path, PathBuf};
 
@@ -343,6 +350,39 @@ fn required() -> bool {
     std::env::var_os("DRIFTERS_DATASET_REQUIRED").is_some()
 }
 
+/// Visit each IMU interval in the configured window, with the same fix
+/// placement for the forward score, the withheld-fix runs, and the smoother.
+fn replay_inputs(
+    imu: &[ImuSample],
+    gnss: &[GnssFix],
+    config: &kfgins::Config,
+    mut step: impl FnMut(ImuSample, Option<GnssFix>),
+) {
+    let mut next_fix = 0usize;
+    while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
+        next_fix += 1;
+    }
+    let end = config.end_time.unwrap_or(f64::INFINITY);
+
+    for sample in imu {
+        let tow = sample.time.tow();
+        if tow < config.start_time {
+            continue;
+        }
+        if tow > end {
+            break;
+        }
+        let fix = gnss.get(next_fix).copied().filter(|f| f.time.tow() <= tow);
+        next_fix += usize::from(fix.is_some());
+        step(*sample, fix);
+    }
+}
+
+/// One scoring cadence and one settle window for every forward heading comparison.
+fn score_at(processed: u64, tow: f64, start: f64) -> bool {
+    processed.is_multiple_of(SCORE_EVERY) && tow - start >= SETTLE
+}
+
 /// Drive one estimator over the dataset, scoring against the reference once a
 /// second. `nees_at` is engine-specific: the two filters do not share a state
 /// representation.
@@ -354,39 +394,25 @@ fn drive<E: Estimator>(
     reference: &kfgins::Reference,
     mut nees_at: impl FnMut(&E, &NavState, &kfgins::NavRow) -> Nees,
 ) -> Score {
-    let mut next_fix = 0usize;
-    while next_fix < gnss.len() && gnss[next_fix].time.tow() < config.start_time {
-        next_fix += 1;
-    }
-    let end = config.end_time.unwrap_or(f64::INFINITY);
-
     let mut score = Score::new();
     let mut processed = 0u64;
-    for sample in imu {
-        let tow = sample.time.tow();
-        if tow < config.start_time {
-            continue;
+    replay_inputs(imu, gnss, config, |sample, fix| {
+        if let Some(fix) = fix {
+            let _ = engine.add_gnss(fix);
         }
-        if tow > end {
-            break;
-        }
-        if next_fix < gnss.len() && gnss[next_fix].time.tow() <= tow {
-            let _ = engine.add_gnss(gnss[next_fix]);
-            next_fix += 1;
-        }
-        engine.add_imu(*sample).expect("propagate");
+        engine.add_imu(sample).expect("propagate");
         processed += 1;
-
-        if tow - config.start_time < SETTLE || !processed.is_multiple_of(SCORE_EVERY) {
-            continue;
+        let tow = sample.time.tow();
+        if !score_at(processed, tow, config.start_time) {
+            return;
         }
         let Some(truth) = reference.at(tow) else {
-            continue;
+            return;
         };
         let nav = engine.nav_state();
         let nees = nees_at(&engine, &nav, &truth);
         score.push(&nav, &truth, &nees);
-    }
+    });
     score
 }
 
@@ -529,4 +555,10 @@ fn the_filter_agrees_with_the_reference_solution() {
     // estimate's distance from the configured one, with the sign reversed.
     eskf.assert_body_offset("ESKF", Vec3::ZERO);
     eqf.assert_body_offset("EqF", -moved);
+
+    // This experiment compares the 21-state tuning with a change to its scale
+    // process; the 15-state build has no such state.
+    if N_STATE == 21 {
+        heading::diagnose(&config, &imu, &gnss, &reference, eqf_options);
+    }
 }
