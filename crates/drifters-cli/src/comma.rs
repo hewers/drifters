@@ -594,11 +594,11 @@ pub fn replay(
                 GnssQueued::Queued | GnssQueued::Replaced
             );
         }
-        let before = engine.last_nis();
+        let before = engine.update_sequence();
         engine.add_imu(*sample)?;
         if offered {
             match engine.last_nis() {
-                Some(v) if Some(v) != before => report.nis.push(v),
+                Some(v) if engine.update_sequence() != before => report.nis.push(v),
                 _ => report.rejected += 1,
             }
         }
@@ -641,7 +641,7 @@ pub fn replay(
             if let Some(h) = interpolate_angle(&segment.heading, t) {
                 // The vehicle's heading, which is what the reference series
                 // holds: the attitude is the IMU's.
-                let attitude = engine.nav_state().pva.attitude.quat;
+                let attitude = engine.nav_state().pva.attitude.quat();
                 let yaw = (attitude * segment.mounting.rotation.conjugate())
                     .to_euler()
                     .yaw;

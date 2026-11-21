@@ -373,9 +373,9 @@ and does not propagate.
 Its stack is measured, for both engines, by applying a fix fifteen samples
 late with an aid recorded every third sample. The replay runs nested inside
 `add_gnss`, in place on the live engine, with no engine-sized temporary. A late
-fix reaches the depth of the time update it replays and goes no further: 13 576
-bytes, 11 936 with `f32-covariance`, 8 944 at 15 states and 7 760 with both. The
-EqF's late fix measures 15 880 dense and 14 464 factored, no deeper than its own
+fix reaches the depth of the time update it replays and goes no further: 13 232
+bytes, 11 584 with `f32-covariance`, 8 512 at 15 states and 7 328 with both. The
+EqF's late fix measures 15 616 dense and 14 616 factored, no deeper than its own
 fix step in either. All are inside their CI ceilings, and all are part of the peak
 CI checks.
 
@@ -399,13 +399,13 @@ ESKF:
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
 | `add_imu` (propagate) | 14 312 | 10 716 |
-| `add_imu` with a GNSS fix, with or without velocity | 15 880 | 14 464 |
-| `apply_magnetometer` | 14 752 | 13 368 |
-| **peak** | **15 880** | **14 464** |
+| `add_imu` with a GNSS fix, with or without velocity | 15 616 | 14 616 |
+| `apply_magnetometer` | 14 432 | 13 456 |
+| **peak** | **15 616** | **14 616** |
 
 These are the same with the Earth's rotation in the filter's group.
 
-Both are above the default ESKF's 13 576 and under a 20 KiB ceiling in CI. A late
+Both are above the default ESKF's 13 232 and under a 20 KiB ceiling in CI. A late
 fix through `EqfRewindEngine` measures the same as each form's own fix step.
 
 On a small part the constraint is work and not stack. The dense form is 4.51
@@ -413,7 +413,7 @@ million instructions per `add_imu` on a Cortex-M4, soft-float throughout on a co
 whose FPU is single precision, and at an instruction per cycle that is at least
 26.8 ms a sample at 168 MHz. The factored form is 0.89 million, a floor of 5.3 ms —
 inside a 100 Hz IMU's interval with about half of it to spare, and just over a
-200 Hz one's — against 348 thousand for the ESKF with `f32-covariance`. See
+200 Hz one's — against 350 thousand for the ESKF with `f32-covariance`. See
 [eqf.md](eqf.md#what-it-costs-on-a-microcontroller).
 
 ### Stack, measured on Cortex-M4
@@ -423,14 +423,14 @@ are measured by stack painting, not estimated — see `docs/testing.md`, "Layer 
 
 | operation | bytes |
 |---|---|
-| `add_imu` (mechanize + predict) | 13 576 |
-| `apply_zupt` (3-dim update) | 7 216 |
-| `apply_height` (1-dim update) | 4 672 |
-| `apply_magnetometer` | 7 600 |
-| **peak** | **13 576** |
+| `add_imu` (mechanize + predict) | 13 232 |
+| `apply_zupt` (3-dim update) | 7 280 |
+| `apply_height` (1-dim update) | 4 776 |
+| `apply_magnetometer` | 7 696 |
+| **peak** | **13 232** |
 
 The harness firmware, holding both engines, the aligner, semihosting, and the panic
-handler, links to 206 408 bytes of `.text` and 4 084 of `.rodata`.
+handler, links to 221 424 bytes of `.text` and 4 492 of `.rodata`.
 
 ### How the stack is kept down
 
@@ -465,7 +465,7 @@ filter to 15 states. Every matrix halves, and so does the stack:
 | covariance (`Ud`) | 1 848 B | **960 B** |
 | `Eskf` | 2 024 B | 1 088 B |
 | `GinsEngine` | 3 336 B | 2 400 B |
-| peak stack | 13 576 B | **8 944 B** |
+| peak stack | 13 232 B | **8 512 B** |
 
 Both halve again under `f32-covariance`: 480, 608, and 1 920 bytes.
 
@@ -473,10 +473,10 @@ Peak stack by operation, in bytes:
 
 | | `add_imu` | `apply_zupt` | peak |
 |---|---|---|---|
-| 21-state, `f64` | 13 576 | 7 216 | **13 576** |
-| 21-state, `f32-covariance` | 11 936 | 6 388 | **11 936** |
-| 15-state (`reduced-state`) | 8 944 | 5 016 | **8 944** |
-| 15-state, `f32-covariance` | 7 760 | 4 580 | **7 760** |
+| 21-state, `f64` | 13 232 | 7 280 | **13 232** |
+| 21-state, `f32-covariance` | 11 584 | 6 712 | **11 584** |
+| 15-state (`reduced-state`) | 8 512 | 5 272 | **8 512** |
+| 15-state, `f32-covariance` | 7 328 | 5 056 | **7 328** |
 
 CI measures these on every run, and that is the number to trust over this
 table.
@@ -491,7 +491,7 @@ quantities the recursion has already computed, so the update adds them to the
 factors. [state-model.md](state-model.md) has the derivation.
 
 Fifteen states is the most useful stack lever on a small part. It takes the peak
-from 13 576 to 8 944 bytes and changes no numerics: it estimates fewer things.
+from 13 232 to 8 512 bytes and changes no numerics: it estimates fewer things.
 
 Measured on the KF-GINS dataset it costs very little:
 

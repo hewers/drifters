@@ -91,21 +91,44 @@ impl Quat {
         }
     }
 
+    #[inline]
+    fn norm_squared(self) -> F {
+        self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z
+    }
+
     /// Euclidean norm.
     #[inline]
     pub fn norm(self) -> F {
-        (self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+        self.norm_squared().sqrt()
     }
 
     /// Return a unit-length copy, falling back to identity on underflow.
     #[inline]
     pub fn normalized(self) -> Self {
-        let n = self.norm();
-        if n > 0.0 {
-            Self::new(self.w / n, self.x / n, self.y / n, self.z / n)
-        } else {
-            Self::IDENTITY
+        let squared = self.norm_squared();
+        if squared < F::MIN_POSITIVE {
+            return Self::IDENTITY;
         }
+        if squared.is_infinite() && self.is_finite() {
+            // The components are representable, but their squared norm is not.
+            let scale = self
+                .w
+                .abs()
+                .max(self.x.abs())
+                .max(self.y.abs())
+                .max(self.z.abs());
+            let q = Self::new(
+                self.w / scale,
+                self.x / scale,
+                self.y / scale,
+                self.z / scale,
+            );
+            let n = q.norm();
+            return Self::new(q.w / n, q.x / n, q.y / n, q.z / n);
+        }
+        // Preserve non-finite input so engine/config validation can reject it.
+        let n = squared.sqrt();
+        Self::new(self.w / n, self.x / n, self.y / n, self.z / n)
     }
 
     /// Normalise in place. Called after every attitude integration step.

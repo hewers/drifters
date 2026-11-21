@@ -1948,7 +1948,7 @@ mod tests {
         }
 
         fn attitude_error(&self, a: &Alignment) -> Vec3 {
-            let e = a.pva.attitude.quat * self.attitude.conjugate();
+            let e = a.pva.attitude.quat() * self.attitude.conjugate();
             let v = e.vector() * 2.0;
             if e.w < 0.0 {
                 v * -1.0

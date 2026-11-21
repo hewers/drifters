@@ -323,7 +323,6 @@ pub fn replay_with<E: ReplayEngine>(
     }
 
     let end = config.end_time.unwrap_or(f64::INFINITY);
-    let mut last_nis_seen: Option<f64> = None;
     // Local-frame anchor for plotting: the first fix inside the window. Plots
     // want metres from a fixed origin, not degrees.
     let anchor = gnss
@@ -386,16 +385,15 @@ pub fn replay_with<E: ReplayEngine>(
             });
 
             let before = engine.inflation_count();
+            let sequence = engine.update_sequence();
             let _ = engine.add_gnss(fix);
             engine.add_imu(*sample)?;
             report.processed += 1;
 
-            // `last_nis` changes only when an update was actually applied.
             match engine.last_nis() {
-                Some(value) if Some(value) != last_nis_seen => {
+                Some(value) if engine.update_sequence() != sequence => {
                     report.nis.push(value);
                     report.epochs[epoch_index].nis = Some(value);
-                    last_nis_seen = Some(value);
                     report.applied_fixes += 1;
                 }
                 _ => report.rejected_fixes += 1,
@@ -874,7 +872,7 @@ pub fn run_gsdc(
                     accel_scale_std,
                     eqf_earth,
                     alpha,
-                );
+                )?;
                 if kind == EngineKind::Eqf {
                     gsdc_pass(
                         drifters_eqf::EqfEngine::new(options)?,
@@ -1017,7 +1015,6 @@ fn gsdc_pass<E: ReplayEngine>(
 
     let anchor = first.position;
     let mut next = 0usize;
-    let mut last_nis: Option<f64> = None;
     // Record the transition matrices the backward pass needs, where the engine
     // can. Costs the ESKF a 21×21 product per IMU sample.
     let recording = engine.start_recording();
@@ -1040,6 +1037,7 @@ fn gsdc_pass<E: ReplayEngine>(
             // so a position solution is never formed. Velocity still arrives
             // loosely: it is a different observable, and the carrier-phase
             // solve is better than anything these ranges would give.
+            let sequence = engine.update_sequence();
             if tight {
                 let mut without_position = fix;
                 without_position.position_std = drifters_core::math::Vec3::splat(1.0e6);
@@ -1102,11 +1100,13 @@ fn gsdc_pass<E: ReplayEngine>(
             }
             run.processed += 1;
 
-            match engine.last_nis() {
-                Some(v) if Some(v) != last_nis => {
+            let applied_nis = engine
+                .last_nis()
+                .filter(|_| engine.update_sequence() != sequence);
+            match applied_nis {
+                Some(v) => {
                     run.nis.push(v);
                     run.nis_values.push(v);
-                    last_nis = Some(v);
                     run.applied += 1;
                     // Only accepted updates are checkpointed: a rejected fix
                     // leaves no correction and no prior, and recording one
@@ -1137,7 +1137,7 @@ fn gsdc_pass<E: ReplayEngine>(
                 tow: t,
                 ned: (ned.n, ned.e, ned.d),
                 residual: (predicted.n, predicted.e, predicted.d),
-                nis: engine.last_nis(),
+                nis: applied_nis,
             });
         } else {
             engine.add_imu(*sample)?;

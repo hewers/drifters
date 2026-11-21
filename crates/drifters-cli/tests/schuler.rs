@@ -64,6 +64,7 @@ fn eqf(gradient: bool) -> EqfEngine {
         EqfOptions::default()
             .with_initial_state(site(), Ned::ZERO, Euler::new(0.0, TILT, 0.0))
             .with_imu_noise(&noise())
+            .unwrap()
             .with_lever_arm(Vec3::ZERO, Vec3::splat(1e-3))
             .with_earth_in_group(true)
             .with_gravity_gradient(gradient),
@@ -377,7 +378,7 @@ fn drive<E: Estimator>(mut engine: E, world: &mut Drive, score: &mut Score) {
             continue;
         }
         let sigma = engine.pva_std();
-        let q = pva.attitude.quat * world.attitude(world.t).conjugate();
+        let q = pva.attitude.quat() * world.attitude(world.t).conjugate();
         let a = q.canonicalized().to_rotation_vector();
         position += d.n * d.n + d.e * d.e;
         stated += ((d.n / sigma.position.x).powi(2)
@@ -417,6 +418,7 @@ fn eqf_for(world: &mut Drive, grade: &Grade) -> EqfEngine {
     let mut o = EqfOptions::default()
         .with_initial_state(p, v, a)
         .with_imu_noise(&n)
+        .unwrap()
         .with_lever_arm(Vec3::ZERO, Vec3::splat(1e-3))
         .with_earth_in_group(true)
         .with_gravity_gradient(true);

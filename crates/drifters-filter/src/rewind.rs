@@ -82,7 +82,7 @@
 //!
 //! No timing exists for a target, but the count does. An `add_imu` on
 //! Cortex-M4 retires 1.6 million instructions in the default build and
-//! 348 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
+//! 350 thousand with `f32-covariance` (docs/testing.md, Layer 9), which makes
 //! the 300 ms case between 96 and 190 million instructions by default and
 //! between 21 and 41 million with `f32-covariance`, arriving at once. That is
 //! the number to hold against the gap between two IMU samples, and it does
@@ -334,6 +334,11 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
         self.engine().std_deviations()
     }
 
+    /// See [`GinsEngine::pva_std`].
+    pub fn pva_std(&self) -> drifters_core::estimator::PvaStd {
+        self.engine().pva_std()
+    }
+
     /// See [`GinsEngine::timestamp`].
     #[inline]
     pub fn timestamp(&self) -> GpsTime {
@@ -350,6 +355,12 @@ impl<const SAMPLES: usize, const EVENTS: usize> RewindEngine<SAMPLES, EVENTS> {
     #[inline]
     pub fn antenna_position(&self) -> Lla {
         self.engine().antenna_position()
+    }
+
+    /// Sequence of applied updates in the replayed engine history (not a
+    /// count of replay operations).
+    pub fn update_sequence(&self) -> u32 {
+        self.engine().update_sequence()
     }
 
     /// See [`GinsEngine::last_nis`].

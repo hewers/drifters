@@ -118,10 +118,10 @@ fn eskf_with(
             let residual = antenna_at(&engine, sample, fix.time)
                 .ned_from(fix.position)
                 .to_vec3();
-            let body = engine.nav_state().pva.attitude.dcm.transpose() * residual;
+            let body = engine.nav_state().pva.attitude.dcm().transpose() * residual;
             let yaw_rate = sample.dtheta.z / sample.dt;
 
-            let before = engine.last_nis();
+            let before = engine.update_sequence();
             let _ = engine.add_gnss(fix);
             engine.add_imu(*sample).expect("propagate");
             // The window opens on a fix the engine cannot place: the first
@@ -130,7 +130,10 @@ fn eskf_with(
                 continue;
             }
             out.horizontal.push(body.x.hypot(body.y));
-            if let Some(nis) = engine.last_nis().filter(|v| Some(*v) != before) {
+            if let Some(nis) = engine
+                .last_nis()
+                .filter(|_| engine.update_sequence() != before)
+            {
                 out.nis.push(nis);
             }
             if yaw_rate.abs() > TURNING {
@@ -164,7 +167,7 @@ fn eqf_from_an_uninformed_start(
 ) -> (Vec3, Vec3) {
     let earth = eqf::EarthModel::default().resolve(config.options.imu_noise.gyro_bias_std.amax());
     let alpha = eqf::parse_alpha(None).expect("the default GCU rate parses");
-    let mut options = eqf::kfgins_options(config, gnss, earth, alpha);
+    let mut options = eqf::kfgins_options(config, gnss, earth, alpha).unwrap();
     let first = gnss
         .iter()
         .find(|f| f.time.tow() >= config.start_time)

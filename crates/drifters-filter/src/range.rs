@@ -142,7 +142,7 @@ pub fn single_differences<const M: usize>(
     observations: &[RangeObservation],
 ) -> Option<Measurement<M>> {
     // The ranges are to the antenna, not to the IMU.
-    let lever_n = pva.attitude.dcm * lever_arm;
+    let lever_n = pva.attitude.dcm() * lever_arm;
     let antenna = pva.position.shifted(Ned::from_vec3(lever_n));
     let receiver = antenna.to_ecef();
     let ecef_from_ned = antenna.dcm_ecef_from_ned();

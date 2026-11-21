@@ -508,7 +508,7 @@ fn the_filter_agrees_with_the_reference_solution() {
     // whose block order is attitude, velocity, position.
     let earth = eqf::EarthModel::default().resolve(config.options.imu_noise.gyro_bias_std.amax());
     let alpha = eqf::parse_alpha(None).expect("the default GCU rate parses");
-    let eqf_options = eqf::kfgins_options(&config, &gnss, earth, alpha);
+    let eqf_options = eqf::kfgins_options(&config, &gnss, earth, alpha).unwrap();
     // Where the EqF puts the antenna, against where the configuration does,
     // at the epochs scored. The reference is at the IMU, so a filter that
     // moves its lever arm moves its IMU the other way.

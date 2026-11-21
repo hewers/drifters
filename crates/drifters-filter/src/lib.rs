@@ -83,6 +83,7 @@ pub mod state;
 pub mod ud;
 
 pub use config::{ConfigError, GinsOptions};
+pub use drifters_core::estimator::Estimator;
 pub use engine::{GinsEngine, GnssQueued};
 pub use eskf::{Eskf, FilterError};
 pub use measurement::{

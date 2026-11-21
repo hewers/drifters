@@ -141,7 +141,7 @@ impl<const M: usize> Measurement<M> {
 ///
 /// `v_body_est − v_body_true = Cᵀ·δv − Cᵀ·[v_n×]·φ`.
 fn body_velocity_jacobians(pva: &Pva) -> (Mat3, Mat3) {
-    let ct = pva.attitude.dcm.transpose();
+    let ct = pva.attitude.dcm().transpose();
     let wrt_velocity = ct;
     let wrt_attitude = -ct.matmul(&pva.velocity.to_vec3().skew());
     (wrt_velocity, wrt_attitude)
@@ -153,7 +153,7 @@ fn body_velocity_jacobians(pva: &Pva) -> (Mat3, Mat3) {
 /// body-frame one with `C_vb` in front.
 fn vehicle_velocity(pva: &Pva, mounting: &VehicleMounting) -> (Vec3, Mat3, Mat3) {
     let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(pva);
-    let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+    let v_body = pva.attitude.quat().rotate_inverse(pva.velocity.to_vec3());
     let c = mounting.to_dcm();
     (c * v_body, c.matmul(&wrt_velocity), c.matmul(&wrt_attitude))
 }
@@ -234,7 +234,7 @@ pub fn zero_velocity(pva: &Pva, sigma: Vec3) -> Measurement<3> {
 /// vehicle really is.
 pub fn zero_angular_rate(pva: &Pva, rate: Vec3, gyro_scale: Vec3, sigma: Vec3) -> Measurement<3> {
     let earth = drifters_core::earth::Wgs84::omega_ie_n(pva.position.lat);
-    let ct = pva.attitude.dcm.transpose();
+    let ct = pva.attitude.dcm().transpose();
     let innovation = rate - ct * earth;
 
     let mut jacobian = Matrix::<3, N_STATE>::zeros();
@@ -457,7 +457,7 @@ pub fn magnetic_heading(pva: &Pva, heading: F, sigma: F) -> Measurement<1> {
 /// [`MagFit::is_plausible`]: drifters_core::magnetometer::MagFit::is_plausible
 pub fn magnetometer(pva: &Pva, measured: Vec3, reference: Vec3, sigma: F) -> Measurement<3> {
     let north = reference.normalized();
-    let to_body = pva.attitude.dcm.transpose();
+    let to_body = pva.attitude.dcm().transpose();
     let predicted = to_body * north;
     let mut jacobian = Matrix::<3, N_STATE>::zeros();
     jacobian.set_block(0, PHI_ID, &to_body.matmul(&north.skew()).scaled(-1.0));
@@ -513,7 +513,7 @@ pub fn gnss_velocity(
     sigma: Vec3,
 ) -> Measurement<3> {
     let lever_rate_body = imu.gyro().cross(lever_arm);
-    let lever_rate_n = pva.attitude.dcm * lever_rate_body;
+    let lever_rate_n = pva.attitude.dcm() * lever_rate_body;
     let predicted = pva.velocity.to_vec3() + lever_rate_n;
     let innovation = predicted - measured.to_vec3();
 
@@ -1195,7 +1195,7 @@ mod tests {
     /// The reading a perfect sensor gives when the attitude is the estimate
     /// turned by `phi`, using the convention of this module.
     fn reading_with_error(pva: &Pva, reference: Vec3, phi: Vec3) -> Vec3 {
-        let truth = drifters_core::math::Quat::from_rotation_vector(phi) * pva.attitude.quat;
+        let truth = drifters_core::math::Quat::from_rotation_vector(phi) * pva.attitude.quat();
         truth.rotate_inverse(reference.normalized())
     }
 
@@ -1203,7 +1203,7 @@ mod tests {
     fn a_perfect_reading_leaves_no_magnetometer_innovation() {
         let (pva, reference) = magnetometer_case();
         // In units of its own, and the magnitude must not matter.
-        let measured = pva.attitude.quat.rotate_inverse(reference) * 3.0;
+        let measured = pva.attitude.quat().rotate_inverse(reference) * 3.0;
         let m = magnetometer(&pva, measured, reference, 0.02);
         assert!(Vec3::from(m.innovation).norm() < 1e-12);
     }
@@ -1230,7 +1230,7 @@ mod tests {
     #[test]
     fn the_magnetometer_innovation_is_as_long_as_the_angle_at_any_angle() {
         let (pva, reference) = magnetometer_case();
-        let predicted = pva.attitude.quat.rotate_inverse(reference.normalized());
+        let predicted = pva.attitude.quat().rotate_inverse(reference.normalized());
         let axis = predicted.cross(Vec3::new(0.0, 1.0, 0.0)).normalized();
         for degrees in [0.5_f64, 25.0, 60.0, 120.0, 179.0] {
             let angle = degrees.to_radians();
@@ -1247,7 +1247,7 @@ mod tests {
     #[test]
     fn a_reading_opposite_the_prediction_has_the_full_half_turn_of_innovation() {
         let (pva, reference) = magnetometer_case();
-        let opposite = pva.attitude.quat.rotate_inverse(reference) * -1.0;
+        let opposite = pva.attitude.quat().rotate_inverse(reference) * -1.0;
         let y = Vec3::from(magnetometer(&pva, opposite, reference, 0.02).innovation);
         assert_relative_eq!(y.norm(), core::f64::consts::PI, epsilon = 1e-9);
     }
@@ -1295,7 +1295,7 @@ mod tests {
             let turned = |sign: F| {
                 let mut p = pva;
                 let turn = drifters_core::math::Quat::from_rotation_vector(unit * -sign);
-                p.attitude = Attitude::from_quat(turn * pva.attitude.quat);
+                p.attitude = Attitude::from_quat(turn * pva.attitude.quat());
                 innovations(&p)
             };
             let (up, down) = (turned(1.0), turned(-1.0));
@@ -1310,7 +1310,7 @@ mod tests {
     fn an_aligned_mounting_is_the_body_frame_constraint() {
         let (pva, _, _) = mounted_case();
         let (wrt_velocity, wrt_attitude) = body_velocity_jacobians(&pva);
-        let v_body = pva.attitude.quat.rotate_inverse(pva.velocity.to_vec3());
+        let v_body = pva.attitude.quat().rotate_inverse(pva.velocity.to_vec3());
 
         let m = nonholonomic(&pva, (0.1, 0.2));
         let z = m.innovation.to_column();

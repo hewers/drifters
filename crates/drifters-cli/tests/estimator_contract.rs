@@ -72,9 +72,9 @@ impl Fixture for Eskf {
         ImuSample {
             time: GpsTime::from_tow(t),
             dt,
-            dtheta: attitude.quat.rotate_inverse(Wgs84::omega_ie_n(p.lat)) * dt,
+            dtheta: attitude.quat().rotate_inverse(Wgs84::omega_ie_n(p.lat)) * dt,
             dvel: attitude
-                .quat
+                .quat()
                 .rotate_inverse(-Wgs84::gravity_n(p.lat, p.height))
                 * dt,
         }
@@ -403,9 +403,22 @@ fn a_wild_velocity_is_gated_out_and_a_consistent_one_readmitted<F: Fixture>() {
     let mut wild = fix_at(t + 0.005, e.antenna_position(), 0.5);
     wild.velocity = Some(Ned::ZERO);
     wild.velocity_std = Vec3::splat(0.05);
+    let mut position_only = e;
+    let _ = position_only.add_gnss(GnssFix {
+        velocity: None,
+        ..wild
+    });
+    let before = e.update_sequence();
     let _ = e.add_gnss(wild);
     let sample = F::sample(&e, 0.01, t + 0.01);
     e.add_imu(sample).unwrap();
+    position_only.add_imu(sample).unwrap();
+    assert_eq!(e.update_sequence(), before + 1, "only position was applied");
+    assert_eq!(
+        e.last_nis(),
+        position_only.last_nis(),
+        "rejected velocity must not overwrite position NIS"
+    );
     assert!(
         e.nav_state().speed() > 4.9,
         "a ten-sigma velocity was accepted: speed {}",
@@ -523,6 +536,46 @@ fn a_late_fix_through_the_rewind_layer_lands_as_it_would_have_on_time<F: Fixture
     assert_eq!(e.pva_std(), on_time.pva_std());
     assert_eq!(e.last_nis(), on_time.last_nis());
     assert_eq!(e.consecutive_rejections(), on_time.consecutive_rejections());
+}
+
+#[test]
+fn both_constructors_refuse_invalid_common_inputs() {
+    for bad in [f64::NAN, f64::INFINITY] {
+        let mut a = GinsOptions::default();
+        let mut b = EqfOptions::default();
+        a.initial_state.velocity.e = bad;
+        b.initial_state = a.initial_state;
+        assert!(GinsEngine::new(a).is_err() && EqfEngine::new(b).is_err());
+        let mut a = GinsOptions::default();
+        a.initial_imu_error.accel_bias.x = bad;
+        let mut b = EqfOptions::default();
+        b.initial_accel_bias.x = bad;
+        assert!(GinsEngine::new(a).is_err() && EqfEngine::new(b).is_err());
+    }
+    let angles = Euler::new(f64::NAN, 0.0, 0.0);
+    assert!(GinsEngine::new(GinsOptions::default().with_initial_state(
+        origin(),
+        Ned::ZERO,
+        angles
+    ))
+    .is_err());
+    assert!(
+        EqfEngine::new(EqfOptions::default().with_initial_state(origin(), Ned::ZERO, angles))
+            .is_err()
+    );
+}
+
+#[test]
+fn equal_nis_values_are_still_distinct_applied_updates() {
+    let mut a = Eskf::engine(Ned::ZERO);
+    let mut b = Eqf::engine(Ned::ZERO);
+    let north = Vec3::new(1.0, 0.0, 0.0);
+    for seq in 1..=2 {
+        assert!(a.apply_magnetometer(north, north, 0.1).unwrap());
+        assert!(b.apply_magnetometer(north, north, 0.1).unwrap());
+        assert_eq!((a.last_nis(), a.update_sequence()), (Some(0.0), seq));
+        assert_eq!((b.last_nis(), b.update_sequence()), (Some(0.0), seq));
+    }
 }
 
 /// Instantiate every contract test once per estimator.

@@ -8,6 +8,7 @@ members = [
     "crates/drifters-proto",
     "crates/drifters-interop",
     "crates/drifters-cli",
+    "examples/consumer",
     "xtask",
 ]
 

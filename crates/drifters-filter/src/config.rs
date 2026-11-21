@@ -4,7 +4,7 @@ use drifters_core::align::Alignment;
 use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::mounting::VehicleMounting;
-use drifters_core::types::{Attitude, ImuError, ImuNoise, Pva};
+use drifters_core::types::{usable_sigmas, Attitude, ImuError, ImuNoise, Pva};
 use drifters_core::F;
 
 /// Everything the engine needs to start, mirroring KF-GINS's `GINSOptions`.
@@ -54,7 +54,7 @@ pub struct GinsOptions {
     pub initial_position_std: Vec3,
     /// One-sigma initial velocity uncertainty, NED m/s.
     pub initial_velocity_std: Vec3,
-    /// One-sigma initial attitude uncertainty, radians (roll, pitch, yaw).
+    /// One-sigma initial attitude uncertainty, radians about north, east, and down.
     pub initial_attitude_std: Vec3,
     /// One-sigma initial gyroscope bias uncertainty, rad/s.
     pub initial_gyro_bias_std: Vec3,
@@ -215,6 +215,18 @@ impl GinsOptions {
         if !self.initial_state.position.is_valid() {
             return Some(ConfigError::InvalidInitialPosition);
         }
+        if !self.initial_state.is_finite() || !self.initial_imu_error.is_finite() {
+            return Some(ConfigError::NonFiniteInitialState);
+        }
+        if [
+            self.initial_imu_error.gyro_scale,
+            self.initial_imu_error.accel_scale,
+        ]
+        .iter()
+        .any(|s| s.to_array().contains(&-1.0))
+        {
+            return Some(ConfigError::SingularScaleFactor);
+        }
         if self.imu_noise.correlation_time <= 0.0 || !self.imu_noise.correlation_time.is_finite() {
             return Some(ConfigError::NonPositiveCorrelationTime);
         }
@@ -228,22 +240,16 @@ impl GinsOptions {
             self.initial_accel_scale_std,
         ];
         for s in sigmas {
-            if !s.is_finite() || s.x <= 0.0 || s.y <= 0.0 || s.z <= 0.0 {
+            if !usable_sigmas(s) || s.squared().amax() > drifters_core::estimator::MAX_VARIANCE {
+                return Some(ConfigError::NonPositiveInitialStd);
+            }
+            #[cfg(feature = "f32-covariance")]
+            if s.squared().to_array().iter().any(|&v| v as f32 == 0.0) {
                 return Some(ConfigError::NonPositiveInitialStd);
             }
         }
-        let noises = [
-            self.imu_noise.gyro_arw,
-            self.imu_noise.accel_vrw,
-            self.imu_noise.gyro_bias_std,
-            self.imu_noise.accel_bias_std,
-            self.imu_noise.gyro_scale_std,
-            self.imu_noise.accel_scale_std,
-        ];
-        for n in noises {
-            if !n.is_finite() || n.x < 0.0 || n.y < 0.0 || n.z < 0.0 {
-                return Some(ConfigError::NegativeProcessNoise);
-            }
+        if !self.imu_noise.is_valid() {
+            return Some(ConfigError::NegativeProcessNoise);
         }
         if !self.antenna_lever_arm.is_finite() {
             return Some(ConfigError::InvalidLeverArm);
@@ -266,6 +272,10 @@ impl GinsOptions {
 pub enum ConfigError {
     /// The initial geodetic position is out of range or not finite.
     InvalidInitialPosition,
+    /// The initial velocity, attitude, or IMU calibration is not finite.
+    NonFiniteInitialState,
+    /// Calibration would divide by `1 + scale = 0`.
+    SingularScaleFactor,
     /// A Gauss-Markov correlation time must be strictly positive.
     NonPositiveCorrelationTime,
     /// Initial standard deviations must be strictly positive: a zero makes the
@@ -288,8 +298,10 @@ impl ConfigError {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidInitialPosition => "initial position is out of range or not finite",
+            Self::NonFiniteInitialState => "initial state or IMU calibration is not finite",
+            Self::SingularScaleFactor => "an IMU scale factor gives zero gain",
             Self::NonPositiveCorrelationTime => "Gauss-Markov correlation time must be > 0",
-            Self::NonPositiveInitialStd => "initial standard deviations must be > 0",
+            Self::NonPositiveInitialStd => "initial sigmas must yield positive, representable variances within the filter limit",
             Self::NegativeProcessNoise => "process noise densities must be >= 0",
             Self::InvalidLeverArm => "antenna lever arm is not finite",
             Self::InvalidInflation => "rejection inflation must be finite and >= 1.0",

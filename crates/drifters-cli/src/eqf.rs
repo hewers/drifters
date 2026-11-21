@@ -232,14 +232,14 @@ pub fn kfgins_options(
     gnss: &[GnssFix],
     earth: EarthTreatment,
     alpha: Option<f64>,
-) -> EqfOptions {
+) -> Result<EqfOptions, drifters_eqf::ConfigError> {
     let o = &config.options;
     let anchor = gnss
         .iter()
         .find(|f| f.time.tow() >= config.start_time)
         .map(|f| f.position)
         .unwrap_or(o.initial_state.position);
-    let mut process_noise = ProcessNoise::from_imu_noise(&o.imu_noise);
+    let mut process_noise = ProcessNoise::from_imu_noise(&o.imu_noise)?;
     // A lever arm that may drift by a fraction of a millimetre over the hour,
     // so the filter never becomes certain enough to stop listening.
     process_noise.lever = Vec3::splat(1e-10);
@@ -260,7 +260,7 @@ pub fn kfgins_options(
     options.initial_mag_std = Vec3::splat(1e-3);
     options.process_noise = process_noise;
     options.gcu_alpha = alpha;
-    options.with_accel_scale_factor(o.initial_accel_scale_std, &o.imu_noise)
+    Ok(options.with_accel_scale_factor(o.initial_accel_scale_std, &o.imu_noise))
 }
 
 /// The EqF configured for a GSDC phone trace, from the same IMU noise model
@@ -287,8 +287,8 @@ pub fn gsdc_options(
     accel_scale_std: Vec3,
     earth: EarthTreatment,
     alpha: Option<f64>,
-) -> EqfOptions {
-    let mut process_noise = ProcessNoise::from_imu_noise(noise);
+) -> Result<EqfOptions, drifters_eqf::ConfigError> {
+    let mut process_noise = ProcessNoise::from_imu_noise(noise)?;
     process_noise.lever = Vec3::splat(1e-12);
     let mut options = earth.apply(
         EqfOptions::default()
@@ -304,7 +304,7 @@ pub fn gsdc_options(
     options.initial_mag_std = Vec3::splat(1e-3);
     options.process_noise = process_noise;
     options.gcu_alpha = alpha;
-    options.with_accel_scale_factor(accel_scale_std, noise)
+    Ok(options.with_accel_scale_factor(accel_scale_std, noise))
 }
 
 /// `--alpha`: a rate in `[0, 1]`, or `off` for no GCU inflation at all.

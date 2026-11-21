@@ -599,7 +599,7 @@ fn drive_alignment(case: &AlignCase, mut feed: impl FnMut(AlignEvent) -> bool) -
 
 /// Whether an alignment came out where the noiseless vehicle really is.
 fn alignment_is_right(a: &Alignment, case: &AlignCase, offset: Vec3, velocity: Vec3) -> bool {
-    let error = a.pva.attitude.quat * Quat::from_euler(0.0, 0.0, ALIGN_YAW).conjugate();
+    let error = a.pva.attitude.quat() * Quat::from_euler(0.0, 0.0, ALIGN_YAW).conjugate();
     let tilt = Vec3::new(error.x, error.y, error.z) * 2.0;
     let position = a
         .pva

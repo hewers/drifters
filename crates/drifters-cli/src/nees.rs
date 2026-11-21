@@ -1261,7 +1261,7 @@ pub mod eskf {
             let tow = state.time.tow();
             let d = state.position().ned_from(truth_at(tow));
             let dv = state.velocity().to_vec3() - velocity.to_vec3();
-            let phi = Quat::from_dcm(&r_nb.matmul(&state.pva.attitude.dcm.transpose()))
+            let phi = Quat::from_dcm(&r_nb.matmul(&state.pva.attitude.dcm().transpose()))
                 .to_rotation_vector();
             let mut e = Matrix::<9, 1>::zeros();
             for i in 0..3 {

@@ -94,7 +94,7 @@ fn update_velocity(previous: &Pva, imu_pre: &ImuSample, imu_cur: &ImuSample) -> 
     let dv_f = specific_force_to_nav(
         &start,
         previous.velocity,
-        previous.attitude.dcm,
+        previous.attitude.dcm(),
         dvel_body,
         dt,
     );
@@ -106,7 +106,7 @@ fn update_velocity(previous: &Pva, imu_pre: &ImuSample, imu_cur: &ImuSample) -> 
 
     // Pass 2: the real update, with the earth terms taken at the midpoint.
     let mid = Local::at(mid_position.lat, mid_position.height);
-    let dv_f = specific_force_to_nav(&mid, mid_velocity, previous.attitude.dcm, dvel_body, dt);
+    let dv_f = specific_force_to_nav(&mid, mid_velocity, previous.attitude.dcm(), dvel_body, dt);
     let dv_g = gravity_coriolis_increment(&mid, mid_velocity, dt);
     Ned::from_vec3(previous.velocity.to_vec3() + dv_f + dv_g)
 }
@@ -155,7 +155,7 @@ fn update_attitude(
     // Body frame rotation over the interval, coning-corrected.
     let q_bb = Quat::from_rotation_vector(compensated_angle_increment(imu_pre, imu_cur));
 
-    Attitude::from_quat(q_nn * previous.attitude.quat * q_bb)
+    Attitude::from_quat(q_nn * previous.attitude.quat() * q_bb)
 }
 
 #[cfg(test)]
@@ -181,8 +181,8 @@ mod tests {
         ImuSample {
             time: GpsTime::from_tow(t),
             dt,
-            dtheta: attitude.quat.rotate_inverse(w_ie) * dt,
-            dvel: attitude.quat.rotate_inverse(f_n) * dt,
+            dtheta: attitude.quat().rotate_inverse(w_ie) * dt,
+            dvel: attitude.quat().rotate_inverse(f_n) * dt,
         }
     }
 
@@ -225,7 +225,7 @@ mod tests {
         // the attitude must stay at identity: the earth-rate the gyros see is
         // exactly cancelled by the navigation frame's own rotation.
         let end = run_stationary(60.0, 0.01);
-        let tilt = end.attitude.quat.angle_to(Quat::IDENTITY);
+        let tilt = end.attitude.quat().angle_to(Quat::IDENTITY);
         assert!(tilt < 1e-8, "attitude wandered {tilt} rad in 60 s");
     }
 
@@ -396,7 +396,7 @@ mod tests {
             ..Default::default()
         };
         let next = mechanize(&start, &ImuSample::default(), &imu);
-        let rotated = next.attitude.quat.angle_to(start.attitude.quat);
+        let rotated = next.attitude.quat().angle_to(start.attitude.quat());
         assert!(rotated < 1e-6, "attitude moved {rotated} rad");
     }
 

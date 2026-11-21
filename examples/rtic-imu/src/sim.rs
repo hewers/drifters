@@ -91,7 +91,7 @@ fn ideal(pva: &Pva) -> (Vec3, Vec3) {
     let v = pva.velocity.to_vec3();
     let w_ie = Wgs84::omega_ie_n(lat);
     let w_en = Wgs84::omega_en_n(lat, height, v);
-    let body_from_nav = pva.attitude.dcm.transpose();
+    let body_from_nav = pva.attitude.dcm().transpose();
     let gyro = body_from_nav * (w_ie + w_en);
     let force = (w_ie * 2.0 + w_en).cross(v) - Wgs84::gravity_n(lat, height);
     (gyro, body_from_nav * force)

@@ -91,7 +91,7 @@ fn ideal(pva: &Pva) -> (Vec3, Vec3) {
     let v = pva.velocity.to_vec3();
     let w_ie = Wgs84::omega_ie_n(lat);
     let w_en = Wgs84::omega_en_n(lat, height, v);
-    let body_from_nav = pva.attitude.dcm.transpose();
+    let body_from_nav = pva.attitude.dcm().transpose();
     let gyro = body_from_nav * (w_ie + w_en) + Vec3::new(0.0, 0.0, TURN_RATE);
     // The velocity turns with the vehicle, about the down axis.
     let turning = Vec3::new(-v.y, v.x, 0.0) * TURN_RATE;

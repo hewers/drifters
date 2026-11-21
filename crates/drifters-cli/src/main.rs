@@ -358,7 +358,7 @@ fn run_replay_command(
                 report
             }
             EngineKind::Eqf | EngineKind::EqfF32 => {
-                let options = eqf::kfgins_options(&config, &gnss, earth, alpha);
+                let options = eqf::kfgins_options(&config, &gnss, earth, alpha)?;
                 let report = if *kind == EngineKind::Eqf {
                     let engine = drifters_eqf::EqfEngine::new(options)?;
                     replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?

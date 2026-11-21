@@ -14,11 +14,12 @@ registry, so a crate cannot be published before the crates it depends on.
 6. drifters-interop     depends on core
 ```
 
-`drifters-cli` and `xtask` are `publish = false`:
+`drifters-cli`, `xtask`, and the consumer example are `publish = false`:
 
 - **drifters-cli** — a replay and validation tool, not a library. Its binary is
   called `drifters`, which is unrelated to the (taken) crate name.
 - **xtask** — repository automation.
+- **drifters-consumer-example** — the runnable quick start for both engines.
 
 ## Names
 
@@ -37,7 +38,7 @@ cargo test -p drifters-filter -p drifters-proto --features reduced-state
 cargo test -p drifters-filter -p drifters-cli --features f32-covariance
 cargo deny check
 cargo package --list -p <crate>          # confirm nothing unexpected ships
-cargo publish --dry-run --workspace      # packages and verifies all six, in order
+CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked --dry-run --workspace
 ```
 
 Update [`CHANGELOG.md`](../CHANGELOG.md) and tag the release. The tag is what
@@ -48,7 +49,9 @@ job on; there is nothing to run before it.
 
 The workspace dry-run verifies each dependent crate against a temporary local
 registry holding the ones before it, so nothing has to be published first.
-Checked with cargo 1.100. A dry-run of one dependent crate alone, with
+Use a fresh target directory for each rehearsal: Cargo 1.100 can otherwise
+reuse a cached `0.1.0` from an earlier dry-run of that same staging registry,
+even after its source has changed. The temporary target can be removed afterwards. A dry-run of one dependent crate alone, with
 `-p`, still fails with *"no matching package named drifters-core found"* until
 its dependency is on the registry: the workspace dependency declarations carry
 both `version` and `path`, and cargo strips the path at publish time.

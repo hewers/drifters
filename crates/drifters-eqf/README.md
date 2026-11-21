@@ -43,13 +43,13 @@ use drifters_core::prelude::*;
 use drifters_eqf::{EqfEngine, EqfOptions};
 
 let mut engine = EqfEngine::new(EqfOptions::default())?;
+let queued = engine.add_gnss(gnss_fix); // queue before the interval containing this fix
 engine.add_imu(imu_sample)?;
-let queued = engine.add_gnss(gnss_fix); // `Stale` once the IMU has passed its epoch
 let solution = engine.nav_state();      // geodetic
 let lever_arm = engine.lever_arm();     // estimated, not configured
 ```
 
-Measured on Cortex-M4: 15.4 KiB peak stack, no panic machinery linked, and
+Measured on Cortex-M4: 15.3 KiB peak stack, no panic machinery linked, and
 4.5 million instructions per IMU sample. The last is the constraint. The
 covariance is dense `f64` and that core's FPU is single precision, so on a
 Cortex-M4F this engine cannot keep pace with an IMU at any usual rate; it

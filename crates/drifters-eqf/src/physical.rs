@@ -178,7 +178,29 @@ pub fn covariance(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix) -> StateM
 ///
 /// Row by row, so the product is never formed and the only temporary is `J`.
 pub fn variances(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix) -> [F; DIM] {
-    let j = jacobian(x, earth_rate);
+    variances_in_axes(x, earth_rate, sigma, None)
+}
+
+/// As `variances`, with the three navigation errors expressed in the local
+/// axes at the estimate. Rotate rows of J, not the diagonal of J Σ Jᵀ.
+/// Biases, lever arm, and calibration retain their own frames.
+pub(crate) fn variances_in_axes(
+    x: &Symmetry,
+    earth_rate: Vec3,
+    sigma: &StateMatrix,
+    local_to_anchor: Option<Mat3>,
+) -> [F; DIM] {
+    let mut j = jacobian(x, earth_rate);
+    if let Some(axes) = local_to_anchor {
+        let back = axes.transpose();
+        for rows in j.data[..GYRO_BIAS].chunks_exact_mut(3) {
+            if let [n, e, d] = rows {
+                for ((x, y), z) in n.iter_mut().zip(e).zip(d) {
+                    [*x, *y, *z] = (back * Vec3::new(*x, *y, *z)).to_array();
+                }
+            }
+        }
+    }
     let mut out = [0.0; DIM];
     for (variance, row) in out.iter_mut().zip(j.data.iter()) {
         let mut acc = 0.0;
@@ -208,7 +230,28 @@ pub fn variances(x: &Symmetry, earth_rate: Vec3, sigma: &StateMatrix) -> [F; DIM
 /// meant to be: an attitude error at a distance *is* a position error in `ε`,
 /// and a filter told otherwise believes it has information it was never given.
 pub fn covariance_from_std(x: &Symmetry, earth_rate: Vec3, std: &[F; DIM]) -> StateMatrix {
-    let m = jacobian_inverse(x, earth_rate);
+    covariance_from_std_in_axes(x, earth_rate, std, None)
+}
+
+/// The inverse coordinate change for a prior specified in vehicle-local NED.
+pub(crate) fn covariance_from_std_in_axes(
+    x: &Symmetry,
+    earth_rate: Vec3,
+    std: &[F; DIM],
+    local_to_anchor: Option<Mat3>,
+) -> StateMatrix {
+    let mut m = jacobian_inverse(x, earth_rate);
+    if let Some(axes) = local_to_anchor {
+        let back = axes.transpose();
+        for row in &mut m.data {
+            // Right multiplication by `axes` rotates each row vector.
+            for cols in row[..GYRO_BIAS].chunks_exact_mut(3) {
+                if let [x, y, z] = cols {
+                    [*x, *y, *z] = (back * Vec3::new(*x, *y, *z)).to_array();
+                }
+            }
+        }
+    }
     // M diag(σ²), by scaling M's columns.
     let mut scaled = m;
     for row in scaled.data.iter_mut() {

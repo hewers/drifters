@@ -1573,7 +1573,7 @@ mod alignment_closes_the_loop {
 
             // C_nb maps body to nav. A stationary platform's specific force in
             // nav must be straight up: (0, 0, -|f|).
-            let f_nav = attitude.dcm * f_body;
+            let f_nav = attitude.dcm() * f_body;
             let g = f_body.norm();
             assert_relative_eq!(f_nav.x, 0.0, epsilon = 1e-9);
             assert_relative_eq!(f_nav.y, 0.0, epsilon = 1e-9);

@@ -334,7 +334,7 @@ fn normalise(run: &Run) -> Normalised {
         ),
         velocity: over(a.pva.velocity.to_vec3() - w.velocity(), a.velocity_std),
         attitude: over(
-            attitude_error(a.pva.attitude.quat, w.attitude()),
+            attitude_error(a.pva.attitude.quat(), w.attitude()),
             a.attitude_std,
         ),
         gyro_bias: over(a.imu_error.gyro_bias - w.gyro_bias, a.gyro_bias_std),
@@ -369,7 +369,7 @@ impl Consistency {
         self.gyro_bias += n.gyro_bias.squared();
         self.accel_bias += n.accel_bias.squared();
         let a = &run.alignment;
-        let error = attitude_error(a.pva.attitude.quat, run.world.attitude());
+        let error = attitude_error(a.pva.attitude.quat(), run.world.attitude());
         self.heading_square += error.z * error.z;
         self.time += a.rest_time + a.motion_time;
         match a.heading_source {
@@ -491,7 +491,7 @@ fn fly<E: Estimator>(mut engine: E, mut run: Run, seconds: f64) -> (f64, f64, Ve
     }
     let state = engine.nav_state();
     let position = state.position().ned_from(run.world.position).norm();
-    let error = attitude_error(state.pva.attitude.quat, run.world.attitude());
+    let error = attitude_error(state.pva.attitude.quat(), run.world.attitude());
     (position, error.z.abs() / DEG_TO_RAD, error)
 }
 
@@ -506,6 +506,7 @@ fn eqf(run: &Run, noise: &ImuNoise) -> EqfEngine {
     let options = EqfOptions::default()
         .with_alignment(&run.alignment)
         .with_imu_noise(noise)
+        .unwrap()
         .with_earth_compensation(true);
     EqfEngine::new(options).expect("valid options from an alignment")
 }
@@ -566,7 +567,7 @@ fn heading_does_not_depend_on_mounting_or_course() {
             result = aligner.alignment().copied();
         }
         let a = result.expect("aligned");
-        let e = attitude_error(a.pva.attitude.quat, world.attitude());
+        let e = attitude_error(a.pva.attitude.quat(), world.attitude());
         assert!(
             e.z.abs() < 4.0 * a.attitude_std.z,
             "mount {k}: {} deg against sigma {} deg",
@@ -723,7 +724,7 @@ fn kf_gins_aligns_from_nothing() {
         truth[8] * DEG_TO_RAD,
         truth[9] * DEG_TO_RAD,
     );
-    let attitude = attitude_error(a.pva.attitude.quat, reference_attitude);
+    let attitude = attitude_error(a.pva.attitude.quat(), reference_attitude);
     let position = a
         .pva
         .position
@@ -811,11 +812,11 @@ fn carry(q: Quat, bias: Vec3, imu: &[ImuSample]) -> Quat {
 fn heading_difference(imu: &[ImuSample], a: (usize, &Alignment), b: (usize, &Alignment)) -> f64 {
     let (early, late) = if a.0 <= b.0 { (a, b) } else { (b, a) };
     let carried = carry(
-        early.1.pva.attitude.quat,
+        early.1.pva.attitude.quat(),
         early.1.imu_error.gyro_bias,
         &imu[early.0 + 1..=late.0],
     );
-    let e = attitude_error(carried, late.1.pva.attitude.quat).z;
+    let e = attitude_error(carried, late.1.pva.attitude.quat()).z;
     if a.0 <= b.0 {
         e
     } else {

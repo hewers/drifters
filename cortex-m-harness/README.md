@@ -89,10 +89,10 @@ instruction, and the harness times `add_imu` against it with SysTick:
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 1598320 (39958 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4509800 (112745 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 893480 (22337 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_EARTH add_imu = 4723480 (118087 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 1599280 (39982 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4509840 (112746 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 893520 (22338 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH add_imu = 4723520 (118088 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_EARTH_F32 add_imu = 914520 (22863 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN add_imu = 28880 (722 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN_WORST add_imu = 383080 (9577 ticks; only under -icount shift=0)

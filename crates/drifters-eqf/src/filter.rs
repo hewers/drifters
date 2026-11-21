@@ -113,8 +113,18 @@ impl ProcessNoise {
     /// ESKF's own discretisation makes.
     ///
     /// The lever arm and the magnetometer calibration get no process noise;
-    /// set them afterwards if the installation moves.
-    pub fn from_imu_noise(noise: &ImuNoise) -> Self {
+    /// set them afterwards if the installation moves. Invalid deviations or
+    /// correlation time return [`ConfigError::InvalidImuNoise`](crate::ConfigError::InvalidImuNoise).
+    pub fn from_imu_noise(noise: &ImuNoise) -> Result<Self, crate::ConfigError> {
+        // Validate *before* squaring: a negative datasheet sigma would
+        // otherwise become indistinguishable from a legitimate density.
+        if !noise.is_valid() {
+            return Err(crate::ConfigError::InvalidImuNoise);
+        }
+        Ok(Self::densities(noise))
+    }
+
+    pub(crate) fn densities(noise: &ImuNoise) -> Self {
         Self {
             gyro: noise.gyro_arw.squared(),
             accel: noise.accel_vrw.squared(),
@@ -380,16 +390,19 @@ impl<C: Covariance> EqFilter<C> {
             None => *noise,
             Some(alpha) => gcu::effective_noise_at(nis, &y, &projected, noise, alpha),
         };
-        let Some(correction) = self.sigma.fuse(c, &y, &noise) else {
+        // Fusion narrows the covariance. Do not publish it if the associated
+        // group correction cannot be applied to the observer.
+        let Some(step) = self.sigma.try_fuse(c, &y, &noise, |correction| {
+            let step = Algebra::from_array(&correction);
+            let next = Symmetry::exp(step).compose(&self.x);
+            if !observer_usable(&next) {
+                return None;
+            }
+            self.x = next;
+            Some(step)
+        }) else {
             return Verdict::Singular;
         };
-        // Left multiplication: see the module docs.
-        let step = Algebra::from_array(&correction);
-        let next = Symmetry::exp(step).compose(&self.x);
-        if !observer_usable(&next) {
-            return Verdict::Singular;
-        }
-        self.x = next;
         self.sigma.transport(step);
         Verdict::Applied(nis)
     }
@@ -1209,7 +1222,7 @@ mod tests {
     }
 
     fn resting_noise() -> ProcessNoise {
-        ProcessNoise::from_imu_noise(&drifters_core::types::ImuNoise::default())
+        ProcessNoise::from_imu_noise(&drifters_core::types::ImuNoise::default()).unwrap()
     }
 
     #[test]
@@ -1235,6 +1248,31 @@ mod tests {
         assert!(matches!(verdict, Verdict::Rejected(_)), "{verdict:?}");
         assert_eq!(f.x, x);
         assert_eq!(f.sigma, sigma);
+    }
+
+    #[test]
+    fn refusing_the_observer_correction_leaves_the_covariance_untouched() {
+        fn check<C: Covariance>() {
+            let mut f = EqFilter::<C>::with_covariance(
+                &State::default(),
+                &StateMatrix::identity(),
+                GRAVITY,
+            )
+            .unwrap();
+            f.alpha = None;
+            let before = f.sigma.with_dense(|p| *p);
+            let x = f.x;
+            let mut c = OutputMatrix::zeros();
+            c.set_block(0, 6, &Mat3::identity()); // Observe position directly.
+            assert_eq!(
+                f.update_gated(&c, Vec3::splat(1e17), &Mat3::identity(), None),
+                Verdict::Singular
+            );
+            assert_eq!(f.sigma.with_dense(|p| *p), before);
+            assert_eq!(f.x, x);
+        }
+        check::<StateMatrix>();
+        check::<crate::Ud<f32>>();
     }
 
     #[test]

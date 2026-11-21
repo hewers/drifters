@@ -321,7 +321,7 @@ fn fly(mut engine: GinsEngine, aiding: Aiding, outage: &Outage) -> Flown {
         }
     }
     let state = engine.nav_state();
-    let phi = (outage.attitude * state.pva.attitude.quat.conjugate()).to_rotation_vector();
+    let phi = (outage.attitude * state.pva.attitude.quat().conjugate()).to_rotation_vector();
     let error = state.position().ned_from(outage.position).to_vec3();
     let sigma = engine.pva_std().attitude.z;
     Flown {

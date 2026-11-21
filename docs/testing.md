@@ -405,8 +405,10 @@ stays positive definite — while being badly wrong about its own uncertainty.
 
 For each measurement, `ν S⁻¹ ν` where `S = H P Hᵀ + R`. If the model is right
 this is chi-squared with `m` degrees of freedom, so its **mean over a long run
-should equal the measurement dimension**. `Eskf::last_nis` records it on every
-update, gated or not.
+should equal the measurement dimension**. `Estimator::last_nis` records it on every
+applied update, not on a gate rejection. Compare `update_sequence()` before
+and after a call to detect an update even when two statistics are identical.
+A gate truncates the distribution of the accepted statistics.
 
 - mean ≫ m — **overconfident**. The covariance is smaller than the errors being
   made, so measurements are under-weighted and, with gating on, eventually all
@@ -556,17 +558,17 @@ ceiling: 15 KiB for `PEAK`, the ESKF (13 KiB with `f32-covariance`, 10 KiB and
 
 | | peak stack, bytes |
 |---|---|
-| ESKF, 21-state | 13 576 |
-| ESKF, 21-state, `f32-covariance` | 11 936 |
-| ESKF, 15-state (`reduced-state`) | 8 944 |
-| ESKF, 15-state, `f32-covariance` | 7 760 |
-| EqF engine, dense `f64` | **15 880** |
-| EqF engine, factored `f32` | **14 464** |
+| ESKF, 21-state | 13 232 |
+| ESKF, 21-state, `f32-covariance` | 11 584 |
+| ESKF, 15-state (`reduced-state`) | 8 512 |
+| ESKF, 15-state, `f32-covariance` | 7 328 |
+| EqF engine, dense `f64` | **15 616** |
+| EqF engine, factored `f32` | **14 616** |
 | EqF engine, either form, Earth in the group | the same as without |
 
 Measured with Rust 1.100. The ESKF's peak is the time update. The held-state ZUPT
-reaches 7 216 bytes, and the three-axis magnetometer update 7 600, 6 772 with
-`f32-covariance`, and 5 408 and 4 972 at 15 states, well under the peak in each.
+reaches 7 280 bytes, and the three-axis magnetometer update 7 696, 7 128 with
+`f32-covariance`, and 5 696 and 5 480 at 15 states, well under the peak in each.
 
 The two engines are measured by the same generic code, written against
 [`Estimator`](../crates/drifters-core/src/estimator.rs) and
@@ -600,8 +602,8 @@ by operation, in bytes, the same with the Earth's rotation in the group:
 | operation | dense `f64` | factored `f32` |
 |---|---|---|
 | `add_imu` (propagate) | 14 312 | 10 716 |
-| `add_imu` with a GNSS fix | **15 880** | **14 464** |
-| `apply_magnetometer` | 14 752 | 13 368 |
+| `add_imu` with a GNSS fix | **15 616** | **14 616** |
+| `apply_magnetometer` | 14 432 | 13 456 |
 
 A single operation's figure moves with how the optimiser inlines under whole-program
 LTO, which is why CI holds the peak to a ceiling and not this table.
@@ -650,10 +652,10 @@ cd cortex-m-harness && cargo run --release -- -icount shift=0
 
 ```text
 CALIBRATION 2000000 instructions = 50000 ticks
-INSTRUCTIONS add_imu = 1598320 (39958 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF add_imu = 4509800 (112745 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_F32 add_imu = 893480 (22337 ticks; only under -icount shift=0)
-INSTRUCTIONS_EQF_EARTH add_imu = 4723480 (118087 ticks; only under -icount shift=0)
+INSTRUCTIONS add_imu = 1599280 (39982 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF add_imu = 4509840 (112746 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_F32 add_imu = 893520 (22338 ticks; only under -icount shift=0)
+INSTRUCTIONS_EQF_EARTH add_imu = 4723520 (118088 ticks; only under -icount shift=0)
 INSTRUCTIONS_EQF_EARTH_F32 add_imu = 914520 (22863 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN add_imu = 28880 (722 ticks; only under -icount shift=0)
 INSTRUCTIONS_ALIGN_WORST add_imu = 383080 (9577 ticks; only under -icount shift=0)
@@ -671,20 +673,20 @@ Per `add_imu` on `mps2-an386`, the mean of 200 steps, measured with Rust 1.100:
 
 | configuration | instructions | SysTick ticks |
 |---|---|---|
-| ESKF, 21-state, `f64` | **1 598 320** | 39 958 |
-| ESKF, 21-state, `f32-covariance` | **348 920** | 8 723 |
-| ESKF, 15-state (`reduced-state`) | **884 800** | 22 120 |
-| ESKF, 15-state, `f32-covariance` | **231 320** | 5 783 |
-| EqF engine, dense `f64` | **4 509 800** | 112 745 |
-| EqF engine, factored `f32` | **893 480** | 22 337 |
-| EqF engine, dense, Earth in the group | **4 723 480** | 118 087 |
+| ESKF, 21-state, `f64` | **1 599 280** | 39 982 |
+| ESKF, 21-state, `f32-covariance` | **349 840** | 8 746 |
+| ESKF, 15-state (`reduced-state`) | **885 560** | 22 139 |
+| ESKF, 15-state, `f32-covariance` | **232 080** | 5 802 |
+| EqF engine, dense `f64` | **4 509 840** | 112 746 |
+| EqF engine, factored `f32` | **893 520** | 22 338 |
+| EqF engine, dense, Earth in the group | **4 723 520** | 118 088 |
 | EqF engine, factored, Earth in the group | **914 520** | 22 863 |
 
 The single-precision covariance removes **78 %** of the work at 21 states and
 74 % at 15, at no measurable cost in accuracy. Dropping the six scale-factor
 states removes 45 %. For the equivariant filter, factoring the covariance and
 holding it in `f32` removes **80 %**, also at no measurable cost in accuracy; it
-lands at 2.56 times the ESKF with `f32-covariance`, where the dense form is 2.82
+lands at 2.55 times the ESKF with `f32-covariance`, where the dense form is 2.82
 times the ESKF in `f64`. Carrying the Earth's rotation in the group adds 4.7 % to
 the dense form and 2.4 % to the factored one.
 
@@ -698,12 +700,12 @@ run:
 
 | configuration | at best | against a 200 Hz IMU's 5 ms |
 |---|---|---|
-| ESKF, 21-state, `f64` | 9.51 ms | cannot at 200 Hz; fits 100 Hz only within 5 % of the floor |
-| ESKF, 21-state, `f32-covariance` | 2.07 ms | fits, if the real figure is within 2.4× of the floor |
-| ESKF, 15-state | 5.26 ms | cannot at 200 Hz, by 5 %; fits 100 Hz with about half the interval to spare |
-| ESKF, 15-state, `f32-covariance` | 1.37 ms | fits with a factor of 3.6 to spare |
+| ESKF, 21-state, `f64` | 9.52 ms | cannot at 200 Hz; fits 100 Hz only within 5 % of the floor |
+| ESKF, 21-state, `f32-covariance` | 2.08 ms | fits, if the real figure is within 2.4× of the floor |
+| ESKF, 15-state | 5.27 ms | cannot at 200 Hz, by 5 %; fits 100 Hz with about half the interval to spare |
+| ESKF, 15-state, `f32-covariance` | 1.38 ms | fits with a factor of 3.6 to spare |
 | EqF engine, dense `f64` | 26.8 ms | cannot keep up, nor at 50 Hz |
-| EqF engine, factored `f32` | 5.30 ms | cannot at 200 Hz, by 6 %; fits 100 Hz with about half the interval to spare |
+| EqF engine, factored `f32` | 5.32 ms | cannot at 200 Hz, by 6 %; fits 100 Hz with about half the interval to spare |
 
 So at 200 Hz on a Cortex-M4F, `f32-covariance` is not an optimisation. It is the
 configuration that runs, and for the equivariant filter the factored `f32`
@@ -793,41 +795,40 @@ CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER="qemu-system-arm -machine mps2-an500 -
   cargo run --release
 ```
 
-The binary shows the change directly. The Cortex-M4 build has about 4 400 call
-sites into soft-float routines and no `f64` instruction. The Cortex-M7 build has
-6 060 `f64` instructions and 44 call sites, every one a conversion between `f64`
-and a 64-bit integer, which the FPU has no instruction for. No `f64` arithmetic is
-left in software, and CI fails if `__aeabi_dadd`, `dsub`, `dmul` or `ddiv` is linked.
+The binary shows the change directly. The Cortex-M4 build calls soft-float
+routines; the Cortex-M7 build uses hardware `f64` instructions. Conversions
+between `f64` and a 64-bit integer still need a helper. CI fails if the M7
+binary links `__aeabi_dadd`, `dsub`, `dmul`, or `ddiv`.
 
 Instructions per `add_imu`, the mean of 200 steps:
 
 | configuration | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
 |---|---|---|---|
-| ESKF, 21-state, `f64` | 1 598 320 | **88 360** | 61 560 |
-| ESKF, 21-state, `f32-covariance` | 348 920 | **86 280** | 61 320 |
-| ESKF, 15-state (`reduced-state`) | 884 800 | **55 520** | 32 680 |
-| ESKF, 15-state, `f32-covariance` | 231 320 | **53 560** | 31 920 |
-| EqF engine, dense `f64` | 4 509 800 | **277 400** | 112 160 |
-| EqF engine, factored `f32` | 893 480 | **333 920** | 150 800 |
-| EqF engine, dense, Earth in the group | 4 723 480 | **284 800** | 115 320 |
+| ESKF, 21-state, `f64` | 1 599 280 | **89 320** | 61 400 |
+| ESKF, 21-state, `f32-covariance` | 349 840 | **87 200** | 61 120 |
+| ESKF, 15-state (`reduced-state`) | 885 560 | **56 200** | 32 600 |
+| ESKF, 15-state, `f32-covariance` | 232 080 | **54 240** | 31 840 |
+| EqF engine, dense `f64` | 4 509 840 | **277 400** | 112 160 |
+| EqF engine, factored `f32` | 893 520 | **333 920** | 150 800 |
+| EqF engine, dense, Earth in the group | 4 723 520 | **284 800** | 115 320 |
 | EqF engine, factored, Earth in the group | 914 520 | **336 520** | 151 360 |
 
 Hardware `f64` removes 94 % of the instructions of both the ESKF and the dense
 equivariant filter, and it changes which configuration to choose:
 
-- **`f32-covariance` stops mattering.** It saves 2.4 % at 21 states and 3.6 % at
+- **`f32-covariance` stops mattering.** It saves 2.4 % at 21 states and 3.5 % at
   15, where it saves 78 % and 74 % on the Cortex-M4. What it saves there is the
   soft-float, and here there is none.
 - **The factored `f32` equivariant filter costs more than the dense one**, by
   20 %. On the Cortex-M4 it is 80 % cheaper. The ESKF is the cheapest 21-state
   configuration measured, at about a third of the dense form.
 - **`opt-level = 3` helps the dense filter most.** It removes 60 % of that filter's
-  instructions and 30 % of the ESKF's. It takes code from 142 KB to 245 KB, and the
-  ESKF's peak stack from 13 236 bytes to 12 372.
+  instructions and 31 % of the ESKF's. It takes code from 155 KB to 258 KB, and the
+  ESKF's peak stack from 12 892 bytes to 12 260.
 
-Peak stack is 13 236 bytes for the ESKF (8 660 at 15 states), 14 732 for the
-dense equivariant filter and 13 476 for the factored one. Code is 31 % smaller
-than the Cortex-M4 build, 142 172 bytes against 206 408, because the call
+Peak stack is 12 892 bytes for the ESKF (8 196 at 15 states), 14 564 for the
+dense equivariant filter and 13 636 for the factored one. Code is 30 % smaller
+than the Cortex-M4 build, 155 148 bytes against 221 424, because the call
 sequences are gone.
 
 **These are still instruction counts, and two things stop them being read as
@@ -972,10 +973,10 @@ deepest call of the three, and CI holds it under 8 KiB on both cores.
 |---|---|---|
 | `size_of::<Aligner>()`, bytes | 4 744 | 4 744 |
 | `size_of::<Alignment>()`, bytes | 472 | 472 |
-| peak stack, `add_imu`, bytes | 5 356 | 4 320 |
+| peak stack, `add_imu`, bytes | 5 356 | 4 256 |
 | peak stack, `add_gnss`, bytes | 1 908 | 764 |
 | instructions, mean `add_imu` | 28 880 | 1 480 |
-| instructions, worst `add_imu` | 383 080 | 13 080 |
+| instructions, worst `add_imu` | 383 080 | 13 120 |
 | instructions, worst `add_gnss` | 58 960 | 3 960 |
 
 The instruction counts are from the velocity path under `-icount shift=0`, and

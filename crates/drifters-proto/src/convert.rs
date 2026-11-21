@@ -134,9 +134,22 @@ impl From<&GpsTime> for pb::GpsTime {
     }
 }
 
-impl From<&pb::GpsTime> for GpsTime {
-    fn from(t: &pb::GpsTime) -> Self {
-        Self::new(t.r#week, t.r#tow_s)
+impl TryFrom<&pb::GpsTime> for GpsTime {
+    type Error = ConvertError;
+
+    fn try_from(t: &pb::GpsTime) -> Result<Self, Self::Error> {
+        use drifters_core::time::{NANOS_PER_SECOND, NANOS_PER_WEEK, SECONDS_PER_WEEK};
+        if !(0.0..SECONDS_PER_WEEK).contains(&t.r#tow_s) {
+            return Err(ConvertError::Invalid("time"));
+        }
+        // GpsTime::new intentionally carries and saturates; a wire timestamp
+        // must instead describe a representable week and time of week.
+        let offset = (t.r#tow_s * NANOS_PER_SECOND as F + 0.5) as u64;
+        u64::from(t.r#week)
+            .checked_mul(NANOS_PER_WEEK)
+            .and_then(|base| base.checked_add(offset))
+            .map(Self::from_nanos)
+            .ok_or(ConvertError::Invalid("time"))
     }
 }
 
@@ -169,6 +182,15 @@ impl From<&Ned> for pb::Ned {
 impl From<&pb::Ned> for Ned {
     fn from(v: &pb::Ned) -> Self {
         Self::new(v.r#north_m, v.r#east_m, v.r#down_m)
+    }
+}
+
+fn solution_velocity(msg: &pb::Ned) -> Result<Ned, ConvertError> {
+    let velocity = Ned::from(msg);
+    if velocity.to_vec3().is_finite() {
+        Ok(velocity)
+    } else {
+        Err(ConvertError::Invalid("velocity_mps"))
     }
 }
 
@@ -210,7 +232,8 @@ impl TryFrom<&pb::Quaternion> for Quat {
     /// renormalised silently.
     fn try_from(q: &pb::Quaternion) -> Result<Self, Self::Error> {
         let quat = Quat::new(q.r#w, q.r#x, q.r#y, q.r#z);
-        if !quat.is_finite() || quat.norm() < 1.0e-9 {
+        let norm = quat.norm();
+        if !norm.is_finite() || norm < 1.0e-9 {
             return Err(ConvertError::Invalid("attitude"));
         }
         Ok(quat.normalized())
@@ -259,7 +282,7 @@ impl TryFrom<&pb::ImuSample> for ImuSample {
 
     fn try_from(msg: &pb::ImuSample) -> Result<Self, Self::Error> {
         let sample = Self {
-            time: require!(msg.r#time(), "time").into(),
+            time: require!(msg.r#time(), "time").try_into()?,
             dt: msg.r#dt_s,
             dtheta: require!(msg.r#dtheta_rad(), "dtheta_rad").into(),
             dvel: require!(msg.r#dvel_mps(), "dvel_mps").into(),
@@ -294,7 +317,7 @@ impl TryFrom<&pb::GnssFix> for GnssFix {
 
     fn try_from(msg: &pb::GnssFix) -> Result<Self, Self::Error> {
         let fix = Self {
-            time: require!(msg.r#time(), "time").into(),
+            time: require!(msg.r#time(), "time").try_into()?,
             position: require!(msg.r#position(), "position").try_into()?,
             position_std: require!(msg.r#position_std_m(), "position_std_m").into(),
             velocity: msg.r#velocity_mps().map(Into::into),
@@ -367,7 +390,7 @@ impl TryFrom<&pb::ImuNoise> for ImuNoise {
     type Error = ConvertError;
 
     fn try_from(msg: &pb::ImuNoise) -> Result<Self, Self::Error> {
-        Ok(Self {
+        let noise = Self {
             gyro_arw: require!(msg.r#gyro_arw(), "gyro_arw").into(),
             accel_vrw: require!(msg.r#accel_vrw(), "accel_vrw").into(),
             gyro_bias_std: require!(msg.r#gyro_bias_std_rps(), "gyro_bias_std_rps").into(),
@@ -375,7 +398,11 @@ impl TryFrom<&pb::ImuNoise> for ImuNoise {
             gyro_scale_std: require!(msg.r#gyro_scale_std(), "gyro_scale_std").into(),
             accel_scale_std: require!(msg.r#accel_scale_std(), "accel_scale_std").into(),
             correlation_time: msg.r#correlation_time_s,
-        })
+        };
+        noise
+            .is_valid()
+            .then_some(noise)
+            .ok_or(ConvertError::Invalid("imu_noise"))
     }
 }
 
@@ -388,7 +415,7 @@ impl From<&NavState> for pb::NavSolution {
         msg.set_time((&state.time).into());
         msg.set_position((&state.pva.position).into());
         msg.set_velocity_mps((&state.pva.velocity).into());
-        msg.set_attitude((&state.pva.attitude.quat).into());
+        msg.set_attitude((&state.pva.attitude.quat()).into());
         msg.set_euler((&state.pva.attitude.euler()).into());
         msg.set_imu_error((&state.imu_error).into());
         msg
@@ -406,10 +433,10 @@ impl TryFrom<&pb::NavSolution> for NavState {
     fn try_from(msg: &pb::NavSolution) -> Result<Self, Self::Error> {
         let quat: Quat = require!(msg.r#attitude(), "attitude").try_into()?;
         Ok(Self {
-            time: require!(msg.r#time(), "time").into(),
+            time: require!(msg.r#time(), "time").try_into()?,
             pva: Pva {
                 position: require!(msg.r#position(), "position").try_into()?,
-                velocity: require!(msg.r#velocity_mps(), "velocity_mps").into(),
+                velocity: solution_velocity(require!(msg.r#velocity_mps(), "velocity_mps"))?,
                 attitude: Attitude::from_quat(quat),
             },
             imu_error: require!(msg.r#imu_error(), "imu_error").try_into()?,
@@ -437,13 +464,19 @@ pub fn nav_solution(state: &NavState, state_std: Option<&[F; N_STATE]>) -> pb::N
 /// Returns `Ok(None)` when the solution carried none, which is the normal case
 /// and not an error.
 pub fn state_std(msg: &pb::NavSolution) -> Result<Option<[F; N_STATE]>, ConvertError> {
-    if msg.r#state_std.is_empty() {
+    read_std(msg.r#state_std.as_slice())
+}
+
+fn read_std<const N: usize>(slice: &[F]) -> Result<Option<[F; N]>, ConvertError> {
+    if slice.is_empty() {
         return Ok(None);
     }
-    let slice = msg.r#state_std.as_slice();
-    let array: [F; N_STATE] = slice.try_into().map_err(|_| ConvertError::WrongLength {
+    if slice.iter().any(|s| !s.is_finite() || *s < 0.0) {
+        return Err(ConvertError::Invalid("state_std"));
+    }
+    let array = slice.try_into().map_err(|_| ConvertError::WrongLength {
         field: "state_std",
-        expected: N_STATE,
+        expected: N,
         actual: slice.len(),
     })?;
     Ok(Some(array))
@@ -811,7 +844,7 @@ pub fn eqf_solution<C: Covariance>(engine: &EqfEngine<C>) -> pb::EqfSolution {
     msg.set_time((&nav.time).into());
     msg.set_position((&nav.pva.position).into());
     msg.set_velocity_mps((&nav.pva.velocity).into());
-    msg.set_attitude((&nav.pva.attitude.quat).into());
+    msg.set_attitude((&nav.pva.attitude.quat()).into());
     msg.set_euler((&nav.pva.attitude.euler()).into());
     msg.set_gyro_bias_rps((&nav.imu_error.gyro_bias).into());
     msg.set_accel_bias_mps2((&nav.imu_error.accel_bias).into());
@@ -827,16 +860,7 @@ pub fn eqf_solution<C: Covariance>(engine: &EqfEngine<C>) -> pb::EqfSolution {
 /// Returns `Ok(None)` when the solution carried none, which is the normal case
 /// and not an error.
 pub fn eqf_state_std(msg: &pb::EqfSolution) -> Result<Option<[F; EQF_STATE_DIM]>, ConvertError> {
-    if msg.r#state_std.is_empty() {
-        return Ok(None);
-    }
-    let slice = msg.r#state_std.as_slice();
-    let array: [F; EQF_STATE_DIM] = slice.try_into().map_err(|_| ConvertError::WrongLength {
-        field: "state_std",
-        expected: EQF_STATE_DIM,
-        actual: slice.len(),
-    })?;
-    Ok(Some(array))
+    read_std(msg.r#state_std.as_slice())
 }
 
 impl TryFrom<&pb::EqfSolution> for EqfEstimate {
@@ -858,10 +882,10 @@ impl TryFrom<&pb::EqfSolution> for EqfEstimate {
         }
         Ok(Self {
             nav: NavState {
-                time: require!(msg.r#time(), "time").into(),
+                time: require!(msg.r#time(), "time").try_into()?,
                 pva: Pva {
                     position: require!(msg.r#position(), "position").try_into()?,
-                    velocity: require!(msg.r#velocity_mps(), "velocity_mps").into(),
+                    velocity: solution_velocity(require!(msg.r#velocity_mps(), "velocity_mps"))?,
                     attitude: Attitude::from_quat(quat),
                 },
                 imu_error: ImuError {
@@ -1063,7 +1087,10 @@ mod tests {
         let back = state_matrix(&decoded).expect("valid covariance");
 
         assert_eq!(back, p);
-        assert_eq!(GpsTime::from(decoded.r#time().unwrap()).week(), 2311);
+        assert_eq!(
+            GpsTime::try_from(decoded.r#time().unwrap()).unwrap().week(),
+            2311
+        );
     }
 
     #[test]
@@ -1179,6 +1206,58 @@ mod tests {
     }
 
     #[test]
+    fn a_wire_time_does_not_saturate_or_turn_nan_into_week_start() {
+        for (week, tow) in [(0, -1.0), (0, 604800.0), (0, F::NAN), (u32::MAX, 0.0)] {
+            assert_eq!(
+                GpsTime::try_from(&pb::GpsTime { week, r#tow_s: tow }),
+                Err(ConvertError::Invalid("time"))
+            );
+        }
+        let last = GpsTime::from_nanos(u64::MAX);
+        assert_eq!(GpsTime::try_from(&pb::GpsTime::from(&last)), Ok(last));
+        assert_eq!(
+            read_std::<1>(&[-0.1]),
+            Err(ConvertError::Invalid("state_std"))
+        );
+        assert_eq!(
+            read_std::<1>(&[F::NAN]),
+            Err(ConvertError::Invalid("state_std"))
+        );
+    }
+
+    #[test]
+    fn an_overflowed_quaternion_norm_is_rejected() {
+        let msg = pb::Quaternion::from(&Quat::new(F::MAX, 0.0, 0.0, 0.0));
+        assert_eq!(Quat::try_from(&msg), Err(ConvertError::Invalid("attitude")));
+    }
+
+    #[test]
+    fn both_solution_decoders_reject_nonfinite_velocity() {
+        let mut a = pb::NavSolution::from(&sample_nav_state());
+        let mut b = pb::EqfSolution::default();
+        b.set_attitude((&Quat::IDENTITY).into());
+        b.set_mag_calibration((&Quat::IDENTITY).into());
+        b.set_time((&sample_time()).into());
+        b.set_position((&sample_position()).into());
+        b.set_lever_arm_m((&Vec3::ZERO).into());
+        b.set_gyro_bias_rps((&Vec3::ZERO).into());
+        b.set_accel_bias_mps2((&Vec3::ZERO).into());
+        for bad in [F::NAN, F::INFINITY, F::NEG_INFINITY] {
+            let vel = Ned::new(0.0, bad, 0.0);
+            a.set_velocity_mps((&vel).into());
+            b.set_velocity_mps((&vel).into());
+            assert_eq!(
+                NavState::try_from(&a),
+                Err(ConvertError::Invalid("velocity_mps"))
+            );
+            assert_eq!(
+                EqfEstimate::try_from(&b),
+                Err(ConvertError::Invalid("velocity_mps"))
+            );
+        }
+    }
+
+    #[test]
     fn a_quaternion_that_drifted_off_unit_length_is_renormalised() {
         let drifted = pb::Quaternion {
             r#w: 2.0,
@@ -1213,7 +1292,7 @@ mod tests {
         // `GinsOptions` is not `PartialEq`, so match on the error instead.
         assert!(matches!(
             GinsOptions::try_from(&msg),
-            Err(ConvertError::Invalid("gins_options"))
+            Err(ConvertError::Invalid("imu_noise"))
         ));
     }
 

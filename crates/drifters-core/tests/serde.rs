@@ -53,17 +53,17 @@ fn attitude_is_written_as_its_quaternion_and_the_dcm_is_rebuilt() {
     let json = serde_json::to_string(&a).unwrap();
     assert!(!json.contains("dcm"), "{json}");
     let back: Attitude = serde_json::from_str(&json).unwrap();
-    assert!(back.quat.angle_to(a.quat) < 1e-15);
+    assert!(back.quat().angle_to(a.quat()) < 1e-15);
     assert_eq!(
-        back.dcm,
-        back.quat.to_dcm(),
+        back.dcm(),
+        back.quat().to_dcm(),
         "the cache matches the quaternion"
     );
 
     // Normalised on the way in, as `Attitude::from_quat` always does.
     let unnormalised: Attitude =
         serde_json::from_str(r#"{ "w": 2.0, "x": 0.0, "y": 0.0, "z": 0.0 }"#).unwrap();
-    assert_eq!(unnormalised.quat, Quat::IDENTITY);
+    assert_eq!(unnormalised.quat(), Quat::IDENTITY);
 }
 
 /// Everything but attitude survives a round trip bit for bit. Attitude is

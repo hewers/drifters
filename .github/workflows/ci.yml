@@ -47,6 +47,7 @@ jobs:
             | join(",")')
           cargo test --workspace --exclude drifters-interop --features "$features"
       - run: cargo test --workspace --no-default-features
+      - run: cargo run --locked -p drifters-consumer-example
       # `reduced-state` and `f32-covariance` are both non-additive: one removes
       # states, the other changes the numerics of every filter in the build.
       # `--all-features` above enables them together, which is a real

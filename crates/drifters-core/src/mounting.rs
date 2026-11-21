@@ -276,7 +276,7 @@ impl MountingEstimator {
         let body = state
             .pva
             .attitude
-            .quat
+            .quat()
             .rotate_inverse(state.pva.velocity.to_vec3());
         let speed = body.norm();
         let usable = speed >= self.config.min_speed && rate <= self.config.max_turn_rate;

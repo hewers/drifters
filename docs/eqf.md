@@ -987,7 +987,9 @@ describe. That is not `diag(σ²)`, for the reason
 it is done where a filter is constructed so that every caller gets it. A test
 starts the engine three kilometres from its anchor and reads the configured
 sigmas back out exactly. `std_deviations` and `pva_std` report the covariance
-the same way, through the forward map.
+the same way, through the forward map. With the gravity gradient enabled,
+PVA standard deviations and GNSS fix sigmas use vehicle-local NED on both
+input and output; the filter's own covariance stays in its anchor chart.
 
 **The fix is applied at its epoch.** Through the same placement rule as the
 ESKF, `drifters_core::estimator::place`, so the two engines cannot disagree about
@@ -1042,7 +1044,7 @@ harness code:
 |---|---|---|
 | `EqfEngine` | 4 720 bytes | **2 120 bytes** |
 | `EqfRewindEngine<120, 32>` | 25 760 bytes | 17 960 bytes |
-| peak stack, a late fix through the rewind layer included | 15 880 bytes | **14 464 bytes** |
+| peak stack, a late fix through the rewind layer included | 15 616 bytes | **14 616 bytes** |
 | instructions per `add_imu` | 4.51 million | **0.89 million** |
 | at an instruction per cycle, 168 MHz | 26.8 ms | **5.3 ms** |
 | panic machinery linked | none | none |
@@ -1109,7 +1111,7 @@ into the factored buffers, so no whole `Φ` or `f64` copy of `G` sits beside the
 Gram–Schmidt rows.
 
 On a Cortex-M4 a sample alone peaks at 14 312 bytes dense and 10 716 factored, and a
-sample that consumes a fix at 15 880 and 14 464.
+sample that consumes a fix at 15 616 and 14 616.
 
 ## Implementation map
 

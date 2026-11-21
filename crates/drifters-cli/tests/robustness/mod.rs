@@ -338,7 +338,7 @@ impl Fingerprint {
 fn nav_components(state: &NavState) -> impl Iterator<Item = (&'static str, F)> {
     let p = state.pva.position;
     let v = state.pva.velocity;
-    let q = state.pva.attitude.quat;
+    let q = state.pva.attitude.quat();
     let e = state.imu_error;
     let vector = |name, v: Vec3| [(name, v.x), (name, v.y), (name, v.z)];
     [
@@ -737,7 +737,7 @@ fn check<S: Subject>(subject: &S) -> Result<(), String> {
             return Err(format!("{name} is {value}"));
         }
     }
-    let norm = state.pva.attitude.quat.norm();
+    let norm = state.pva.attitude.quat().norm();
     if (norm - 1.0).abs() > 1e-6 {
         return Err(format!("the attitude quaternion has norm {norm}"));
     }
@@ -855,7 +855,7 @@ fn start_time() -> GpsTime {
 /// The sample a stationary, level unit would report over `dt`.
 fn stationary(state: &NavState, dt: F) -> (Vec3, Vec3) {
     let p = state.position();
-    let q = state.pva.attitude.quat;
+    let q = state.pva.attitude.quat();
     (
         q.rotate_inverse(Wgs84::omega_ie_n(p.lat)) * dt,
         q.rotate_inverse(-Wgs84::gravity_n(p.lat, p.height)) * dt,

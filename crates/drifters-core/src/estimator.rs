@@ -182,7 +182,9 @@ pub enum FilterError {
     /// diverged.
     SingularInnovation,
     /// The step would have left a non-finite or out-of-range state or
-    /// covariance, so it was refused and they keep their last good values.
+    /// covariance, so neither is committed for that step. Earlier successful
+    /// steps (e.g. propagation to the fix or the position part of a combined
+    /// position/velocity fix) are not rolled back.
     Diverged,
 }
 
@@ -263,21 +265,20 @@ pub struct PvaStd {
 /// use drifters_core::estimator::Estimator;
 /// use drifters_core::types::{GnssFix, ImuSample};
 ///
-/// /// Feed one IMU sample and the fix that belongs to it, and report how far
-/// /// the antenna was from where the estimator had put it.
+/// /// Feed one IMU interval. Report NIS only if a measurement was applied.
 /// fn step<E: Estimator>(
 ///     estimator: &mut E,
 ///     sample: ImuSample,
 ///     fix: Option<GnssFix>,
-/// ) -> Option<f64> {
-///     let residual = fix.map(|f| estimator.antenna_position().ned_from(f.position).norm());
+/// ) -> Result<Option<f64>, drifters_core::estimator::FilterError> {
+///     let before = estimator.update_sequence();
 ///     if let Some(fix) = fix {
 ///         // Queue first: the engine applies it at its own epoch, inside the
 ///         // interval the sample covers.
 ///         let _ = estimator.add_gnss(fix);
 ///     }
-///     estimator.add_imu(sample).ok()?;
-///     residual
+///     estimator.add_imu(sample)?;
+///     Ok(estimator.last_nis().filter(|_| estimator.update_sequence() != before))
 /// }
 /// ```
 ///
@@ -326,6 +327,12 @@ pub trait Estimator {
     /// `None` before any update has been applied. Over a long run this should
     /// average the measurement dimension.
     fn last_nis(&self) -> Option<F>;
+
+    /// Sequence number of applied measurement updates, wrapping at `u32::MAX`.
+    /// Compare before and after a call to tell whether it applied a measurement,
+    /// even if consecutive measurements had identical NIS. Position and velocity
+    /// are separate updates. A rejection or error does not advance the sequence.
+    fn update_sequence(&self) -> u32;
 
     /// How many gated measurements have been rejected since the last accepted
     /// one. An engine set to count each sensor separately reports its

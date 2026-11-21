@@ -8,7 +8,7 @@ use drifters_core::frames::{Lla, Ned};
 #[cfg_attr(any(test, feature = "std", feature = "serde"), allow(unused_imports))]
 use drifters_core::math::Real;
 use drifters_core::math::{Euler, Vec3};
-use drifters_core::types::{Attitude, ImuNoise, Pva};
+use drifters_core::types::{usable_sigmas, Attitude, ImuNoise, Pva};
 use drifters_core::F;
 
 use crate::filter::ProcessNoise;
@@ -150,7 +150,7 @@ pub struct EqfOptions {
     /// NED axes at the vehicle on the way in and out. The cost is exact
     /// group-affineness: see [`crate::lift`]. Height still sees one gravity, so
     /// the vertical channel stays bounded and unaided climbs are not corrected.
-    /// Reported sigmas stay about the anchor's axes.
+    /// Initial and reported PVA sigmas use the same local axes as the state.
     pub gravity_gradient: bool,
     /// GCU convergence rate `α ∈ [0, 1]` — the lower, the faster — or `None`
     /// for no inflation at all. See [`crate::gcu`].
@@ -215,7 +215,7 @@ impl Default for EqfOptions {
             initial_accel_bias_std: Vec3::splat(2.5e4 * MGAL_TO_M_S2),
             initial_lever_arm_std: Vec3::splat(1.0),
             initial_mag_std: Vec3::splat(0.1),
-            process_noise: ProcessNoise::from_imu_noise(&ImuNoise::default()),
+            process_noise: ProcessNoise::densities(&ImuNoise::default()),
             compensate_earth: false,
             earth_in_group: false,
             gravity_gradient: false,
@@ -290,9 +290,9 @@ impl EqfOptions {
 
     /// Take the process noise from a datasheet-style IMU model. See
     /// [`ProcessNoise::from_imu_noise`].
-    pub fn with_imu_noise(mut self, imu_noise: &ImuNoise) -> Self {
-        self.process_noise = ProcessNoise::from_imu_noise(imu_noise);
-        self
+    pub fn with_imu_noise(mut self, imu_noise: &ImuNoise) -> Result<Self, ConfigError> {
+        self.process_noise = ProcessNoise::from_imu_noise(imu_noise)?;
+        Ok(self)
     }
 
     /// Turn input-side Earth compensation on or off.
@@ -354,7 +354,7 @@ impl EqfOptions {
     pub fn with_accel_scale_factor(mut self, initial_std: Vec3, imu_noise: &ImuNoise) -> Self {
         let here = self.anchor_or_initial();
         let gravity = drifters_core::earth::Wgs84::gravity_n(here.lat, here.height);
-        let specific_force = self.initial_state.attitude.dcm.transpose() * (-gravity);
+        let specific_force = self.initial_state.attitude.dcm().transpose() * (-gravity);
         let reading = Vec3::new(
             specific_force.x.abs(),
             specific_force.y.abs(),
@@ -426,7 +426,7 @@ impl EqfOptions {
             self.initial_accel_bias,
             self.initial_lever_arm,
         ];
-        if state.iter().any(|v| !v.is_finite()) || !self.initial_state.attitude.quat.is_finite() {
+        if state.iter().any(|v| !v.is_finite()) || !self.initial_state.attitude.quat().is_finite() {
             return Some(ConfigError::NonFiniteInitialState);
         }
         let sigmas = [
@@ -439,7 +439,7 @@ impl EqfOptions {
             self.initial_mag_std,
         ];
         for s in sigmas {
-            if !s.is_finite() || s.x <= 0.0 || s.y <= 0.0 || s.z <= 0.0 {
+            if !usable_sigmas(s) || s.squared().amax() > drifters_core::estimator::MAX_VARIANCE {
                 return Some(ConfigError::NonPositiveInitialStd);
             }
         }
@@ -482,15 +482,14 @@ pub enum ConfigError {
     /// Initial standard deviations must be strictly positive: a zero makes the
     /// covariance singular and the first update undefined.
     NonPositiveInitialStd,
-    /// Process noise densities must be finite and non-negative. A correlation
-    /// time of zero handed to
-    /// [`ProcessNoise::from_imu_noise`] ends up here.
+    /// Process noise densities must be finite and non-negative.
     NegativeProcessNoise,
+    /// Datasheet noise cannot be converted into valid spectral densities.
+    InvalidImuNoise,
     /// The GCU rate must lie in `[0, 1]`. To turn GCU off, set it to `None`.
     InvalidGcuRate,
-    /// The initial covariance the sigmas describe could not be factored. Only
-    /// a factored covariance form checks; the sigmas are validated positive,
-    /// so this needs a prior at the edge of what the precision can hold.
+    /// The covariance transformed from the initial physical sigmas was not
+    /// finite, or could not be factored in the chosen precision.
     InitialCovarianceNotPositiveDefinite,
     /// A gate threshold must be finite and positive. To disable a gate, set
     /// it to `None`.
@@ -518,7 +517,8 @@ impl ConfigError {
             Self::NonFiniteInitialState => {
                 "initial velocity, attitude, bias, or lever arm is not finite"
             }
-            Self::NonPositiveInitialStd => "initial standard deviations must be > 0",
+            Self::NonPositiveInitialStd => "initial sigmas must yield positive, representable variances within the filter limit",
+            Self::InvalidImuNoise => "invalid IMU deviations or correlation time",
             Self::NegativeProcessNoise => "process noise densities must be finite and >= 0",
             Self::InvalidGcuRate => "GCU rate must lie in [0, 1]",
             Self::InitialCovarianceNotPositiveDefinite => {
@@ -569,16 +569,21 @@ mod tests {
         assert_eq!(o.validate(), Some(ConfigError::NegativeProcessNoise));
     }
 
-    /// The ESKF refuses a zero correlation time by name. Here it arrives as
-    /// the infinite density the conversion makes of it, and is refused as
-    /// that.
     #[test]
-    fn a_zero_correlation_time_is_caught_as_the_density_it_becomes() {
+    fn an_invalid_datasheet_is_rejected_before_squaring() {
         let o = EqfOptions::default().with_imu_noise(&ImuNoise {
             correlation_time: 0.0,
             ..ImuNoise::default()
         });
-        assert_eq!(o.validate(), Some(ConfigError::NegativeProcessNoise));
+        assert_eq!(o.unwrap_err(), ConfigError::InvalidImuNoise);
+        let noise = ImuNoise {
+            gyro_arw: Vec3::splat(-0.1),
+            ..ImuNoise::default()
+        };
+        assert_eq!(
+            ProcessNoise::from_imu_noise(&noise),
+            Err(ConfigError::InvalidImuNoise)
+        );
     }
 
     #[test]

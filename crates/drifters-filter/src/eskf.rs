@@ -79,16 +79,16 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
     f.set_block(V_ID, V_ID, &(-(w_ie * 2.0 + w_en).skew()));
 
     // A tilt of the platform mis-resolves the sensed specific force.
-    let specific_force_n = state.attitude.dcm * imu.accel();
+    let specific_force_n = state.attitude.dcm() * imu.accel();
     f.set_block(V_ID, PHI_ID, &specific_force_n.skew());
 
     // Accelerometer bias and scale factor enter through the body-to-nav DCM.
-    f.set_block(V_ID, BA_ID, &state.attitude.dcm);
+    f.set_block(V_ID, BA_ID, &state.attitude.dcm());
     #[cfg(not(feature = "reduced-state"))]
     f.set_block(
         V_ID,
         SA_ID,
-        &state.attitude.dcm.matmul(&imu.accel().to_diag()),
+        &state.attitude.dcm().matmul(&imu.accel().to_diag()),
     );
 
     // --- attitude error ---------------------------------------------------
@@ -107,12 +107,12 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
     f.set_block(PHI_ID, V_ID, &f_pv);
 
     f.set_block(PHI_ID, PHI_ID, &(-(w_ie + w_en).skew()));
-    f.set_block(PHI_ID, BG_ID, &(-state.attitude.dcm));
+    f.set_block(PHI_ID, BG_ID, &(-state.attitude.dcm()));
     #[cfg(not(feature = "reduced-state"))]
     f.set_block(
         PHI_ID,
         SG_ID,
-        &(-state.attitude.dcm.matmul(&imu.gyro().to_diag())),
+        &(-state.attitude.dcm().matmul(&imu.gyro().to_diag())),
     );
 
     // --- IMU errors: first-order Gauss-Markov -----------------------------
@@ -138,8 +138,8 @@ pub fn transition_matrix(state: &Pva, imu: &ImuSample, noise: &ImuNoise) -> Stat
 /// Maps the 18 driving-noise channels onto the 21 error states.
 pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
     let mut g = NoiseMatrix::zeros();
-    g.set_block(V_ID, VRW_ID, &state.attitude.dcm);
-    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm);
+    g.set_block(V_ID, VRW_ID, &state.attitude.dcm());
+    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm());
     g.set_block(BG_ID, BGSTD_ID, &Mat3::identity());
     g.set_block(BA_ID, BASTD_ID, &Mat3::identity());
     #[cfg(not(feature = "reduced-state"))]
@@ -159,8 +159,8 @@ pub fn noise_mapping(state: &Pva) -> NoiseMatrix {
 /// mapping. `the_navigation_block_is_the_mappings_corner` pins the two together.
 pub fn nav_noise_mapping(state: &Pva) -> NavNoiseMatrix {
     let mut g = NavNoiseMatrix::zeros();
-    g.set_block(V_ID, VRW_ID, &state.attitude.dcm);
-    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm);
+    g.set_block(V_ID, VRW_ID, &state.attitude.dcm());
+    g.set_block(PHI_ID, ARW_ID, &state.attitude.dcm());
     g
 }
 
@@ -273,7 +273,7 @@ impl HeldStates {
 /// checks this against them.
 pub fn process_noise(state: &Pva, noise: &ImuNoise) -> StateMatrix {
     let mut q = StateMatrix::zeros();
-    let c = &state.attitude.dcm;
+    let c = &state.attitude.dcm();
 
     // The random walks are sensed in the body frame, so their densities rotate
     // into the navigation frame: C·diag(σ²)·Cᵀ.
@@ -613,10 +613,7 @@ impl Eskf {
         gate: Option<F>,
         held: HeldStates,
     ) -> Result<bool, FilterError> {
-        if !self.covariance.is_healthy() {
-            return Err(FilterError::Diverged);
-        }
-        self.update_factored(innovation, h, r, gate, held)
+        self.update_checked(innovation, h, r, gate, held, |_| Ok(()))
     }
 
     /// The Bierman update, with the Schmidt treatment of any held states.
@@ -643,14 +640,18 @@ impl Eskf {
     /// one positive rank-one update of the factors per row, and exactly the
     /// joint Joseph result, without `P` ever being formed.
     #[inline(never)]
-    fn update_factored<const M: usize>(
+    pub(crate) fn update_checked<const M: usize>(
         &mut self,
         innovation: &Matrix<M, 1>,
         h: &Matrix<M, N_STATE>,
         r: &Matrix<M, M>,
         gate: Option<F>,
         held: HeldStates,
+        feedback: impl FnOnce(&StateVector) -> Result<(), FilterError>,
     ) -> Result<bool, FilterError> {
+        if !self.covariance.is_healthy() {
+            return Err(FilterError::Diverged);
+        }
         // Bierman is scalar-sequential and assumes each row's noise is
         // independent of the others', so a dense `R` is whitened first: both
         // sides premultiplied by `L⁻¹`, which leaves rows of unit variance
@@ -696,7 +697,6 @@ impl Eskf {
         if !statistic.is_finite() {
             return Err(FilterError::SingularInnovation);
         }
-        self.last_nis = statistic;
         if fails_gate(statistic, gate) {
             return Ok(false);
         }
@@ -736,7 +736,11 @@ impl Eskf {
         if !dx.is_finite() || !trial.is_usable() {
             return Err(FilterError::Diverged);
         }
+        // The engine can still refuse the nominal state this correction would
+        // produce. Commit the already-staged factors only after feedback succeeds.
+        feedback(&dx)?;
         self.covariance = trial;
+        self.last_nis = statistic;
         self.dx = dx;
         Ok(true)
     }
@@ -793,7 +797,7 @@ impl Eskf {
         dx
     }
 
-    /// The normalised innovation squared of the most recent update.
+    /// The normalised innovation squared of the most recent **applied** update.
     ///
     /// `None` before any update has been applied. Over a long run this should
     /// average the measurement dimension: persistently larger means the filter
@@ -1177,7 +1181,7 @@ mod tests {
             for j in 0..3 {
                 assert_relative_eq!(
                     f[(PHI_ID + i, BG_ID + j)],
-                    -state.attitude.dcm[(i, j)],
+                    -state.attitude.dcm()[(i, j)],
                     epsilon = 1e-15
                 );
             }
@@ -1189,7 +1193,7 @@ mod tests {
         let state = test_state();
         let imu = test_imu();
         let f = transition_matrix(&state, &imu, &ImuNoise::default());
-        let expected = (state.attitude.dcm * imu.accel()).skew();
+        let expected = (state.attitude.dcm() * imu.accel()).skew();
         for i in 0..3 {
             for j in 0..3 {
                 assert_relative_eq!(f[(V_ID + i, PHI_ID + j)], expected[(i, j)], epsilon = 1e-12);

@@ -468,6 +468,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "drifters-consumer-example"
+version = "0.1.0"
+dependencies = [
+ "drifters-core",
+ "drifters-eqf",
+ "drifters-filter",
+]
+
+[[package]]
 name = "drifters-core"
 version = "0.1.0"
 dependencies = [

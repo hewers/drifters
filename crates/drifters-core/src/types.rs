@@ -170,7 +170,7 @@ impl GnssFix {
     }
 }
 
-/// Attitude carried in all three equivalent forms.
+/// Attitude as a unit quaternion and a matching, read-only cached DCM.
 ///
 /// The quaternion is authoritative; the DCM is cached because the
 /// mechanization uses it several times per sample, and the Euler angles are
@@ -179,16 +179,21 @@ impl GnssFix {
 ///
 /// With the `serde` feature it is written and read as the quaternion alone,
 /// `{ "w": …, "x": …, "y": …, "z": … }`, and the DCM is rebuilt on reading. A
-/// file that carried both could carry two that disagree.
+/// file that carried both could carry two that disagree. The cached rotation
+/// cannot be edited independently:
+///
+/// ```compile_fail
+/// use drifters_core::{types::Attitude, math::Quat};
+/// let mut attitude = Attitude::default();
+/// attitude.quat = Quat::from_euler(0.0, 0.0, 1.0);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(from = "Quat", into = "Quat"))]
 pub struct Attitude {
-    /// `q_nb`, rotating body vectors into the navigation frame.
-    pub quat: Quat,
-    /// `C_nb`, the matching direction cosine matrix.
-    pub dcm: crate::math::Mat3,
+    quat: Quat,
+    dcm: crate::math::Mat3,
 }
 
 impl Default for Attitude {
@@ -214,6 +219,19 @@ impl From<Attitude> for Quat {
 }
 
 impl Attitude {
+    /// `q_nb`, rotating body vectors into the navigation frame. To change
+    /// the rotation, replace the whole attitude with [`Self::from_quat`].
+    #[inline]
+    pub const fn quat(&self) -> Quat {
+        self.quat
+    }
+
+    /// `C_nb`, the cached direction cosine matrix for [`Self::quat`].
+    #[inline]
+    pub const fn dcm(&self) -> crate::math::Mat3 {
+        self.dcm
+    }
+
     /// Build from a quaternion, caching the DCM.
     #[inline]
     pub fn from_quat(quat: Quat) -> Self {
@@ -347,6 +365,30 @@ pub struct ImuNoise {
     pub accel_scale_std: Vec3,
     /// Gauss-Markov correlation time, seconds.
     pub correlation_time: F,
+}
+
+impl ImuNoise {
+    /// True if each datasheet deviation is non-negative and finite and the
+    /// corresponding white and Gauss–Markov driving densities are finite.
+    pub fn is_valid(&self) -> bool {
+        let gm = 2.0 / self.correlation_time;
+        self.correlation_time.is_finite()
+            && self.correlation_time > 0.0
+            && [
+                (self.gyro_arw, 1.0),
+                (self.accel_vrw, 1.0),
+                (self.gyro_bias_std, gm),
+                (self.accel_bias_std, gm),
+                (self.gyro_scale_std, gm),
+                (self.accel_scale_std, gm),
+            ]
+            .iter()
+            .all(|(s, factor)| {
+                s.to_array()
+                    .iter()
+                    .all(|&v| v >= 0.0 && (v * v * factor).is_finite())
+            })
+    }
 }
 
 impl Default for ImuNoise {

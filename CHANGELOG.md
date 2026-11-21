@@ -231,6 +231,23 @@ the list below is what the release *is* rather than what changed.
 
 ### Fixed
 
+- Both engines reject invalid common initial states. `Attitude` exposes its
+  quaternion and cached DCM through `quat()` and `dcm()`; replace the attitude
+  as a whole to change it. EqF conversion from datasheet IMU noise is fallible
+  so a negative deviation cannot become valid when squared.
+- Measurement covariance and nominal feedback commit together. `last_nis()`
+  describes the last **applied** measurement on both engines; compare
+  `Estimator::update_sequence()` across a call to detect even a repeated NIS.
+- In gravity-gradient mode the EqF rotates PVA priors, GNSS uncertainties,
+  and reported PVA marginals between vehicle-local NED and the anchor frame.
+- Rewind with zero event capacity reports `FixOutcome::NotRetained` for a
+  late fix rather than reporting a rewind it could not perform. Protobuf
+  solution decoders reject non-finite velocity and unusable quaternion norms.
+  Wire timestamps now use `GpsTime::try_from` and reject out-of-range values
+  rather than saturating. Sigma readers reject negative or non-finite values.
+- `cargo run -p drifters-consumer-example` drives both engines through the
+  public interface. CI builds and runs the example.
+
 - ESKF smoother checkpoints now carry the epoch their state and covariance
   describe. A GNSS update inside an IMU interval or at its end was stamped
   with the previous IMU time, skewing comparisons during turns. This does not

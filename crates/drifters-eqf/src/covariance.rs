@@ -114,7 +114,20 @@ pub trait Covariance: Copy + Debug + private::Sealed {
     /// the correction `K ỹ`, or `None` — and leaves `Σ` untouched — when the
     /// innovation covariance is not positive definite, or when the correction
     /// or the new `Σ` would not be finite and within [`MAX_VARIANCE`].
-    fn fuse(&mut self, c: &OutputMatrix, innovation: &Vector<3>, noise: &Mat3) -> Option<[F; DIM]>;
+    fn fuse(&mut self, c: &OutputMatrix, innovation: &Vector<3>, noise: &Mat3) -> Option<[F; DIM]> {
+        self.try_fuse(c, innovation, noise, Some)
+    }
+
+    /// As [`Self::fuse`], but give the consumer the correction before committing
+    /// the staged covariance. `None` from `accept` refuses both. This lets the
+    /// engine check its candidate state without stacking another covariance.
+    fn try_fuse<T>(
+        &mut self,
+        c: &OutputMatrix,
+        innovation: &Vector<3>,
+        noise: &Mat3,
+        accept: impl FnOnce([F; DIM]) -> Option<T>,
+    ) -> Option<T>;
 
     /// Carry `Σ` through the reset by `Δ`: `T Σ Tᵀ`, `T = I + ½ ad_Δ`. All or
     /// nothing, as [`Covariance::propagate`] is.
@@ -165,7 +178,15 @@ impl Covariance for StateMatrix {
         c.matmul(self).mul_transpose(c)
     }
 
-    fn fuse(&mut self, c: &OutputMatrix, innovation: &Vector<3>, noise: &Mat3) -> Option<[F; DIM]> {
+    // Keep the Joseph scratch out of the covariance transport's stack frame.
+    #[inline(never)]
+    fn try_fuse<T>(
+        &mut self,
+        c: &OutputMatrix,
+        innovation: &Vector<3>,
+        noise: &Mat3,
+        accept: impl FnOnce([F; DIM]) -> Option<T>,
+    ) -> Option<T> {
         let c_sigma = c.matmul(self); // 3 × 21
         let projected = c_sigma.mul_transpose(c); // 3 × 3
         let chol = Cholesky::new(&(projected + *noise))?;
@@ -181,8 +202,9 @@ impl Covariance for StateMatrix {
         if !dense_usable(&next) {
             return None;
         }
+        let result = accept(delta.to_column())?;
         *self = next;
-        Some(delta.to_column())
+        Some(result)
     }
 
     fn transport(&mut self, step: Algebra) {
@@ -771,6 +793,9 @@ impl<S: FactorScalar> Covariance for Ud<S> {
                 return None;
             }
             ud.diagonal[j] = S::narrow(d);
+            if ud.diagonal[j] <= S::ZERO {
+                return None; // A positive pivot underflowed in the chosen precision.
+            }
             for i in 0..j {
                 let u = work.data[i][j] / d;
                 if let Some(slot) = ud.column_mut(j).get_mut(i) {
@@ -840,7 +865,13 @@ impl<S: FactorScalar> Covariance for Ud<S> {
         projected
     }
 
-    fn fuse(&mut self, c: &OutputMatrix, innovation: &Vector<3>, noise: &Mat3) -> Option<[F; DIM]> {
+    fn try_fuse<T>(
+        &mut self,
+        c: &OutputMatrix,
+        innovation: &Vector<3>,
+        noise: &Mat3,
+        accept: impl FnOnce([F; DIM]) -> Option<T>,
+    ) -> Option<T> {
         // Whiten: noise = L Lᵀ, rows of L⁻¹C* and L⁻¹ỹ have unit, independent
         // noise, which is what a scalar-sequential update requires.
         let chol = Cholesky::new(noise)?;
@@ -882,8 +913,9 @@ impl<S: FactorScalar> Covariance for Ud<S> {
         if !delta.iter().all(|d| d.is_finite()) || !next.is_usable() {
             return None;
         }
+        let result = accept(delta)?;
         *self = next;
-        Some(delta)
+        Some(result)
     }
 
     fn transport(&mut self, step: Algebra) {

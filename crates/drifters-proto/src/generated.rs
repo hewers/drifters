@@ -6437,7 +6437,7 @@ pub mod drifters_ {
             pub r#initial_position_std_m: Vec3,
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#initial_velocity_std_mps: Vec3,
-            /// One-sigma initial attitude uncertainty, radians (roll, pitch, yaw).
+            /// One-sigma initial attitude uncertainty, radians about north, east, and down.
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#initial_attitude_std_rad: Vec3,

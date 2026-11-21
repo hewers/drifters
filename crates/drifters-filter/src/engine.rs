@@ -50,7 +50,7 @@ pub struct GinsEngine {
     /// estimate of the moment it runs.
     raw_dtheta: Vec3,
     pending_gnss: Option<GnssFix>,
-    initialised: bool,
+    update_sequence: u32,
     /// Gate rejections since each [`Kind`]'s last acceptance.
     consecutive_rejections: [u32; Kind::COUNT],
     inflations: u32,
@@ -123,7 +123,7 @@ impl GinsEngine {
             previous_imu: ImuSample::default(),
             raw_dtheta: Vec3::ZERO,
             pending_gnss: None,
-            initialised: false,
+            update_sequence: 0,
             consecutive_rejections: [0; Kind::COUNT],
             inflations: 0,
             stale_fixes: 0,
@@ -211,7 +211,7 @@ impl GinsEngine {
     /// nothing about where the stream is.
     #[inline]
     pub(crate) fn has_time_origin(&self) -> bool {
-        self.initialised
+        self.previous_imu.dt > 0.0
     }
 
     /// Queue a GNSS fix.
@@ -237,7 +237,7 @@ impl GinsEngine {
         // anything earlier is not. The next interval's length is unknown until
         // its sample arrives, so the latest one's stands in for it; if they
         // differ enough to disagree, `add_imu` drops the fix as stale there.
-        if self.initialised
+        if self.has_time_origin()
             && fix.time.seconds_since(self.state.time) < -epoch_tolerance(self.latest_interval())
         {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
@@ -276,10 +276,9 @@ impl GinsEngine {
         self.raw_dtheta = raw.dtheta;
 
         // The first sample only establishes the interval's left edge.
-        if !self.initialised {
+        if !self.has_time_origin() {
             self.previous_imu = raw;
             self.state.time = raw.time;
-            self.initialised = true;
             return Ok(());
         }
 
@@ -455,7 +454,7 @@ impl GinsEngine {
     /// The GNSS antenna position implied by the current INS solution, with the
     /// lever arm resolved into the navigation frame.
     fn antenna_position_and_lever(&self) -> (drifters_core::frames::Lla, Vec3) {
-        let lever_n = self.state.pva.attitude.dcm * self.options.antenna_lever_arm;
+        let lever_n = self.state.pva.attitude.dcm() * self.options.antenna_lever_arm;
         let antenna = self
             .state
             .pva
@@ -481,9 +480,13 @@ impl GinsEngine {
         h.set_block(0, PHI_ID, &lever_n.skew());
 
         let r = fix.position_std.squared().to_diag();
-        self.note_prior();
-        self.filter.update(&z, &h, &r)?;
-        self.feedback()?;
+        self.update_filter(&Measurement {
+            innovation: z,
+            jacobian: h,
+            noise: r,
+            gate: None,
+            held: crate::eskf::HeldStates::NONE,
+        })?;
 
         // A fix carrying velocity gives a second, independent measurement.
         // Applied after the position feedback so its Jacobian is evaluated at
@@ -500,7 +503,11 @@ impl GinsEngine {
                 velocity,
                 fix.velocity_std,
             );
-            self.apply_inner(&m, Kind::GnssVelocity)?;
+            let velocity_result = self.apply_inner(&m, Kind::GnssVelocity);
+            // Even if velocity failed, the successful position sub-update has
+            // a checkpoint at this epoch, not at the next accepted fix.
+            self.seal_checkpoint();
+            return velocity_result.map(|_| ());
         }
         self.seal_checkpoint();
         Ok(())
@@ -551,7 +558,6 @@ impl GinsEngine {
             } else {
                 self.consecutive_rejections = [0; Kind::COUNT];
             }
-            self.feedback()?;
         } else if !(self.options.count_rejections_per_kind && kind == Kind::ZeroRate) {
             // A refused zero-rate update may only mean the vehicle was not
             // still. Counted alone it would inflate the covariance while the
@@ -571,11 +577,38 @@ impl GinsEngine {
         Ok(accepted)
     }
 
-    /// The filter update itself, with no feedback and no accounting.
+    /// Apply one measurement and its nominal-state feedback as one transaction.
     fn update_filter<const M: usize>(&mut self, m: &Measurement<M>) -> Result<bool, FilterError> {
         self.note_prior();
-        self.filter
-            .update_gated_holding(&m.innovation, &m.jacobian, &m.noise, m.gate, m.held)
+        let state = &mut self.state;
+        let applied = self.filter.update_checked(
+            &m.innovation,
+            &m.jacobian,
+            &m.noise,
+            m.gate,
+            m.held,
+            |dx| {
+                let mut next = *state;
+                apply_correction(&mut next, dx);
+                if !admissible(&next.pva) || !next.imu_error.is_finite() {
+                    return Err(FilterError::Diverged);
+                }
+                *state = next;
+                Ok(())
+            },
+        )?;
+        if applied {
+            // Accumulate both corrections when a fix carries position and velocity.
+            #[cfg(feature = "smoothing")]
+            if let Some(r) = self.recorder.as_mut() {
+                r.epoch_correction += &self.filter.dx;
+                r.updated = true;
+                r.prior_pending = false;
+            }
+            self.filter.take_correction();
+            self.update_sequence = self.update_sequence.wrapping_add(1);
+        }
+        Ok(applied)
     }
 
     /// Normalised innovation squared of the most recent applied measurement.
@@ -585,6 +618,11 @@ impl GinsEngine {
     #[inline]
     pub fn last_nis(&self) -> Option<F> {
         self.filter.last_nis()
+    }
+
+    /// See [`Estimator::update_sequence`].
+    pub fn update_sequence(&self) -> u32 {
+        self.update_sequence
     }
 
     /// The count the lockout recovery compares with
@@ -713,7 +751,7 @@ impl GinsEngine {
     /// and does nothing before the first sample, or when `sigma` is
     /// [unusable](Aid::is_valid).
     pub fn apply_zero_rate(&mut self, sigma: Vec3) -> Result<bool, FilterError> {
-        if !self.initialised || !(Aid::ZeroRate { sigma }).is_valid() {
+        if !self.has_time_origin() || !(Aid::ZeroRate { sigma }).is_valid() {
             return Ok(false);
         }
         let raw = ImuSample {
@@ -869,36 +907,8 @@ impl GinsEngine {
             return Ok(false);
         }
         let accepted = self.update_filter(&m)?;
-        if accepted {
-            self.feedback()?;
-        }
         self.seal_checkpoint();
         Ok(accepted)
-    }
-
-    /// Apply the estimated error state to the navigation state and reset it.
-    ///
-    /// A correction that would carry the state somewhere it cannot be is
-    /// dropped, and the state stays where it was.
-    fn feedback(&mut self) -> Result<(), FilterError> {
-        let dx = self.filter.take_correction();
-        let mut corrected = self.state;
-        apply_correction(&mut corrected, &dx);
-        if !admissible(&corrected.pva) || !corrected.imu_error.is_finite() {
-            return Err(FilterError::Diverged);
-        }
-        // Summed, not replaced. A GNSS fix updates position and then velocity,
-        // and a checkpoint spans everything since the previous one, so the
-        // smoother needs the total the epoch applied. Summing the error-state
-        // vectors is first-order correct, which is the accuracy the error
-        // state is defined to anyway.
-        #[cfg(feature = "smoothing")]
-        if let Some(r) = self.recorder.as_mut() {
-            r.epoch_correction += &dx;
-            r.updated = true;
-        }
-        self.state = corrected;
-        Ok(())
     }
 
     /// Capture the covariance before the first update since the last
@@ -914,7 +924,6 @@ impl GinsEngine {
         if let Some(r) = self.recorder.as_mut() {
             if r.prior_pending {
                 r.prior = self.filter.covariance();
-                r.prior_pending = false;
             }
         }
     }
@@ -960,6 +969,11 @@ impl Estimator for GinsEngine {
     #[inline]
     fn last_nis(&self) -> Option<F> {
         GinsEngine::last_nis(self)
+    }
+
+    #[inline]
+    fn update_sequence(&self) -> u32 {
+        self.update_sequence
     }
 
     #[inline]
@@ -1031,7 +1045,7 @@ pub fn apply_correction(state: &mut NavState, dx: &StateVector) {
     // Attitude: the tilt error is defined in the navigation frame, so it
     // pre-multiplies.
     let correction = Quat::from_rotation_vector(block(PHI_ID));
-    state.pva.attitude = Attitude::from_quat(correction * state.pva.attitude.quat);
+    state.pva.attitude = Attitude::from_quat(correction * state.pva.attitude.quat());
 
     state.imu_error.gyro_bias += block(BG_ID);
     state.imu_error.accel_bias += block(BA_ID);
@@ -1097,8 +1111,8 @@ pub fn error_between(truth: &NavState, estimate: &NavState) -> StateVector {
         &truth
             .pva
             .attitude
-            .dcm
-            .matmul(&estimate.pva.attitude.dcm.transpose()),
+            .dcm()
+            .matmul(&estimate.pva.attitude.dcm().transpose()),
     )
     .to_rotation_vector();
     set(PHI_ID, phi);
@@ -1152,8 +1166,8 @@ mod tests {
         ImuSample {
             time: GpsTime::from_tow(t),
             dt,
-            dtheta: att.quat.rotate_inverse(w_ie) * dt,
-            dvel: att.quat.rotate_inverse(-g) * dt,
+            dtheta: att.quat().rotate_inverse(w_ie) * dt,
+            dvel: att.quat().rotate_inverse(-g) * dt,
         }
     }
 
@@ -1493,8 +1507,8 @@ mod tests {
             &truth
                 .pva
                 .attitude
-                .dcm
-                .matmul(&recovered.pva.attitude.dcm.transpose()),
+                .dcm()
+                .matmul(&recovered.pva.attitude.dcm().transpose()),
         )
         .to_rotation_vector();
         assert!(
@@ -1515,6 +1529,29 @@ mod tests {
                 assert_relative_eq!(got[i], want[i], epsilon = 1e-15);
             }
         }
+    }
+
+    #[test]
+    fn refused_nominal_feedback_does_not_commit_the_covariance_or_diagnostics() {
+        let mut e = GinsEngine::new(options()).unwrap();
+        e.apply_height(origin().height, 1.0).unwrap();
+        let before = (
+            e.nav_state(),
+            e.covariance(),
+            e.last_nis(),
+            e.update_sequence(),
+        );
+        let bad = measurement::height(&e.nav_state().pva, -1.0e7, 0.1).with_gate(None);
+        assert_eq!(e.apply(&bad), Err(FilterError::Diverged));
+        assert_eq!(
+            (
+                e.nav_state(),
+                e.covariance(),
+                e.last_nis(),
+                e.update_sequence()
+            ),
+            before
+        );
     }
 
     #[test]
@@ -1624,7 +1661,7 @@ mod tests {
             e.nav_state()
                 .pva
                 .attitude
-                .quat
+                .quat()
                 .rotate_inverse(e.nav_state().velocity().to_vec3())
                 .y
         };
@@ -2270,8 +2307,8 @@ mod tests {
         ImuSample {
             time: GpsTime::from_tow(t),
             dt,
-            dtheta: (truth.quat.rotate_inverse(w_ie) + gyro_bias) * dt,
-            dvel: truth.quat.rotate_inverse(-g) * dt,
+            dtheta: (truth.quat().rotate_inverse(w_ie) + gyro_bias) * dt,
+            dvel: truth.quat().rotate_inverse(-g) * dt,
         }
     }
 

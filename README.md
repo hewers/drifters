@@ -29,12 +29,12 @@ under QEMU.
 | **Accuracy** | **1.3 cm** horizontal, 1.8 cm vertical RMS over 57 minutes of real driving |
 | | 683 k IMU samples at 200 Hz, 3 413 RTK fixes, replayed in 2.3 s[^machine] |
 | | per-axis bias below 1 mm |
-| **Footprint** | **8.7 KiB** peak stack (15-state), 13.2 KiB (21-state), on Cortex-M4, late fixes included |
-| | 15.4 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
+| **Footprint** | **8.3 KiB** peak stack (15-state), 12.9 KiB (21-state), on Cortex-M4, late fixes included |
+| | 15.3 KiB for the equivariant filter's engine, under a 20 KiB ceiling |
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 844 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 854 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 [^machine]: The release-build regression test, file parsing included, on a
     Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB LPDDR5X, Linux under WSL2, Rust 1.100.
@@ -53,13 +53,13 @@ emulates. This is what decides whether the filter fits a microcontroller:
 
 | | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
 |---|---|---|---|
-| ESKF, 21-state | 1 598 320 | 88 360 | 61 560 |
-| ESKF, 21-state, `f32-covariance` | 348 920 | 86 280 | 61 320 |
-| ESKF, 15-state (`reduced-state`) | 884 800 | 55 520 | 32 680 |
-| ESKF, 15-state, `f32-covariance` | 231 320 | 53 560 | 31 920 |
-| EqF engine, dense `f64` | 4 509 800 | 277 400 | 112 160 |
-| EqF engine, factored `f32` | 893 480 | 333 920 | 150 800 |
-| EqF engine, dense, Earth in the group | 4 723 480 | 284 800 | 115 320 |
+| ESKF, 21-state | 1 599 280 | 89 320 | 61 400 |
+| ESKF, 21-state, `f32-covariance` | 349 840 | 87 200 | 61 120 |
+| ESKF, 15-state (`reduced-state`) | 885 560 | 56 200 | 32 600 |
+| ESKF, 15-state, `f32-covariance` | 232 080 | 54 240 | 31 840 |
+| EqF engine, dense `f64` | 4 509 840 | 277 400 | 112 160 |
+| EqF engine, factored `f32` | 893 520 | 333 920 | 150 800 |
+| EqF engine, dense, Earth in the group | 4 723 520 | 284 800 | 115 320 |
 | EqF engine, factored, Earth in the group | 914 520 | 336 520 | 151 360 |
 
 Measured under QEMU with `-icount shift=0`, so the counts are exact. They are
@@ -268,13 +268,13 @@ What emulation does say about timing is a floor, and it is not a comfortable
 one. An IMU sample costs 1.6 million instructions in the default build on a
 Cortex-M4, because that core's FPU is single precision and the filter's `f64`
 runs in software: at least 9.5 ms at 168 MHz, so it cannot follow a 200 Hz IMU
-there. `--features f32-covariance` removes 78 % of that, to 348 thousand, with
+there. `--features f32-covariance` removes 78 % of that, to 350 thousand, with
 no measurable change in any result, and is the configuration to use on that
 part. The equivariant filter is 4.5 million dense, and 0.89 million with its
 covariance factored and held in `f32`, again with no measurable change.
 
 A Cortex-M7 with a double-precision FPU is a different problem, once built with
-`-C target-cpu=cortex-m7`. The same sample is 88 thousand instructions for the
+`-C target-cpu=cortex-m7`. The same sample is 89 thousand instructions for the
 ESKF and 277 thousand for the dense equivariant filter. `f32-covariance` then
 saves under 3 %, and the factored `f32` filter costs 20 % more than the dense
 one. Those are instruction counts, and double-precision instructions take that
@@ -302,7 +302,8 @@ cortex-m-hil       firmware — DWT cycle counts and a live IMU on a NUCLEO-H743
 ## Quick start
 
 ```bash
-cargo add drifters-filter
+cargo add drifters-core drifters-filter
+cargo add drifters-eqf  # if using the EqF as well
 ```
 
 ```rust
@@ -312,12 +313,18 @@ use drifters_filter::{GinsEngine, GinsOptions};
 let mut engine = GinsEngine::new(GinsOptions::default())?;
 
 // Push samples in, pull state out. No allocation, no threads, no clock.
+// After the first IMU sample has established the clock, queue a fix
+// before supplying the sample whose interval contains its epoch.
+let queued = engine.add_gnss(gnss_fix);
 engine.add_imu(imu_sample)?;
-let queued = engine.add_gnss(gnss_fix); // `Stale` once the IMU has passed its epoch
 let solution = engine.nav_state();
 ```
 
-On a device the IMU always has passed it: a receiver reports a fix after the
+The [working consumer example](examples/consumer/src/main.rs) feeds both engines
+through `&mut dyn Estimator` using only public crate APIs. Run it from this
+checkout with `cargo run -p drifters-consumer-example`.
+
+On a device the IMU often has passed it: a receiver reports a fix after the
 epoch it describes. `drifters_filter::RewindEngine` wraps the engine and applies
 a late fix by rewinding, bit-identically to on-time delivery;
 `drifters_eqf::EqfRewindEngine` does the same for the equivariant filter, with

@@ -440,7 +440,7 @@ impl AidedMagFit {
         if !usable {
             return false;
         }
-        let h = state.pva.attitude.quat.rotate_inverse(reference);
+        let h = state.pva.attitude.quat().rotate_inverse(reference);
         self.sum_field += h;
         self.sum_raw += raw;
         self.field_field += outer(h, h);

@@ -348,9 +348,13 @@ fn sensor_runs(bus: Option<board::ImuBus>, clock: Clock) -> bool {
     eskf.initial_gyro_bias_std = gyro_bias_std;
     eskf.initial_accel_bias_std = accel_bias_std;
 
-    let mut eqf = EqfOptions::default()
+    let mut eqf = match EqfOptions::default()
         .with_initial_state(origin(), Ned::ZERO, attitude)
-        .with_imu_noise(&noise());
+        .with_imu_noise(&noise())
+    {
+        Ok(options) => options,
+        Err(e) => return rejected("eqf", e.as_str()),
+    };
     eqf.initial_attitude_std = attitude_std;
     eqf.initial_gyro_bias_std = gyro_bias_std;
     eqf.initial_accel_bias_std = accel_bias_std;

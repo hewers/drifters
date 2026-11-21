@@ -96,7 +96,7 @@ message GinsOptions {
 
   Vec3 initial_position_std_m = 5;
   Vec3 initial_velocity_std_mps = 6;
-  // One-sigma initial attitude uncertainty, radians (roll, pitch, yaw).
+  // One-sigma initial attitude uncertainty, radians about north, east, and down.
   Vec3 initial_attitude_std_rad = 7;
   Vec3 initial_gyro_bias_std_rps = 8;
   Vec3 initial_accel_bias_std_mps2 = 9;

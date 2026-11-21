@@ -88,10 +88,9 @@ pub struct EqfEngine<C: Covariance = StateMatrix> {
     /// Length of the most recently processed IMU interval, seconds.
     interval: F,
     pending_gnss: Option<GnssFix>,
-    /// Whether a first IMU sample has fixed the time origin.
-    initialised: bool,
     /// NIS of the most recent applied measurement, `NaN` before the first.
     last_nis: F,
+    update_sequence: u32,
     consecutive_rejections: u32,
     inflations: u32,
     /// Fixes refused for arriving after the engine had passed their epoch.
@@ -131,14 +130,14 @@ impl<C: Covariance> EqfEngine<C> {
         let initial = options.initial_state;
         let position = anchor.to_local(initial.position);
         // What the caller gave is in the local axes at the start.
-        let (attitude, velocity) = if options.gravity_gradient {
-            let axes = anchor.axes_at(position);
+        let axes = options.gravity_gradient.then(|| anchor.axes_at(position));
+        let (attitude, velocity) = if let Some(axes) = axes {
             (
-                axes.matmul(&initial.attitude.dcm),
+                axes.matmul(&initial.attitude.dcm()),
                 axes * initial.velocity.to_vec3(),
             )
         } else {
-            (initial.attitude.dcm, initial.velocity.to_vec3())
+            (initial.attitude.dcm(), initial.velocity.to_vec3())
         };
         let start = State {
             pose: Se23::new(attitude, frame.group_velocity(velocity, position), position),
@@ -150,11 +149,15 @@ impl<C: Covariance> EqfEngine<C> {
         };
         // The sigmas are physical and the covariance is not; see
         // `crate::physical` for what handing over diag(σ²) here would do.
-        let sigma = physical::covariance_from_std(
+        let sigma = physical::covariance_from_std_in_axes(
             &Symmetry::from_state(&start),
             frame.earth_rate,
             &options.initial_std(),
+            axes,
         );
+        if !sigma.is_finite() {
+            return Err(ConfigError::InitialCovarianceNotPositiveDefinite);
+        }
         let mut filter = EqFilter::<C>::with_covariance(&start, &sigma, frame)
             .ok_or(ConfigError::InitialCovarianceNotPositiveDefinite)?;
         filter.alpha = options.gcu_alpha;
@@ -165,8 +168,8 @@ impl<C: Covariance> EqfEngine<C> {
             time: GpsTime::ZERO,
             interval: 0.0,
             pending_gnss: None,
-            initialised: false,
             last_nis: F::NAN,
+            update_sequence: 0,
             consecutive_rejections: 0,
             inflations: 0,
             stale_fixes: 0,
@@ -276,12 +279,19 @@ impl<C: Covariance> EqfEngine<C> {
 
     /// Per-state one-sigma uncertainties in **physical** units, in block
     /// order: attitude (rad about N, E, D), velocity, position, gyroscope
-    /// bias, accelerometer bias, lever arm, magnetometer calibration.
+    /// bias, accelerometer bias, lever arm, and magnetometer calibration.
+    /// The first three blocks use the axes of [`Self::nav_state`]; the
+    /// last four are not navigation-frame vectors and are not rotated.
     pub fn std_deviations(&self) -> [F; DIM] {
         self.filter
             .sigma
             .with_dense(|sigma| {
-                physical::variances(&self.filter.x, self.filter.frame.earth_rate, sigma)
+                physical::variances_in_axes(
+                    &self.filter.x,
+                    self.filter.frame.earth_rate,
+                    sigma,
+                    self.local_axes(self.filter.x.c.position),
+                )
             })
             .map(root)
     }
@@ -311,7 +321,7 @@ impl<C: Covariance> EqfEngine<C> {
     /// nothing about where the stream is.
     #[inline]
     pub(crate) fn has_time_origin(&self) -> bool {
-        self.initialised
+        self.interval > 0.0
     }
 
     /// Length of the most recent IMU interval, seconds; zero before the
@@ -362,7 +372,9 @@ impl<C: Covariance> EqfEngine<C> {
         // tolerance of it is `AtStart` of that interval and still usable;
         // anything earlier is not. The latest interval stands in for the next,
         // whose length is unknown until its sample arrives.
-        if self.initialised && fix.time.seconds_since(self.time) < -epoch_tolerance(self.interval) {
+        if self.has_time_origin()
+            && fix.time.seconds_since(self.time) < -epoch_tolerance(self.interval)
+        {
             self.stale_fixes = self.stale_fixes.saturating_add(1);
             return GnssQueued::Stale;
         }
@@ -399,10 +411,9 @@ impl<C: Covariance> EqfEngine<C> {
         }
 
         // The first sample only establishes the interval's left edge.
-        if !self.initialised {
+        if !self.has_time_origin() {
             self.time = raw.time;
             self.interval = raw.dt;
-            self.initialised = true;
             return Ok(());
         }
 
@@ -523,7 +534,12 @@ impl<C: Covariance> EqfEngine<C> {
         let antenna = self.anchor.to_local(fix.position);
         let transported = transported_position(&self.filter.x);
         let c = position_output_matrix(antenna, transported);
-        let position_noise = fix.position_std.squared().to_diag();
+        let axes = self.local_axes(antenna);
+        let in_filter_axes = |std: Vec3| {
+            let r = std.squared().to_diag();
+            axes.map_or(r, |a| a.matmul(&r).mul_transpose(&a))
+        };
+        let position_noise = in_filter_axes(fix.position_std);
         self.apply(
             &c,
             transported - antenna,
@@ -545,12 +561,12 @@ impl<C: Covariance> EqfEngine<C> {
             // turning of the lever arm included, and brings that position's
             // noise along.
             let frame = self.filter.frame;
-            let velocity = match self.local_axes(antenna) {
+            let velocity = match axes {
                 Some(axes) => axes * velocity.to_vec3(),
                 None => velocity.to_vec3(),
             };
             let measured = frame.group_velocity(velocity, antenna);
-            let mut r = fix.velocity_std.squared().to_diag();
+            let mut r = in_filter_axes(fix.velocity_std);
             if frame.rotates() {
                 let turn = frame.earth_rate.skew();
                 r += turn.matmul(&position_noise).matmul(&turn.transpose());
@@ -666,6 +682,7 @@ impl<C: Covariance> EqfEngine<C> {
         match self.filter.update_gated(c, innovation, noise, gate) {
             Verdict::Applied(nis) => {
                 self.last_nis = nis;
+                self.update_sequence = self.update_sequence.wrapping_add(1);
                 Ok(true)
             }
             Verdict::Rejected(_) => Ok(false),
@@ -685,6 +702,11 @@ impl<C: Covariance> EqfEngine<C> {
         } else {
             Some(self.last_nis)
         }
+    }
+
+    /// See [`Estimator::update_sequence`].
+    pub fn update_sequence(&self) -> u32 {
+        self.update_sequence
     }
 
     /// How many gated measurements have been rejected since the last accepted
@@ -790,6 +812,11 @@ impl<C: Covariance> Estimator for EqfEngine<C> {
     #[inline]
     fn last_nis(&self) -> Option<F> {
         EqfEngine::last_nis(self)
+    }
+
+    #[inline]
+    fn update_sequence(&self) -> u32 {
+        self.update_sequence
     }
 
     #[inline]
@@ -1793,13 +1820,13 @@ mod tests {
             .with_gravity_gradient(true);
         o.anchor = Some(origin().shifted(Ned::new(-40_000.0, 25_000.0, 0.0)));
         o.velocity_gate = None;
-        let start = o.initial_state.attitude.quat;
+        let start = o.initial_state.attitude.quat();
         let e = EqfEngine::new(o).unwrap();
         let held = e.state().pose.rotation;
         // The filter holds a different attitude, by the Earth's curve.
         let apart = Quat::from_dcm(&held) * start.conjugate();
         assert!(apart.canonicalized().to_rotation_vector().norm() > 5e-3);
-        let back = e.nav_state().pva.attitude.quat * start.conjugate();
+        let back = e.nav_state().pva.attitude.quat() * start.conjugate();
         assert_relative_eq!(
             back.canonicalized().to_rotation_vector().norm(),
             0.0,
@@ -1810,6 +1837,50 @@ mod tests {
             0.0,
             epsilon = 1e-9
         );
+    }
+
+    #[test]
+    fn anisotropic_priors_and_reports_use_vehicle_local_ned() {
+        let mut o = options()
+            .with_earth_in_group(true)
+            .with_gravity_gradient(true);
+        o.anchor = Some(origin().shifted(Ned::new(-10_000.0, 0.0, 0.0)));
+        o.initial_attitude_std = Vec3::new(0.1, 0.01, 1e-5);
+        o.initial_position_std = Vec3::new(1.0, 2.0, 3.0);
+        o.initial_velocity_std = Vec3::new(0.1, 0.2, 0.3);
+        let e = EqfEngine::new(o).unwrap();
+        let axes = e.anchor().axes_at(e.state().pose.position);
+        let reported = e.pva_std();
+        for (row, prior, std) in [
+            (
+                physical::ATTITUDE,
+                o.initial_attitude_std,
+                reported.attitude,
+            ),
+            (
+                physical::VELOCITY,
+                o.initial_velocity_std,
+                reported.velocity,
+            ),
+            (
+                physical::POSITION,
+                o.initial_position_std,
+                reported.position,
+            ),
+        ] {
+            let anchor_cov = physical::block_covariance(
+                &e.filter.x,
+                e.filter.frame.earth_rate,
+                &e.covariance(),
+                row,
+            );
+            let expected = axes.matmul(&prior.squared().to_diag()).mul_transpose(&axes);
+            assert!((anchor_cov - expected).amax() < 2e-9);
+            assert!((std - prior).amax() < 2e-9);
+        }
+        // Dropping the off-diagonal or using the raw anchor diagonal would
+        // give a down-axis attitude sigma over an order of magnitude larger.
+        assert!(e.covariance()[(2, 2)] > 100.0 * reported.attitude.z.powi(2));
     }
 
     #[test]

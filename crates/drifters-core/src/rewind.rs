@@ -177,7 +177,7 @@ pub trait Rewindable: Estimator + Copy {
 /// What [`Rewind::add_gnss`] did with a fix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[must_use = "a Stale or Invalid fix was not applied"]
+#[must_use = "a Stale, Invalid, or NotRetained fix was not applied"]
 #[non_exhaustive]
 pub enum FixOutcome {
     /// The epoch is ahead of the engine. Queued, exactly as
@@ -197,6 +197,9 @@ pub enum FixOutcome {
     Stale,
     /// Failed [`GnssFix::is_valid`]. Not applied.
     Invalid,
+    /// A late fix needs a replay record, but `EVENTS` is zero. Not applied;
+    /// counted in [`Rewind::dropped_event_count`], not [`Rewind::rewind_count`].
+    NotRetained,
 }
 
 /// One entry in the record a replay works from: a GNSS fix or an aiding call,
@@ -522,6 +525,10 @@ impl<E: Rewindable, const SAMPLES: usize, const EVENTS: usize> Rewind<E, SAMPLES
         // Queued just before the sample that consumes it: the engine then
         // classifies it exactly as it would have on time, including the split
         // of that sample at the epoch.
+        if EVENTS == 0 {
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            return Ok(FixOutcome::NotRetained);
+        }
         let tag = consumer - 1;
         self.record(tag, Action::Gnss(fix));
         let replayed = self.replay(tag >= self.newer_seq)?;
@@ -775,6 +782,7 @@ mod tests {
         hash: u64,
         stale: u32,
         invalid: u32,
+        updates: u32,
         last_nis: Option<F>,
     }
 
@@ -788,6 +796,7 @@ mod tests {
                 hash: 0xCBF2_9CE4_8422_2325,
                 stale: 0,
                 invalid: 0,
+                updates: 0,
                 last_nis: None,
             }
         }
@@ -805,6 +814,7 @@ mod tests {
                 self.mix(how);
                 self.mix(fix.time.tow().to_bits());
                 self.last_nis = Some(fix.position.height);
+                self.updates += 1;
             }
         }
     }
@@ -873,6 +883,10 @@ mod tests {
             self.last_nis
         }
 
+        fn update_sequence(&self) -> u32 {
+            self.updates
+        }
+
         fn consecutive_rejections(&self) -> u32 {
             0
         }
@@ -903,6 +917,7 @@ mod tests {
 
         fn apply_aid(&mut self, aid: &u64) -> Result<bool, FilterError> {
             self.mix(0xA1D0_0000 ^ aid);
+            self.updates += 1;
             Ok(true)
         }
 
@@ -1092,6 +1107,11 @@ mod tests {
         }
         assert!(e.history().is_empty());
         assert_eq!(e.dropped_event_count(), 10);
+        let hash = e.engine().hash;
+        assert_eq!(e.add_gnss(fix(0.095, 3.0)), Ok(FixOutcome::NotRetained));
+        assert_eq!(e.engine().hash, hash);
+        assert_eq!(e.dropped_event_count(), 11);
+        assert_eq!((e.rewind_count(), e.replayed_sample_count()), (0, 0));
     }
 
     #[test]

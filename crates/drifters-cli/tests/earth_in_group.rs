@@ -85,7 +85,7 @@ impl World {
     fn sample(&mut self, k: usize) -> ImuSample {
         let site = site();
         let noise = imu();
-        let body = self.truth.dcm.transpose();
+        let body = self.truth.dcm().transpose();
         let rate = body * Wgs84::omega_ie_n(site.lat) + self.gyro_bias;
         let force = -(body * Wgs84::gravity_n(site.lat, site.height)) + self.accel_bias;
         let root = DT.sqrt();
@@ -116,6 +116,7 @@ fn eqf_options(world: &World) -> EqfOptions {
     let mut o = EqfOptions::default()
         .with_initial_state(site(), Ned::ZERO, world.start)
         .with_imu_noise(&imu())
+        .unwrap()
         .with_lever_arm(Vec3::ZERO, Vec3::splat(1e-3));
     o.initial_position_std = Vec3::splat(POSITION_STD);
     o.initial_velocity_std = Vec3::splat(VELOCITY_STD);
@@ -152,8 +153,8 @@ fn fly<E: Estimator>(mut engine: E, world: &mut World, marks: &[usize]) -> Vec<(
         }
         engine.add_imu(world.sample(k)).expect("sample");
         if k % per_second == 0 && marks.contains(&(k / per_second)) {
-            let attitude = engine.nav_state().pva.attitude.quat;
-            let error: Quat = attitude * world.truth.quat.conjugate();
+            let attitude = engine.nav_state().pva.attitude.quat();
+            let error: Quat = attitude * world.truth.quat().conjugate();
             let heading = error.canonicalized().to_rotation_vector().z;
             out.push((heading, engine.pva_std().attitude.z));
         }
