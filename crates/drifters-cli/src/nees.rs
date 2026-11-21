@@ -44,6 +44,9 @@ use crate::stats::{self, Running};
 
 /// State dimension.
 pub const DIM: usize = 21;
+/// Seconds discarded before scoring, so the transient from the initial error
+/// does not dominate. Shared by the EqF and ESKF campaigns.
+pub const SETTLE: f64 = 10.0;
 /// Gravity for the synthetic world, NED.
 const GRAVITY: Vec3 = Vec3::new(0.0, 0.0, 9.81);
 
@@ -222,13 +225,13 @@ impl NeesReport {
         println!(
             "\noverall  {:>8.3}   expected {DIM}, 95 % interval [{lo:.2}, {hi:.2}]  {}",
             self.overall.mean(),
-            verdict(self.overall.mean(), lo, hi)
+            verdict(self.overall.mean(), self.overall.count(), lo, hi)
         );
         let (rlo, rhi) = stats::run_interval(DIM as f64, &self.run_overall);
         println!(
             "         run to run, over {} runs:        [{rlo:.2}, {rhi:.2}]  {}",
             self.run_overall.len(),
-            verdict(self.overall.mean(), rlo, rhi)
+            verdict(self.overall.mean(), self.run_overall.len() as u64, rlo, rhi)
         );
 
         let (blo, bhi) = stats::nis_interval(3, self.blocks[0].count());
@@ -240,8 +243,8 @@ impl NeesReport {
             println!(
                 "  {name:<11} {:>8.3}   {:<14} [{rlo:.2}, {rhi:.2}]  {}",
                 r.mean(),
-                verdict(r.mean(), blo, bhi),
-                verdict(r.mean(), rlo, rhi)
+                verdict(r.mean(), r.count(), blo, bhi),
+                verdict(r.mean(), self.run_blocks.len() as u64, rlo, rhi)
             );
         }
         let (plo, phi) = stats::nis_interval(6, self.pairs[0][1].count().max(1));
@@ -254,7 +257,7 @@ impl NeesReport {
                 }
                 println!(
                     "  {first:<11} + {second:<11} {m:>8.3}   {}",
-                    verdict(m, plo, phi)
+                    verdict(m, self.pairs[a][b].count(), plo, phi)
                 );
             }
         }
@@ -271,8 +274,11 @@ impl NeesReport {
     }
 }
 
-pub(crate) fn verdict(value: f64, lo: f64, hi: f64) -> &'static str {
-    if value > hi {
+pub(crate) fn verdict(value: f64, samples: u64, lo: f64, hi: f64) -> &'static str {
+    if samples == 0 {
+        // A mean of zero over no samples would otherwise read as "consistent".
+        "insufficient samples"
+    } else if value > hi {
         "OVERCONFIDENT"
     } else if value < lo {
         "conservative"
@@ -418,13 +424,13 @@ pub fn run_nees_turning<C: drifters_eqf::Covariance>(
     strength: f64,
     turning: Turning,
 ) -> NeesReport {
-    let settle = 10.0;
+    let settle = SETTLE;
     let period = if turning.fix_period > 0.0 {
         turning.fix_period
     } else {
         1.0
     };
-    let gnss_every = (period / dt).round() as usize;
+    let gnss_every = ((period / dt).round() as usize).max(1);
     let gnss_sigma = Vec3::new(0.5, 0.5, 1.0) * strength;
     let mut q = noise();
     let s2 = strength * strength;
@@ -899,6 +905,13 @@ mod tests {
     fn an_exact_estimate_scores_zero() {
         let s = State::default();
         assert!(physical_error(&s, &s).iter().all(|v| *v == 0.0));
+    }
+
+    /// An empty accumulator must not be reported as a consistent filter.
+    #[test]
+    fn a_verdict_with_no_samples_is_not_consistent() {
+        assert_eq!(verdict(0.0, 0, 0.0, f64::INFINITY), "insufficient samples");
+        assert_eq!(verdict(3.0, 10, 2.0, 4.0), "consistent");
     }
 
     /// The campaign, small enough for CI.
@@ -1395,7 +1408,7 @@ pub mod eskf {
                     break;
                 }
 
-                if t < 10.0 || k % (1.0 / dt).round() as usize != 0 {
+                if t < super::SETTLE || k % (1.0 / dt).round() as usize != 0 {
                     continue;
                 }
                 let nav = engine.nav_state();
@@ -1524,13 +1537,13 @@ pub mod eskf {
             "\noverall  {:>8.3}   expected 15 (scale factors excluded), \
              95 % interval [{lo:.2}, {hi:.2}]  {}",
             r.overall.mean(),
-            verdict(r.overall.mean(), lo, hi)
+            verdict(r.overall.mean(), r.overall.count(), lo, hi)
         );
         let (rlo, rhi) = stats::run_interval(15.0, &r.run_overall);
         println!(
             "         run to run, over {} runs: [{rlo:.2}, {rhi:.2}]  {}",
             r.run_overall.len(),
-            verdict(r.overall.mean(), rlo, rhi)
+            verdict(r.overall.mean(), r.run_overall.len() as u64, rlo, rhi)
         );
         let (blo, bhi) = stats::nis_interval(3, r.blocks[0].count().max(1));
         println!("\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]");
@@ -1548,7 +1561,7 @@ pub mod eskf {
             println!(
                 "  {name:<11} {:>8.3}   {}",
                 slot.mean(),
-                verdict(slot.mean(), blo, bhi)
+                verdict(slot.mean(), slot.count(), blo, bhi)
             );
         }
         // What the covariance *should* have been. The sample covariance of the
@@ -1647,7 +1660,7 @@ pub mod eskf {
                     names[a],
                     names[b],
                     m,
-                    verdict(m, plo, phi)
+                    verdict(m, r.pairs[a][b].count(), plo, phi)
                 );
             }
         }

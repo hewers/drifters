@@ -218,6 +218,17 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Fixed
 
+- **The CLI now rejects a flag it does not know, handles `--help`, and refuses a
+  NEES campaign that scores nothing.** The hand-rolled parser ignored unknown
+  arguments, so `nees --run 2` ran the 40-run default in silence, and `--help`
+  fell through to "expected a subcommand" and exited 1. `nees --runs 2 --seconds 5`
+  also sat entirely inside the 10 s settle, scored no epoch, and reported every
+  block "consistent" because a mean of zero over no samples fell inside the
+  interval. Each subcommand now declares the flags it takes and anything else is
+  an error; `--help`/`-h` prints the usage and exits 0; `nees` rejects `--runs 0`,
+  a `--seconds` no larger than the settle, and a non-positive `--dt` or
+  `--strength`, and a report with no samples reads "insufficient samples".
+
 - **The equivariant filter took a magnetometer reading exactly opposite the field
   for a perfect one,** because the sine in its innovation folds at a quarter turn. A
   reading more than a quarter turn from the prediction is now refused.

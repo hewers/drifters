@@ -42,28 +42,131 @@ fn main() -> ExitCode {
     }
 }
 
-fn usage() {
-    eprintln!(
-        "usage: drifters <replay|plot|eqf> --config <path> [--engine eskf,eqf]\n\
-         \x20         [--imu <path>] [--gnss <path>] [--out <dir>] [--week <n>] [--quiet]\n\
-         \x20         [--earth-rate | --earth-in-group | --flat-earth] [--alpha <a|off>]\n\
-         \x20         [--figure <svg>] [--compare <svg>]\n\
-         \x20      drifters <gsdc|tune> --dir <path> [--engine eskf,eqf] [...]\n\
-         \x20      drifters comma --dir <path> [--wheel <m/s>] [--nhc <lat,vert>] [...]\n\
-         \n\
-         \x20 replay  run an estimator over a KF-GINS dataset (default: the ESKF)\n\
-         \x20 plot    the same, and write an SVG figure\n\
-         \x20 eqf     replay --engine eqf\n\
-         \x20 gsdc    replay a GSDC phone trace against ground truth (default: both)\n\
-         \x20 tune    sweep the IMU process noise and score every point\n\
-         \x20 comma   replay comma2k19 segments against comma's reference pose (ESKF only)\n\
-         \x20 nees    Monte-Carlo consistency of the EqF, or of the ESKF with --eskf"
-    );
-}
+const USAGE: &str = "usage: drifters <replay|plot|eqf> --config <path> [--engine eskf,eqf]\n\
+     \x20         [--imu <path>] [--gnss <path>] [--out <dir>] [--week <n>] [--quiet]\n\
+     \x20         [--earth-rate | --earth-in-group | --flat-earth] [--alpha <a|off>]\n\
+     \x20         [--figure <svg>] [--compare <svg>]\n\
+     \x20      drifters <gsdc|tune> --dir <path> [--engine eskf,eqf] [...]\n\
+     \x20      drifters comma --dir <path> [--wheel <m/s>] [--nhc <lat,vert>] [...]\n\
+     \n\
+     \x20 replay  run an estimator over a KF-GINS dataset (default: the ESKF)\n\
+     \x20 plot    the same, and write an SVG figure\n\
+     \x20 eqf     replay --engine eqf\n\
+     \x20 gsdc    replay a GSDC phone trace against ground truth (default: both)\n\
+     \x20 tune    sweep the IMU process noise and score every point\n\
+     \x20 comma   replay comma2k19 segments against comma's reference pose (ESKF only)\n\
+     \x20 nees    Monte-Carlo consistency of the EqF, or of the ESKF with --eskf\n\
+     \n\
+     \x20 --help  print this help";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let index = args.iter().position(|a| a == name)?;
     args.get(index + 1).map(String::as_str)
+}
+
+// The value-taking and boolean flags each subcommand accepts. Kept as explicit
+// tables so that `check_flags` can reject anything else; a mistyped `--runs`
+// used to run the default silently.
+const REPLAY_VALUES: &[&str] = &[
+    "--config",
+    "--engine",
+    "--imu",
+    "--gnss",
+    "--out",
+    "--week",
+    "--alpha",
+    "--warm-start",
+    "--figure",
+    "--name",
+    "--compare",
+];
+const REPLAY_SWITCHES: &[&str] = &[
+    "--quiet",
+    "--earth-rate",
+    "--earth-in-group",
+    "--flat-earth",
+];
+const GSDC_VALUES: &[&str] = &[
+    "--dir",
+    "--engine",
+    "--sigma-n",
+    "--sigma-e",
+    "--sigma-v",
+    "--imu-scale",
+    "--gyro-scale",
+    "--gnss-lag",
+    "--alpha",
+    "--base",
+    "--max-satellites",
+    "--dump",
+    "--compare",
+    "--figure",
+    "--name",
+];
+const GSDC_SWITCHES: &[&str] = &[
+    "--quiet",
+    "--earth-rate",
+    "--earth-in-group",
+    "--flat-earth",
+    "--no-doppler",
+    "--carrier",
+    "--raw-ranges",
+    "--tight",
+];
+const TUNE_VALUES: &[&str] = &[
+    "--dir",
+    "--engine",
+    "--sigma-n",
+    "--sigma-e",
+    "--sigma-v",
+    "--alpha",
+    "--scales",
+];
+const TUNE_SWITCHES: &[&str] = &["--quiet", "--raw-ranges"];
+const COMMA_VALUES: &[&str] = &[
+    "--dir",
+    "--imu-scale",
+    "--sigma-h",
+    "--sigma-v",
+    "--latency",
+    "--mount",
+    "--wheel",
+    "--nhc",
+    "--zaru",
+    "--outage",
+    "--settle",
+];
+const COMMA_SWITCHES: &[&str] = &[
+    "--uncalibrated-gyro",
+    "--per-kind-rejections",
+    "--wheel-scale",
+    "--per-segment",
+];
+const NEES_VALUES: &[&str] = &["--runs", "--seconds", "--seed", "--dt", "--strength"];
+const NEES_SWITCHES: &[&str] = &["--eskf", "--factored"];
+
+/// Reject any argument a subcommand does not understand.
+///
+/// The command line is parsed by [`flag`] and by scanning for switches, both of
+/// which ignore what they do not recognise. Without this, `nees --run 2` is a
+/// silent request for the 40-run default. `args[0]` is the subcommand itself;
+/// `values` are the flags that take the next argument.
+fn check_flags(args: &[String], values: &[&str], switches: &[&str]) -> Result<(), String> {
+    let mut i = 1;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if values.contains(&arg) {
+            if i + 1 >= args.len() {
+                return Err(format!("{arg} needs a value"));
+            }
+            i += 2;
+        } else if switches.contains(&arg) {
+            i += 1;
+        } else {
+            return Err(format!("unknown argument {arg}"));
+        }
+    }
+    Ok(())
 }
 
 /// `--earth-rate`, `--earth-in-group` or `--flat-earth`, or none of them for
@@ -85,27 +188,59 @@ fn engines(args: &[String], default: &[EngineKind]) -> Result<Vec<EngineKind>, S
 }
 
 fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    // `--help` anywhere prints the usage and succeeds. Left to the subcommands
+    // it fell through to "expected a subcommand" and exited 1.
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return Ok(());
+    }
     match args.first().map(String::as_str) {
         Some("gsdc") => run_gsdc_command(args),
         Some("tune") => run_tune_command(args),
         Some("comma") => run_comma_command(args),
         Some("nees") => {
+            check_flags(args, NEES_VALUES, NEES_SWITCHES)?;
             let runs: usize = flag(args, "--runs").unwrap_or("40").parse()?;
             let seconds: f64 = flag(args, "--seconds").unwrap_or("120").parse()?;
             let seed: u64 = flag(args, "--seed").unwrap_or("20260811").parse()?;
             let dt: f64 = flag(args, "--dt").unwrap_or("0.01").parse()?;
             let strength: f64 = flag(args, "--strength").unwrap_or("1").parse()?;
-            if args.iter().any(|a| a == "--eskf") {
-                let r = drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength);
-                drifters_cli::nees::eskf::print(&r);
+            if runs == 0 {
+                return Err("--runs must be at least 1".into());
+            }
+            if !seconds.is_finite() || seconds <= drifters_cli::nees::SETTLE {
+                return Err(format!(
+                    "--seconds must exceed the {:.0} s settle, or no epoch is scored",
+                    drifters_cli::nees::SETTLE
+                )
+                .into());
+            }
+            if !dt.is_finite() || dt <= 0.0 {
+                return Err("--dt must be positive".into());
+            }
+            if !strength.is_finite() || strength <= 0.0 {
+                return Err("--strength must be positive".into());
+            }
+            let eskf = args.iter().any(|a| a == "--eskf");
+            let report = if eskf {
+                drifters_cli::nees::eskf::run(runs, seconds, seed, dt, strength)
             } else if args.iter().any(|a| a == "--factored") {
                 // The EqF with its covariance factored and held in f32.
                 drifters_cli::nees::run_nees_with::<drifters_eqf::Ud<f32>>(
                     runs, seconds, seed, dt, strength,
                 )
-                .print();
             } else {
-                drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength).print();
+                drifters_cli::nees::run_nees_scaled(runs, seconds, seed, dt, strength)
+            };
+            // A campaign that scored nothing has no verdict to give, whatever
+            // the intervals say.
+            if report.overall.count() == 0 {
+                return Err("no epoch was scored; raise --seconds or lower --dt".into());
+            }
+            if eskf {
+                drifters_cli::nees::eskf::print(&report);
+            } else {
+                report.print();
             }
             Ok(())
         }
@@ -116,7 +251,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         Some("plot") => run_replay_command(args, &[EngineKind::Eskf], true),
         Some("eqf") => run_replay_command(args, &[EngineKind::Eqf], false),
         _ => {
-            usage();
+            eprintln!("{USAGE}");
             Err("expected a subcommand".into())
         }
     }
@@ -133,6 +268,7 @@ fn run_replay_command(
     default: &[EngineKind],
     make_figure: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    check_flags(args, REPLAY_VALUES, REPLAY_SWITCHES)?;
     // A comparison is of two things, so asking for one without naming the
     // engines means both.
     let default = if flag(args, "--compare").is_some() {
@@ -355,6 +491,7 @@ fn write_figure(path: &str, svg: &str) -> std::io::Result<()> {
 ///   --per-segment          a line per segment
 /// ```
 fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    check_flags(args, COMMA_VALUES, COMMA_SWITCHES)?;
     use drifters_cli::comma;
     use drifters_cli::stats::percentile;
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
@@ -531,6 +668,7 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 /// Replay a GSDC phone-trace through each engine selected, and report them
 /// against the phone's own GNSS solution, all scored on ground truth.
 fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    check_flags(args, GSDC_VALUES, GSDC_SWITCHES)?;
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
     let engines = engines(args, &EngineKind::ALL)?;
@@ -899,6 +1037,7 @@ fn run_gsdc_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 /// every point, so the consistency-optimal scale and the accuracy-optimal scale
 /// can be compared rather than assumed equal.
 fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    check_flags(args, TUNE_VALUES, TUNE_SWITCHES)?;
     let dir = PathBuf::from(flag(args, "--dir").ok_or("--dir is required")?);
     let quiet = args.iter().any(|a| a == "--quiet");
     let engines = engines(args, &EngineKind::ALL)?;
@@ -996,4 +1135,79 @@ fn run_tune_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         med_target
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_string).collect()
+    }
+
+    fn err(line: &str) -> String {
+        run(&argv(line)).expect_err("expected an error").to_string()
+    }
+
+    #[test]
+    fn help_succeeds_rather_than_exiting_one() {
+        assert!(run(&argv("--help")).is_ok());
+        assert!(run(&argv("-h")).is_ok());
+        assert!(run(&argv("nees --help")).is_ok());
+    }
+
+    #[test]
+    fn an_unknown_flag_is_rejected() {
+        // The reported case: `--run` is `--runs` mistyped, and used to run the
+        // 40-run default in silence.
+        assert!(err("nees --run 2").contains("unknown argument --run"));
+    }
+
+    #[test]
+    fn a_flag_from_another_subcommand_is_rejected() {
+        assert!(err("nees --config x").contains("unknown argument --config"));
+        assert!(err("tune --dir d --wheel 1").contains("unknown argument --wheel"));
+    }
+
+    #[test]
+    fn a_flag_missing_its_value_is_rejected() {
+        assert!(err("nees --runs").contains("--runs needs a value"));
+        assert!(err("nees --runs 2 --seconds").contains("--seconds needs a value"));
+    }
+
+    #[test]
+    fn a_run_that_scores_nothing_is_rejected() {
+        // 2 runs of 5 s sit entirely inside the 10 s settle.
+        assert!(err("nees --runs 2 --seconds 5").contains("settle"));
+        assert!(err("nees --runs 0").contains("--runs"));
+    }
+
+    #[test]
+    fn the_documented_flags_of_each_subcommand_are_accepted() {
+        check_flags(
+            &argv("replay --config c --engine eskf --quiet"),
+            REPLAY_VALUES,
+            REPLAY_SWITCHES,
+        )
+        .unwrap();
+        check_flags(
+            &argv("gsdc --dir d --sigma-n 5 --earth-in-group --tight"),
+            GSDC_VALUES,
+            GSDC_SWITCHES,
+        )
+        .unwrap();
+        check_flags(
+            &argv("tune --dir d --scales 1,2 --raw-ranges"),
+            TUNE_VALUES,
+            TUNE_SWITCHES,
+        )
+        .unwrap();
+        check_flags(
+            &argv("comma --dir d --wheel 1 --per-segment"),
+            COMMA_VALUES,
+            COMMA_SWITCHES,
+        )
+        .unwrap();
+        check_flags(&argv("nees --runs 2 --eskf"), NEES_VALUES, NEES_SWITCHES).unwrap();
+    }
 }
