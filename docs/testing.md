@@ -144,7 +144,7 @@ cargo test -p drifters-cli --test kf_gins_regression -- --nocapture
 The `test` profile is optimised (see the top of this document), so this takes
 about **2.6 s in a plain `cargo test`, and 2.3 s in release**; it needs no
 `--release` and no environment variable. Times are from a
-Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB, Linux under WSL2, Rust 1.100.
+Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB LPDDR5X, Linux under WSL2, Rust 1.100.
 
 ### Seeing it rather than reading it
 

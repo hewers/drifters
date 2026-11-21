@@ -77,7 +77,7 @@
 //! carries its share of the aiding calls repeated with it. The means are this
 //! benchmark's, whose fixes land on three phases of the refresh; over all
 //! phases the mean is `L + (W − 1) / 2`. Times are from
-//! a Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB,
+//! a Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB LPDDR5X,
 //! Linux under WSL2, Rust 1.100, release profile.
 //!
 //! No timing exists for a target, but the count does. An `add_imu` on

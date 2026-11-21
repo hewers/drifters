@@ -37,7 +37,7 @@ under QEMU.
 | **Tests** | 844 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 [^machine]: The release-build regression test, file parsing included, on a
-    Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB, Linux under WSL2, Rust 1.100.
+    Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB LPDDR5X, Linux under WSL2, Rust 1.100.
 
 Accuracy is an open-loop check: the filter's predicted antenna position at each
 fix's epoch, before the fix is applied, so between fixes it runs on inertial
