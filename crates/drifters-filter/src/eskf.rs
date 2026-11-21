@@ -1,4 +1,4 @@
-//! The error-state Kalman filter: transition matrix, predict and update.
+//! The error-state Kalman filter: transition matrix, predict, and update.
 //!
 //! See `docs/state-model.md` for the derivation of every block below.
 
@@ -817,7 +817,7 @@ impl Eskf {
     /// confident and wrong, so it rejects the very measurements that would
     /// correct it, and stays wrong forever. Inflating breaks that deadlock.
     ///
-    /// Scaling preserves symmetry, positive definiteness and every correlation
+    /// Scaling preserves symmetry, positive definiteness, and every correlation
     /// — it re-scales the whole uncertainty ellipsoid rather than reshaping it,
     /// which is the conservative choice when the *direction* of the error is
     /// exactly what is unknown.

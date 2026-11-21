@@ -15,7 +15,7 @@
 //!
 //! # What this adapter does and does not carry
 //!
-//! A PVT solution and a [`GnssFix`] agree on position, velocity and time. They
+//! A PVT solution and a [`GnssFix`] agree on position, velocity, and time. They
 //! disagree about uncertainty, and that gap is the interesting part.
 //!
 //! [`PVTSolution`] reports **dilution of precision**, not a covariance. DOP is
@@ -23,7 +23,7 @@
 //! the measurement quality — so it cannot become a standard deviation without
 //! an assumption about the user-equivalent range error. The caller supplies
 //! that as [`Uere`], because only the caller knows the receiver, the
-//! environment and whether the solution is single-point, differential or RTK.
+//! environment and whether the solution is single-point, differential, or RTK.
 //!
 //! Getting this wrong is not cosmetic. The filter weights a fix by exactly
 //! these sigmas: too small and the solution is dragged onto every multipath

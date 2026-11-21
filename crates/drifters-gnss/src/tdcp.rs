@@ -96,9 +96,9 @@ impl Carrier {
     }
 }
 
-/// Weighting, screening and robustness settings.
+/// Weighting, screening, and robustness settings.
 ///
-/// The defaults are the values measured on trace A; B, C and D were held out.
+/// The defaults are the values measured on trace A; B, C, and D were held out.
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
     /// Reject a pair whose phase change disagrees with the Doppler prediction

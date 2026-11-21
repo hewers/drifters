@@ -1,4 +1,4 @@
-//! Fuzz every estimator with arbitrary IMU, GNSS and aiding sequences.
+//! Fuzz every estimator with arbitrary IMU, GNSS, and aiding sequences.
 //!
 //! The decoder and the properties live in
 //! `crates/drifters-cli/tests/robustness/mod.rs`, shared with the deterministic

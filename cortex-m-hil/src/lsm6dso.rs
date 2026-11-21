@@ -2,7 +2,7 @@
 //!
 //! The bus is a trait so that everything above the wire can run under QEMU
 //! against [`crate::board`]'s simulated device: the configuration sequence,
-//! data-ready polling, decoding and the axis change. Only the I2C transfer
+//! data-ready polling, decoding, and the axis change. Only the I2C transfer
 //! itself is left for the board to prove.
 
 use drifters_core::math::Vec3;

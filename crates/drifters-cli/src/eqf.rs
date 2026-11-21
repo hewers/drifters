@@ -48,7 +48,7 @@ use crate::Report;
 /// - [`WarmStart::None`] is the only causal result. It is what a library
 ///   accuracy claim should quote.
 /// - [`WarmStart::Calibration`] carries back the bias, lever arm, magnetometer
-///   calibration and the covariance, and resets position, velocity and attitude
+///   calibration and the covariance, and resets position, velocity, and attitude
 ///   to the configured start. The trajectory is still tracked causally; only the
 ///   IMU arrives pre-calibrated. This is what a deployment does after a
 ///   calibration run, and it isolates steady-state accuracy from convergence.

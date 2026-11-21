@@ -180,7 +180,7 @@ impl Lla {
         }
     }
 
-    /// True when latitude, longitude and height are inside physically sensible
+    /// True when latitude, longitude, and height are inside physically sensible
     /// bounds and free of NaN.
     pub fn is_valid(self) -> bool {
         use core::f64::consts::{FRAC_PI_2, PI};

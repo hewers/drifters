@@ -63,7 +63,7 @@ use crate::linear::DIM;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct EqfOptions {
-    /// Initial position, velocity and attitude.
+    /// Initial position, velocity, and attitude.
     pub initial_state: Pva,
     /// Origin of the filter's local tangent frame. `None` anchors at the
     /// initial position, which is what a system that starts where it will
@@ -106,7 +106,7 @@ pub struct EqfOptions {
     /// [`with_imu_noise`](Self::with_imu_noise) fills it from the datasheet
     /// figures the ESKF is configured with.
     pub process_noise: ProcessNoise,
-    /// Correct the IMU input for Earth rotation, transport rate and Coriolis.
+    /// Correct the IMU input for Earth rotation, transport rate, and Coriolis.
     ///
     /// Off by default, as the paper has it: its model is a flat, non-rotating
     /// Earth. Turn it on for any gyroscope that can see the Earth turn — bias
@@ -230,9 +230,9 @@ impl Default for EqfOptions {
 }
 
 impl EqfOptions {
-    /// Set the initial position, velocity and attitude in one call.
+    /// Set the initial position, velocity, and attitude in one call.
     ///
-    /// `attitude` is roll, pitch and yaw in radians.
+    /// `attitude` is roll, pitch, and yaw in radians.
     pub fn with_initial_state(mut self, position: Lla, velocity: Ned, attitude: Euler) -> Self {
         self.initial_state = Pva {
             position,
@@ -242,7 +242,7 @@ impl EqfOptions {
         self
     }
 
-    /// Start from an initial alignment: its state, biases, sigmas and lever
+    /// Start from an initial alignment: its state, biases, sigmas, and lever
     /// arm replace whatever was set here before.
     ///
     /// The lever arm is a state here, so it starts at the alignment's value
@@ -477,7 +477,7 @@ pub enum ConfigError {
     InvalidInitialPosition,
     /// The anchor is out of range or not finite.
     InvalidAnchor,
-    /// The initial velocity, attitude, bias or lever arm is not finite.
+    /// The initial velocity, attitude, bias, or lever arm is not finite.
     NonFiniteInitialState,
     /// Initial standard deviations must be strictly positive: a zero makes the
     /// covariance singular and the first update undefined.
@@ -516,7 +516,7 @@ impl ConfigError {
             Self::InvalidInitialPosition => "initial position is out of range or not finite",
             Self::InvalidAnchor => "anchor is out of range or not finite",
             Self::NonFiniteInitialState => {
-                "initial velocity, attitude, bias or lever arm is not finite"
+                "initial velocity, attitude, bias, or lever arm is not finite"
             }
             Self::NonPositiveInitialStd => "initial standard deviations must be > 0",
             Self::NegativeProcessNoise => "process noise densities must be finite and >= 0",

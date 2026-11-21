@@ -9,7 +9,7 @@
 //! This module measures against truth instead. It is deliberately **not** tied
 //! to any one dataset: a truth trajectory is a time-ordered sequence of
 //! geodetic positions, whether it came from a Kaggle competition, post-processed
-//! RTK, a total station or a simulator.
+//! RTK, a total station, or a simulator.
 //!
 //! # Interpolation, and refusing to extrapolate
 //!

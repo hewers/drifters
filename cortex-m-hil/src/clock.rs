@@ -46,7 +46,7 @@ impl Clock {
     }
 }
 
-/// Minimum, mean and maximum of a series of cycle counts.
+/// Minimum, mean, and maximum of a series of cycle counts.
 #[derive(Clone, Copy)]
 pub struct Stats {
     pub n: u32,

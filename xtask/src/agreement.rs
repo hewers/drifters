@@ -39,7 +39,7 @@ const FIELDS: [&str; 8] = [
     "attitude_std",
 ];
 
-/// How far single precision may move a position, velocity or attitude, as a
+/// How far single precision may move a position, velocity, or attitude, as a
 /// fraction of the filter's sigma for it. The largest measured is 2.5e-4.
 const STATE_TOLERANCE_SIGMAS: f64 = 5.0e-3;
 /// How far it may move a sigma, as a fraction of that sigma. Measured: 2.0e-4.

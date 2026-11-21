@@ -135,7 +135,7 @@ impl VehicleMounting {
         self.rotation.is_finite() && unit && self.forward_std.is_finite() && self.forward_std >= 0.0
     }
 
-    /// Roll, pitch and yaw of the sensor relative to the vehicle, radians.
+    /// Roll, pitch, and yaw of the sensor relative to the vehicle, radians.
     #[inline]
     pub fn euler(&self) -> Euler {
         self.rotation.to_euler()

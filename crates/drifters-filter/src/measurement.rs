@@ -124,7 +124,7 @@ impl<const M: usize> Measurement<M> {
         self
     }
 
-    /// True when the innovation, Jacobian and noise are finite and the gate,
+    /// True when the innovation, Jacobian, and noise are finite and the gate,
     /// if there is one, is a number. A measurement that is not says nothing
     /// a filter can use.
     #[inline]
@@ -738,7 +738,7 @@ impl Default for WheelScaleConfig {
 /// Estimates a wheel-speed sensor's scale factor against GNSS ground speed.
 ///
 /// Car wheel-speed sensors read a percent or two off: they count wheel
-/// revolutions and assume a tyre radius, which wear, pressure and load all
+/// revolutions and assume a tyre radius, which wear, pressure, and load all
 /// change. At 28 m/s one percent is 0.28 m/s, about the sigma a filter has to
 /// give the wheel speed to survive it, and over a thirty-second outage it is
 /// 8 m of along-track error on its own.

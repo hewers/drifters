@@ -33,7 +33,7 @@
 //! which is millimetre-precision rather than metre-precision. That is why the
 //! sub-metre entries in the Google challenge used post-processed kinematic
 //! rather than code differential. This module is the groundwork for that —
-//! the reader, the matching, the time alignment and the geometry are all
+//! the reader, the matching, the time alignment, and the geometry are all
 //! validated — and not a substitute for it.
 //!
 //! # What is being cancelled, and what is not
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_planted_per_satellite_error_comes_back_as_the_correction() {
-        // Errors of 3, -5, 1 and 1 m. Their median is 1, which the clock
+        // Errors of 3, -5, 1, and 1 m. Their median is 1, which the clock
         // removal takes out, so the corrections should be 2, -6, 0, 0.
         let (base, sats) = scene([3.0, -5.0, 1.0, 1.0], 0.0, 1000.0);
         let c = build(&base, ROVER, |_| Some(sats.clone()), &Settings::default());

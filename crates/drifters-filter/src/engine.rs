@@ -154,10 +154,10 @@ impl GinsEngine {
         self.filter.std_deviations()
     }
 
-    /// One-sigma uncertainty of position, velocity and attitude.
+    /// One-sigma uncertainty of position, velocity, and attitude.
     ///
     /// The first nine of [`GinsEngine::std_deviations`], named. The error
-    /// state is already in NED metres, m/s and radians about the navigation
+    /// state is already in NED metres, m/s, and radians about the navigation
     /// axes, so nothing is converted.
     pub fn pva_std(&self) -> PvaStd {
         let sigma = self.filter.std_deviations();
@@ -1203,7 +1203,7 @@ mod tests {
     #[test]
     fn a_gap_in_the_imu_stream_is_counted_and_not_closed() {
         let mut e = GinsEngine::new(options()).unwrap();
-        // 0.01 s samples at 0.01, 0.02 and 0.03 s are contiguous.
+        // 0.01 s samples at 0.01, 0.02, and 0.03 s are contiguous.
         for i in 1..=3 {
             e.add_imu(stationary_sample(&e, 0.01, i as F * 0.01))
                 .unwrap();

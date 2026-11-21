@@ -9,7 +9,7 @@
 //!
 //! Only what a differential correction needs is read: the station's surveyed
 //! position, which observation types are present, and one pseudorange per
-//! satellite per epoch. Carrier phase, signal strength and the navigation
+//! satellite per epoch. Carrier phase, signal strength, and the navigation
 //! message are skipped.
 //!
 //! # RINEX 2.11 has no BeiDou
@@ -84,7 +84,7 @@ pub struct BaseRange {
     pub svid: u16,
     /// Band code, from [`band_of`].
     pub band: u8,
-    /// Pseudorange, metres. Raw: no clock, atmosphere or bias applied.
+    /// Pseudorange, metres. Raw: no clock, atmosphere, or bias applied.
     pub pseudorange: f64,
 }
 

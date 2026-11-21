@@ -24,7 +24,7 @@
 //! | instruction counts | **exact** under `-icount shift=0`, calibrated; not a timing |
 //! | **cycle counts, wall-clock timing** | **worthless** |
 //!
-//! QEMU models no pipeline, no cache, no flash wait states and no FPU latency.
+//! QEMU models no pipeline, no cache, no flash wait states, and no FPU latency.
 //! On a real Cortex-M4F running from flash with wait states, the same code can
 //! be several times slower than from zero-wait RAM, and QEMU shows none of that.
 //!
@@ -269,7 +269,7 @@ fn ticks_per_step<E: Estimator>(syst: &mut SYST, engine: &mut E) -> Option<u32> 
 /// `.cargo/config.toml` does not pass the flag, so read these lines only from
 /// an explicit `-icount` invocation. See docs/testing.md Layer 9.
 ///
-/// Not a cycle count. It cannot see pipeline stalls, flash wait states or the
+/// Not a cycle count. It cannot see pipeline stalls, flash wait states, or the
 /// FPU's latencies, so it will not tell you how long anything takes. What it
 /// does measure exactly is how much *work* a change removes, which is what
 /// distinguishes soft-float from hardware: an `__aeabi_dmul` is tens of

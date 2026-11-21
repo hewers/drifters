@@ -65,7 +65,7 @@ message EqfOptions {
   // position, which is what a system that starts where it will operate wants.
   Lla anchor = 15;
 
-  // Correct the IMU input for Earth rotation, transport rate and Coriolis.
+  // Correct the IMU input for Earth rotation, transport rate, and Coriolis.
   bool compensate_earth = 16;
   // Let the anchor's tangent frame turn with the Earth, inside the filter's
   // group. Cannot be combined with `compensate_earth`.
@@ -77,7 +77,7 @@ message EqfOptions {
   // inflation at all. `optional` so that "no inflation" and "the fastest rate"
   // stay distinguishable; absent means none.
   optional double gcu_alpha = 19;
-  // Chi-squared gates on a position fix, a velocity and a magnetometer
+  // Chi-squared gates on a position fix, a velocity, and a magnetometer
   // direction. Absent means the gate is off.
   optional double position_gate = 20;
   optional double velocity_gate = 21;

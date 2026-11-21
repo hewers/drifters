@@ -74,7 +74,7 @@
 //!
 //! # Memory
 //!
-//! Three engines, the two rings and 80 bytes of bookkeeping. For
+//! Three engines, the two rings, and 80 bytes of bookkeeping. For
 //! `EqfRewindEngine<120, 32>`, the size the ESKF's is quoted at — a 200 Hz
 //! IMU and 300 ms of latency — that is 3 × 4 720 + 120 × 64 + 32 × 120 + 80 =
 //! **25 760 bytes**, pinned by `the_wrapper_has_its_documented_footprint`.

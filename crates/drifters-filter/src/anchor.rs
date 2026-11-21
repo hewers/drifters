@@ -8,7 +8,7 @@
 //! v_B = R_BA v_A               P_B    = J P_A Jᵀ
 //! ```
 //!
-//! `J` is block-diagonal: `R_BA` on position, velocity and attitude error, and
+//! `J` is block-diagonal: `R_BA` on position, velocity, and attitude error, and
 //! the identity on the IMU errors, which are body-frame quantities.
 //!
 //! Bounded range is what lets position live in `f32`, and re-anchoring bounds
@@ -30,7 +30,7 @@ use drifters_core::math::{Mat3, Vec3};
 
 /// The Jacobian of a re-anchoring, `J` above.
 ///
-/// Block-diagonal: `rotation` on position, velocity and attitude error; the
+/// Block-diagonal: `rotation` on position, velocity, and attitude error; the
 /// identity on every IMU-error block.
 pub fn jacobian(rotation: &Mat3) -> StateMatrix {
     let mut j = StateMatrix::identity();

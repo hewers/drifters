@@ -1,4 +1,4 @@
-//! WGS-84 ellipsoid, normal gravity and earth-rotation terms.
+//! WGS-84 ellipsoid, normal gravity, and earth-rotation terms.
 //!
 //! The values here are the defining and derived constants of WGS-84
 //! (NIMA TR8350.2). Everything is a plain function of geodetic latitude and
@@ -131,7 +131,7 @@ impl Wgs84 {
 ///
 /// Every quantity here depends on latitude through a single `sin_cos`, and the
 /// mechanization needs most of them several times per IMU sample at the same
-/// point: gravity, earth rate, transport rate and the radii of curvature. The
+/// point: gravity, earth rate, transport rate, and the radii of curvature. The
 /// free functions on [`Wgs84`] each evaluate their own, so a step that calls
 /// six of them evaluates six.
 ///

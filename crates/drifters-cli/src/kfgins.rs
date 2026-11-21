@@ -185,7 +185,7 @@ pub struct NavRow {
     pub position: Lla,
     /// Ground velocity in NED, m/s.
     pub velocity: Ned,
-    /// Roll, pitch and yaw, radians.
+    /// Roll, pitch, and yaw, radians.
     pub attitude: Euler,
 }
 

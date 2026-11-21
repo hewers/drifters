@@ -45,7 +45,7 @@ use drifters_core::F;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct GinsOptions {
-    /// Initial position, velocity and attitude.
+    /// Initial position, velocity, and attitude.
     pub initial_state: Pva,
     /// Initial IMU error estimate. Usually zero unless a prior calibration
     /// is being carried over.
@@ -107,7 +107,7 @@ pub struct GinsOptions {
     pub count_rejections_per_kind: bool,
     /// Whether a zero-velocity update may correct attitude.
     ///
-    /// Stationary, accelerometer bias and tilt produce identical velocity
+    /// Stationary, accelerometer bias, and tilt produce identical velocity
     /// signatures — `d(δv_N)/dt = δb_a,N + g·φ_E` — so a ZUPT observes only
     /// their sum. Letting it correct both makes the pair drift apart along the
     /// unobservable direction until the tilt's gravity mis-projection dominates
@@ -155,9 +155,9 @@ impl Default for GinsOptions {
 }
 
 impl GinsOptions {
-    /// Set the initial position, velocity and attitude in one call.
+    /// Set the initial position, velocity, and attitude in one call.
     ///
-    /// `attitude` is roll, pitch and yaw in radians.
+    /// `attitude` is roll, pitch, and yaw in radians.
     pub fn with_initial_state(mut self, position: Lla, velocity: Ned, attitude: Euler) -> Self {
         self.initial_state = Pva {
             position,

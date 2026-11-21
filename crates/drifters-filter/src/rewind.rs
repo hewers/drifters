@@ -116,7 +116,7 @@
 //! # What is recorded, and what is not
 //!
 //! The seven aiding calls this type mirrors — ZUPT, zero rate, non-holonomic,
-//! wheel speed, height, heading and magnetometer — as an [`Aid`] each, and every GNSS fix queued through
+//! wheel speed, height, heading, and magnetometer — as an [`Aid`] each, and every GNSS fix queued through
 //! it. [`GinsEngine::apply_pseudoranges`] and [`GinsEngine::apply`] are not
 //! mirrored. Their inputs are a slice and a generic measurement, neither of
 //! which fits a fixed-size record, and a call that reached the inner engine

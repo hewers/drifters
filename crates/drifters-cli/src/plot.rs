@@ -5,7 +5,7 @@
 //!
 //! # Why hand-written SVG
 //!
-//! A plotting crate would pull in font handling, colour management and often a
+//! A plotting crate would pull in font handling, colour management, and often a
 //! rasteriser to draw three panels. SVG text and polylines are a few dozen
 //! lines, the output is diffable in review, it scales on a README, and the
 //! workspace dependency count is unaffected. Reconsider if the plots ever need

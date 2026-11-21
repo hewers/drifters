@@ -1,4 +1,4 @@
-//! The equivariant filter: propagation, update and reset.
+//! The equivariant filter: propagation, update, and reset.
 //!
 //! # Error convention
 //!
@@ -140,7 +140,7 @@ pub enum Verdict {
     Singular,
 }
 
-/// The largest the observer's velocity, position, bias and lever-arm parts may
+/// The largest the observer's velocity, position, bias, and lever-arm parts may
 /// become, in their own units.
 ///
 /// Reporting multiplies `Σ` by these on both sides, and a filter this far from
@@ -788,7 +788,7 @@ mod tests {
     /// every block of every matrix is non-trivial and a rounding difference
     /// anywhere has sixty seconds to show up.
     /// One closed loop for any covariance form: sixty seconds from a wrong
-    /// start, with position, velocity and magnetometer updates every second.
+    /// start, with position, velocity, and magnetometer updates every second.
     /// Returns the truth and the filter.
     fn closed_loop<C: Covariance>(mut f: EqFilter<C>) -> (Truth, EqFilter<C>) {
         let north = Vec3::new(0.48, 0.0, 0.88).normalized();

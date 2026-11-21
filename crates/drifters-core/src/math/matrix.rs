@@ -28,7 +28,7 @@ pub struct Matrix<const R: usize, const C: usize> {
     pub data: [[F; C]; R],
 }
 
-/// A 3×3 matrix — direction cosine matrices, skew forms and 3-axis blocks.
+/// A 3×3 matrix — direction cosine matrices, skew forms, and 3-axis blocks.
 pub type Mat3 = Matrix<3, 3>;
 
 /// A column vector of length `N`.

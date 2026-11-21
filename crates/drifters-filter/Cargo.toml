@@ -1,6 +1,6 @@
 [package]
 name = "drifters-filter"
-description = "no_std error-state Kalman filter for aided inertial navigation (GNSS/INS): estimates extended pose and IMU errors from IMU, GNSS and auxiliary sensors"
+description = "no_std error-state Kalman filter for aided inertial navigation (GNSS/INS): estimates extended pose and IMU errors from IMU, GNSS, and auxiliary sensors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -35,7 +35,7 @@ default = []
 reduced-state = []
 ## Carry the covariance factors in `f32` instead of `f64`.
 ##
-## Only the factors: the states, the Jacobians and the gains stay `f64`, and so
+## Only the factors: the states, the Jacobians, and the gains stay `f64`, and so
 ## does position — see [`ud::Scalar`] for why that last one is not negotiable.
 ## Halves the covariance (1 848 to 924 bytes) and puts its arithmetic in single
 ## precision, which on a Cortex-M4F is hardware where `f64` is emulated.

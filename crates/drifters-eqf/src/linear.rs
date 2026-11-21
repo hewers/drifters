@@ -9,7 +9,7 @@
 //!
 //! Each was derived from its definition and then checked entry by entry against
 //! a central-difference Jacobian of the map it linearises. The two routes are
-//! independent, one algebraic and one arithmetic over the actual
+//! independent, one algebraic, and one arithmetic over the actual
 //! [`crate::group`] actions, and the tests fail if they disagree.
 //!
 //! Agreements with the printed equation are noted below, as are the

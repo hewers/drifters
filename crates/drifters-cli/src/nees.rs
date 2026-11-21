@@ -393,7 +393,7 @@ pub fn run_nees_scaled(runs: usize, seconds: f64, seed: u64, dt: f64, strength: 
 
 /// As [`run_nees_scaled`], with the filter's covariance held as `C` — the
 /// factored `Ud<f32>` form is what `drifters nees --factored` measures. The
-/// truth, the noise and the scoring are identical, so a difference between
+/// truth, the noise, and the scoring are identical, so a difference between
 /// the two is the precision and nothing else.
 pub fn run_nees_with<C: drifters_eqf::Covariance>(
     runs: usize,

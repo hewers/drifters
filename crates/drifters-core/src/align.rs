@@ -1,6 +1,6 @@
 //! Initial alignment: from a powered-up sensor to a state and its sigmas.
 //!
-//! An estimator has to be told where it is, which way it points and how sure
+//! An estimator has to be told where it is, which way it points, and how sure
 //! it may be of both. [`Aligner`] works those out from the same two streams the
 //! estimator will consume, so a deployment supplies a description of its IMU
 //! and nothing about the initial condition. It knows no estimator: what it
@@ -36,7 +36,7 @@
 //! happened. From the end of the rest the strapdown equations are integrated
 //! in the body frame *at rest*, with the mean rate and the mean specific force
 //! taken out. That one subtraction removes the gyro bias, the body-frame Earth
-//! rate, gravity, the accelerometer bias and the tilt error together. What is
+//! rate, gravity, the accelerometer bias, and the tilt error together. What is
 //! left is a velocity and a displacement known in a level frame of unknown
 //! heading, and heading is the rotation that lays them over the GNSS track, in
 //! closed form.
@@ -129,7 +129,7 @@ const HEADING_PATIENCE: F = 10.0;
 const NOMINAL_GRAVITY: F = 9.8;
 /// How far the measured specific force may be from gravity at rest, m/s². Wide
 /// enough for a consumer accelerometer's scale error, narrow enough to refuse
-/// free fall, a sustained turn or a unit mix-up.
+/// free fall, a sustained turn, or a unit mix-up.
 const GRAVITY_TOLERANCE: F = 1.0;
 /// Free-air gravity gradient, (m/s²)/m.
 const GRAVITY_GRADIENT: F = 3.086e-6;
@@ -415,7 +415,7 @@ pub struct AlignStatus {
 ///
 /// Every sigma is one standard deviation and strictly positive, so each can go
 /// directly into an engine's initial covariance. Attitude sigmas are rotations
-/// about north, east and down, in radians, which is what both engines in this
+/// about north, east, and down, in radians, which is what both engines in this
 /// repository use for their attitude error.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -424,7 +424,7 @@ pub struct AlignStatus {
 pub struct Alignment {
     /// The IMU sample this state is valid at.
     pub time: GpsTime,
-    /// Position of the IMU, velocity and attitude.
+    /// Position of the IMU, velocity, and attitude.
     pub pva: Pva,
     /// Estimated sensor errors.
     pub imu_error: ImuError,

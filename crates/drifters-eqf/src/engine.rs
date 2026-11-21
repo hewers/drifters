@@ -286,7 +286,7 @@ impl<C: Covariance> EqfEngine<C> {
             .map(root)
     }
 
-    /// One-sigma uncertainty of position, velocity and attitude.
+    /// One-sigma uncertainty of position, velocity, and attitude.
     ///
     /// The first nine of [`EqfEngine::std_deviations`], named.
     pub fn pva_std(&self) -> PvaStd {

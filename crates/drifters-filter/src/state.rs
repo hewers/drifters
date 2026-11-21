@@ -89,7 +89,7 @@ pub const SGSTD_ID: usize = 12;
 #[cfg(not(feature = "reduced-state"))]
 pub const SASTD_ID: usize = 15;
 
-/// How many states have general dynamics: position, velocity and attitude.
+/// How many states have general dynamics: position, velocity, and attitude.
 ///
 /// Every state from here up is an IMU error parameter, a first-order
 /// Gauss-Markov process that depends on nothing but itself and is driven by its

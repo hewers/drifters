@@ -22,7 +22,7 @@
 
 use drifters_core::F;
 
-/// Running mean, variance and extrema of a scalar sequence.
+/// Running mean, variance, and extrema of a scalar sequence.
 ///
 /// Uses Welford's algorithm: one pass, no stored samples, and numerically
 /// stable — the naive "sum of squares minus square of sum" loses catastrophic

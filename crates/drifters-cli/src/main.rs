@@ -292,7 +292,7 @@ fn run_replay_command(
 
     let warm = match flag(args, "--warm-start") {
         Some(v) => {
-            eqf::WarmStart::parse(v).ok_or("--warm-start must be none, calibration or full")?
+            eqf::WarmStart::parse(v).ok_or("--warm-start must be none, calibration, or full")?
         }
         None => eqf::WarmStart::None,
     };

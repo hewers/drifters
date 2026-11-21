@@ -65,7 +65,7 @@
 //!
 //! [`error`] is **truth minus estimate**, with the two rotations as the
 //! rotation vectors of `R R̂ᵀ` and `Ŝᵀ S`. Attitude is therefore a rotation
-//! about the global axes — north, east and down in this workspace — which is
+//! about the global axes — north, east, and down in this workspace — which is
 //! the convention the ESKF's attitude error uses too. It compares two [`State`]s
 //! as they stand, so in a rotating frame its velocity entry is `δv'`, which is
 //! the one to set against [`jacobian`] with a zero `earth_rate`.
@@ -252,7 +252,7 @@ mod tests {
     }
 
     /// An estimate with nothing zero in it: moving, away from the anchor,
-    /// tilted, with a bias, a lever arm and a magnetometer calibration. Every
+    /// tilted, with a bias, a lever arm, and a magnetometer calibration. Every
     /// off-diagonal block of the Jacobian is exercised, which the identity
     /// would not do — see docs/eqf.md on what a Jacobian checked at the
     /// identity can hide.

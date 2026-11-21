@@ -125,7 +125,7 @@ fn main() -> ! {
         };
 
         // Standing for a quarter of a minute, then pulling away, with a fix
-        // every second, so that leveling, the strapdown track and the heading
+        // every second, so that leveling, the strapdown track, and the heading
         // fit are all on the path. What it produces is then handed to both
         // engines, as a device would.
         let pulling_away = step % 12_000 > 3_000;

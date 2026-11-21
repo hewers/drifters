@@ -228,7 +228,7 @@ pub fn flat_earth_verdict(gyro_bias_stability: F) -> FlatEarthVerdict {
 /// δψ = bias / (ω · cos lat)
 /// ```
 ///
-/// This is what a system determines with no GNSS, no motion and no magnetometer,
+/// This is what a system determines with no GNSS, no motion, and no magnetometer,
 /// and it is the capability [`compensate_earth`] gives up. It degrades towards
 /// the poles, where the horizontal component vanishes and gyrocompassing fails
 /// entirely.

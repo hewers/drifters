@@ -34,7 +34,7 @@
 //!
 //! `M` is the number of differences the update carries, chosen at compile
 //! time. When fewer are available the remaining rows are padded with a zero
-//! Jacobian, a zero innovation and unit noise, which contributes exactly
+//! Jacobian, a zero innovation, and unit noise, which contributes exactly
 //! nothing: a zero row of `H` produces a zero column of the gain. The
 //! alternative — allocating per epoch, or a separate update per satellite —
 //! would give up either `no_std` or the correlation.
@@ -59,7 +59,7 @@ const OMEGA_E: F = 7.292_115_146_7e-5;
 
 /// One satellite's pseudorange at one epoch.
 ///
-/// The satellite clock, ionosphere, troposphere and any inter-signal bias are
+/// The satellite clock, ionosphere, troposphere, and any inter-signal bias are
 /// the caller's to remove: this crate has no ephemeris and no atmosphere
 /// model, and a receiver that reports pseudoranges generally reports those
 /// corrections alongside them.

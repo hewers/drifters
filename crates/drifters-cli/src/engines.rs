@@ -64,7 +64,7 @@ impl EngineKind {
         for name in value.split(',') {
             let kind = Self::parse(name).ok_or_else(|| {
                 format!(
-                    "unknown engine `{}`: expected eskf, eqf, eqf-f32 or all",
+                    "unknown engine `{}`: expected eskf, eqf, eqf-f32, or all",
                     name.trim()
                 )
             })?;

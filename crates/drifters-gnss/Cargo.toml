@@ -1,6 +1,6 @@
 [package]
 name = "drifters-gnss"
-description = "GNSS observable processing for aided inertial navigation: robust pseudorange positioning, time-differenced carrier phase, RINEX ingest, reference-station corrections and batch trajectory fitting"
+description = "GNSS observable processing for aided inertial navigation: robust pseudorange positioning, time-differenced carrier phase, RINEX ingest, reference-station corrections, and batch trajectory fitting"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

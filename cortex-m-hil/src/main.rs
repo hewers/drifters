@@ -1,7 +1,7 @@
 //! How many cycles the estimators take on a real Cortex-M7.
 //!
 //! `cortex-m-harness` counts instructions under QEMU, which is exact and is
-//! not a time: QEMU has no pipeline, caches, flash wait states or FPU latency.
+//! not a time: QEMU has no pipeline, caches, flash wait states, or FPU latency.
 //! This firmware runs the same work on a board and reads the DWT cycle counter
 //! around each step, which is the number the emulator cannot give. See
 //! `README.md` for how to run it and what the numbers cover.

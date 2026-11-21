@@ -224,13 +224,13 @@ impl Attitude {
         }
     }
 
-    /// Build from roll, pitch and yaw in radians.
+    /// Build from roll, pitch, and yaw in radians.
     #[inline]
     pub fn from_euler(roll: F, pitch: F, yaw: F) -> Self {
         Self::from_quat(Quat::from_euler(roll, pitch, yaw))
     }
 
-    /// Roll, pitch and yaw in radians.
+    /// Roll, pitch, and yaw in radians.
     #[inline]
     pub fn euler(&self) -> Euler {
         self.quat.to_euler()
@@ -243,7 +243,7 @@ impl Attitude {
     }
 }
 
-/// Position, velocity and attitude — the navigation solution proper.
+/// Position, velocity, and attitude — the navigation solution proper.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

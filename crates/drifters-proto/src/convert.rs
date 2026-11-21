@@ -787,7 +787,7 @@ impl TryFrom<&pb::EqfOptions> for EqfOptions {
 /// fields below it are the states the EqF has and the ESKF does not.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EqfEstimate {
-    /// Geodetic position, ground velocity, attitude and IMU biases.
+    /// Geodetic position, ground velocity, attitude, and IMU biases.
     pub nav: NavState,
     /// Estimated GNSS antenna phase centre in the body frame, metres.
     pub lever_arm: Vec3,

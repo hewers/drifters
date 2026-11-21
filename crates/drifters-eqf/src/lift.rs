@@ -22,7 +22,7 @@
 //! module follows from it.
 //!
 //! `Λ₁` carries the navigation dynamics. `Λ₂`, `Λ₃` and `Λ₄` cancel the drag
-//! `Λ₁` would otherwise exert on the bias, lever arm and magnetometer
+//! `Λ₁` would otherwise exert on the bias, lever arm, and magnetometer
 //! calibration through the state action; those states are constant in (1) and
 //! the lift must reproduce that. Their tests are the three "stays constant"
 //! assertions, so a sign error in any of them appears as motion in a state that

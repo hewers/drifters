@@ -9092,7 +9092,7 @@ pub mod drifters_ {
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#anchor: Lla,
-            /// Correct the IMU input for Earth rotation, transport rate and Coriolis.
+            /// Correct the IMU input for Earth rotation, transport rate, and Coriolis.
             pub r#compensate_earth: bool,
             /// Let the anchor's tangent frame turn with the Earth, inside the filter's
             /// group. Cannot be combined with `compensate_earth`.
@@ -9105,7 +9105,7 @@ pub mod drifters_ {
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#gcu_alpha: f64,
-            /// Chi-squared gates on a position fix, a velocity and a magnetometer
+            /// Chi-squared gates on a position fix, a velocity, and a magnetometer
             /// direction. Absent means the gate is off.
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.

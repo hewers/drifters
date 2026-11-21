@@ -17,7 +17,7 @@
 //!    million instructions with `f32-covariance`, a few milliseconds, and a
 //!    late fix replays up to `SAMPLES` of them at once. Running that inside
 //!    the data-ready handler would block the next data-ready. The handlers
-//!    read, timestamp and queue, and the filter runs in a task they preempt.
+//!    read, timestamp, and queue, and the filter runs in a task they preempt.
 //! 2. **Nothing on the producing side waits.** A full queue means the filter
 //!    is behind. The handler drops the sample and counts it, and the count is
 //!    in the telemetry. The queue is sized so that this does not happen: it
