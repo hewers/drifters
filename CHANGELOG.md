@@ -231,6 +231,11 @@ the list below is what the release *is* rather than what changed.
 
 ### Fixed
 
+- ESKF smoother checkpoints now carry the epoch their state and covariance
+  describe. A GNSS update inside an IMU interval or at its end was stamped
+  with the previous IMU time, skewing comparisons during turns. This does not
+  change the forward solution or the RTS corrections.
+
 - **The KF-GINS replay scored each fix against a prediction up to one IMU
   interval old, and the headline residual was 3.3 cm where the filter's is
   1.3 cm.** A fix is queued just before the IMU sample that contains it, when

@@ -323,12 +323,7 @@ impl GinsEngine {
                 let first = before.map_or(Ok(()), |before| self.propagate(&before));
                 if first.is_ok() {
                     fix_outcome = self.apply_pending_gnss();
-                    let rest = self.propagate(&after);
-                    if rest.is_err() {
-                        // The state did get this far.
-                        self.state.time = fix.time;
-                    }
-                    rest
+                    self.propagate(&after)
                 } else {
                     first
                 }
@@ -347,7 +342,6 @@ impl GinsEngine {
             return Err(error);
         }
 
-        self.state.time = raw.time;
         self.previous_imu = imu;
         self.previous_pva = self.state.pva;
         fix_outcome
@@ -384,6 +378,9 @@ impl GinsEngine {
             return Err(FilterError::Diverged);
         }
         self.state.pva = next;
+        // Feedback may seal an RTS checkpoint before add_imu returns, even
+        // between the two halves of this sample. Stamp the state it records.
+        self.state.time = imu.time;
         self.previous_pva = previous;
         Ok(())
     }
@@ -1178,6 +1175,23 @@ mod tests {
         let after = e.nav_state().position();
         assert_eq!(before.lat, after.lat);
         assert_eq!(e.timestamp().tow(), 0.01);
+    }
+
+    #[cfg(feature = "smoothing")]
+    #[test]
+    fn checkpoint_time_is_the_propagated_epoch_not_the_previous_imu_tag() {
+        for (fix_tow, expected_epoch) in [(0.01001, 0.01), (0.014, 0.014), (0.01999, 0.02)] {
+            let mut e = GinsEngine::new(options()).unwrap();
+            e.record(true);
+            e.add_imu(stationary_sample(&e, 0.01, 0.01)).unwrap();
+            let fix =
+                GnssFix::position_only(GpsTime::from_tow(fix_tow), origin(), Vec3::splat(1.0));
+            assert_eq!(e.add_gnss(fix), GnssQueued::Queued);
+            e.add_imu(stationary_sample(&e, 0.01, 0.02)).unwrap();
+            let checkpoint = e.take_checkpoint().expect("position fix applied");
+            assert_eq!(checkpoint.state.time, GpsTime::from_tow(expected_epoch));
+            assert_eq!(e.timestamp(), GpsTime::from_tow(0.02));
+        }
     }
 
     #[test]
