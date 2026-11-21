@@ -46,6 +46,27 @@ agrees to 1.2 cm, 0.003 m/s, and 0.018° of heading. Method, tolerances, and wha
 that reference is and is not independent of are in
 [docs/testing.md](docs/testing.md#layer-6--golden-dataset-regression).
 
+### Work per IMU sample
+
+Instructions per `add_imu`, the mean of 200 steps, on the two cores the harness
+emulates. This is what decides whether the filter fits a microcontroller:
+
+| | Cortex-M4, `f64` in software | Cortex-M7, `f64` in hardware | Cortex-M7, `opt-level = 3` |
+|---|---|---|---|
+| ESKF, 21-state | 1 598 320 | 88 360 | 61 560 |
+| ESKF, 21-state, `f32-covariance` | 348 920 | 86 280 | 61 320 |
+| ESKF, 15-state (`reduced-state`) | 884 800 | 55 520 | 32 680 |
+| ESKF, 15-state, `f32-covariance` | 231 320 | 53 560 | 31 920 |
+| EqF engine, dense `f64` | 4 509 800 | 277 400 | 112 160 |
+| EqF engine, factored `f32` | 893 480 | 333 920 | 150 800 |
+| EqF engine, dense, Earth in the group | 4 723 480 | 284 800 | 115 320 |
+| EqF engine, factored, Earth in the group | 914 520 | 336 520 | 151 360 |
+
+Measured under QEMU with `-icount shift=0`, so the counts are exact. They are
+**not** cycle counts — QEMU models no pipeline, cache, or FPU latency — so they
+measure the work a change removes, not the time it takes. Details in
+[docs/testing.md](docs/testing.md#instructions-retired).
+
 ## Two estimators, compared
 
 The library ships an error-state Kalman filter and an
