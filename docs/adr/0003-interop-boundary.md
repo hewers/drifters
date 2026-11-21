@@ -23,8 +23,8 @@ Most commercial embedded deployments cannot accept that, and — critically — 
 developer who adds `drifters-filter` to a project has no reason to expect that it
 dragged an AGPL obligation in with it.
 
-This project is MIT OR Apache-2.0. A permissive crate must not put an AGPL
-dependency anywhere on its default path.
+This project is released into the public domain (The Unlicense). A permissive
+crate must not put an AGPL dependency anywhere on its default path.
 
 ### Neither crate is `no_std`
 

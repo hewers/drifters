@@ -3,7 +3,8 @@ name = "cortex-m-hil"
 description = "Cycle counts for drifters on a Cortex-M7 board, read from the DWT through a debug probe"
 version = "0.0.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Unlicense"
+repository = "https://github.com/hewers/drifters"
 publish = false
 
 # Excluded from the main workspace, like `cortex-m-harness`: it is firmware,

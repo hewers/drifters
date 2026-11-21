@@ -2,6 +2,8 @@
 name = "drifters-fuzz"
 version = "0.0.0"
 edition = "2021"
+license = "Unlicense"
+repository = "https://github.com/hewers/drifters"
 publish = false
 
 # Excluded from the workspace: cargo-fuzz builds with its own flags and a

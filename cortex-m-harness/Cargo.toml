@@ -3,6 +3,8 @@ name = "cortex-m-harness"
 description = "Bare-metal measurement harness for drifters on Cortex-M, run under QEMU"
 version = "0.1.0"
 edition = "2021"
+license = "Unlicense"
+repository = "https://github.com/hewers/drifters"
 publish = false
 # Two binaries live here — the measurement harness and the panic audit — so
 # `cargo run` needs to be told which is the ordinary one.

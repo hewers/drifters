@@ -5,6 +5,8 @@
 //! ```text
 //! cargo xtask proto           # regenerate the protobuf bindings
 //! cargo xtask proto --check   # verify the checked-in output is up to date
+//! cargo xtask licences        # deploy UNLICENSE into every crate
+//! cargo xtask licences --check# verify each copy matches the root
 //! cargo xtask agreement DIR   # compare the firmware builds' reports in DIR
 //! ```
 //!
@@ -16,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod agreement;
+mod licences;
 mod proto;
 
 fn main() -> ExitCode {
@@ -31,6 +34,7 @@ fn main() -> ExitCode {
 
     let result = match task {
         "proto" => proto::run(check),
+        "licences" => licences::run(check),
         "agreement" => agreement::run(flags),
         other => {
             eprintln!("unknown task: {other}\n");
@@ -51,8 +55,9 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!(
         "tasks:\n  \
-         proto [--check]   regenerate protobuf bindings, or verify they are current\n  \
-         agreement DIR     compare the reports of cortex-m-harness/check-core.sh"
+         proto [--check]     regenerate protobuf bindings, or verify they are current\n  \
+         licences [--check]  deploy UNLICENSE into every crate, or verify the copies\n  \
+         agreement DIR       compare the reports of cortex-m-harness/check-core.sh"
     );
 }
 

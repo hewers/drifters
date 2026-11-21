@@ -19,7 +19,7 @@ edition = "2021"
 # `std` and the optional adapters. `drifters-proto` overrides it, because
 # `micropb` and `heapless` need newer releases, and so does `drifters-cli`.
 rust-version = "1.85"
-license = "MIT OR Apache-2.0"
+license = "Unlicense"
 repository = "https://github.com/hewers/drifters"
 authors = ["drifters contributors"]
 

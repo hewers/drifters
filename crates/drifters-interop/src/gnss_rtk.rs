@@ -4,7 +4,8 @@
 //!
 //! # ⚠ Licensing
 //!
-//! **`gnss-rtk` is AGPL-3.0.** `drifters` is MIT OR Apache-2.0. Enabling this
+//! **`gnss-rtk` is AGPL-3.0.** `drifters` is released into the public domain
+//! under The Unlicense. Enabling this
 //! feature links AGPL code, and the AGPL's obligations then extend to the
 //! combined work: for firmware that is the whole device image, and for a
 //! networked service the AGPL's network clause applies to the service itself.

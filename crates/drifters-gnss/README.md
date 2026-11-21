@@ -29,4 +29,4 @@ Every figure in these modules' documentation was measured on the Google
 Smartphone Decimeter Challenge traces against survey-grade truth. See
 [`docs/gsdc-observables.md`](https://github.com/hewers/drifters/blob/main/docs/gsdc-observables.md).
 
-Licensed under MIT or Apache-2.0, at your option.
+Released into the public domain under The Unlicense (see `UNLICENSE`).

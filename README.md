@@ -461,7 +461,8 @@ than the ROS convention](docs/adr/0006-frame-convention.md).
 
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+This is free and unencumbered software released into the public domain, under
+[The Unlicense](UNLICENSE).
 
 `drifters-interop`'s `gnss-rtk-interop` feature is **not** default and links
 AGPL-3.0 code; enabling it places the AGPL's obligations on the combined work.

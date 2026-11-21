@@ -4,6 +4,7 @@ description = "Repository automation. Not published, and never a dependency of a
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]

@@ -229,6 +229,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask proto --check
 
+  # Cargo packages only files under each package's own directory, so the root
+  # `UNLICENSE` would never reach a published tarball on its own. `cargo xtask
+  # licences` deploys it beside every manifest; this fails when a copy has
+  # drifted from the root.
+  licences:
+    name: licence copies are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask licences --check
+
   # The fuzz targets need nightly, so they cannot run in the main test job. A
   # short run on every push catches a target that stopped compiling and anything
   # shallow; depth comes from running them out of band. The engine target runs

@@ -14,6 +14,16 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ### Changed
 
+- **The project is relicensed from `MIT OR Apache-2.0` to The Unlicense, a
+  public-domain dedication.** Every crate now carries the `UNLICENSE` text;
+  before, the two licence files sat at the workspace root, and Cargo packages
+  only files under each package's own directory, so no published tarball
+  contained either. `cargo package --list` now shows `UNLICENSE` for every
+  published crate, and `cargo xtask licences --check` (run in CI) fails if a
+  copy drifts from the root. The licence policy is unchanged in substance:
+  permissive only, and `drifters-interop`'s non-default `gnss-rtk-interop`
+  feature is still the one AGPL boundary.
+
 - **The `test` profile is optimised, cutting the CI test jobs from hours to
   minutes.** `opt-level = 2` is set for `[profile.test]` while `debug-assertions`
   and `overflow-checks` stay on, because the Monte Carlo NEES campaigns do hours

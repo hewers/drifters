@@ -20,4 +20,4 @@ navigation state. Every conversion validates rather than assumes.
 
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+Released into the public domain under The Unlicense (see `UNLICENSE`).

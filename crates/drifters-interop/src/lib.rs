@@ -15,7 +15,8 @@
 //!
 //! # Licensing warning
 //!
-//! `drifters` is MIT OR Apache-2.0. Enabling `gnss-rtk-interop` links
+//! `drifters` is released into the public domain under The Unlicense. Enabling
+//! `gnss-rtk-interop` links
 //! [AGPL-3.0][agpl] code, and the AGPL's obligations then extend to the
 //! combined work — for firmware that means the whole device image, and for a
 //! networked service the AGPL's network clause applies to the service. That is

@@ -65,4 +65,4 @@ bit-identical to on-time delivery. It is the same machinery the ESKF's
 
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+Released into the public domain under The Unlicense (see `UNLICENSE`).
