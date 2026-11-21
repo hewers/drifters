@@ -12,6 +12,9 @@ breaking wire change becomes `v2` rather than a crate version bump.
 
 ## [Unreleased]
 
+First release. Nothing is on crates.io before this, so everything is new and
+the list below is what the release *is* rather than what changed.
+
 ### Changed
 
 - **The project is relicensed from `MIT OR Apache-2.0` to The Unlicense, a
@@ -592,13 +595,6 @@ breaking wire change becomes `v2` rather than a crate version bump.
   identity on the body-frame IMU errors) and `P ← J P Jᵀ` over the factored
   covariance.
 
-## [0.1.0] — unreleased
-
-First release. Nothing is on crates.io before this, so everything is new and
-the list below is what the release *is* rather than what changed.
-
-### Added
-
 - **`drifters-core`** — `no_std`, allocation-free foundations: fixed-size
   matrices with Cholesky, quaternions and rotation conversions, the WGS-84
   ellipsoid and gravity model, ECEF/geodetic/NED frames, and GPS time as an
@@ -668,5 +664,4 @@ the list below is what the release *is* rather than what changed.
   [`docs/adr/0009`](docs/adr/0009-local-first-architecture.md) would touch the
   core types, and pre-1.0 that would land as a minor bump.
 
-[Unreleased]: https://github.com/hewers/drifters/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hewers/drifters/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hewers/drifters/commits/main
