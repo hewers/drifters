@@ -163,7 +163,14 @@ fn check_flags(args: &[String], values: &[&str], switches: &[&str]) -> Result<()
         } else if switches.contains(&arg) {
             i += 1;
         } else {
-            return Err(format!("unknown argument {arg}"));
+            // The usage text abbreviates most subcommands' flags to `[...]`,
+            // so the refusal is where a caller learns what would have worked.
+            let name = args.first().map_or("this subcommand", String::as_str);
+            return Err(format!(
+                "unknown argument {arg}\n  {name} takes, with a value: {}\n  and as switches: {}",
+                values.join(" "),
+                switches.join(" ")
+            ));
         }
     }
     Ok(())
@@ -1160,7 +1167,11 @@ mod tests {
     fn an_unknown_flag_is_rejected() {
         // The reported case: `--run` is `--runs` mistyped, and used to run the
         // 40-run default in silence.
-        assert!(err("nees --run 2").contains("unknown argument --run"));
+        let message = err("nees --run 2");
+        assert!(message.contains("unknown argument --run"), "{message}");
+        // And it says what would have worked.
+        assert!(message.contains("--runs --seconds"), "{message}");
+        assert!(message.contains("--eskf --factored"), "{message}");
     }
 
     #[test]

@@ -231,7 +231,7 @@ impl NeesReport {
         println!(
             "         run to run, over {} runs:        [{rlo:.2}, {rhi:.2}]  {}",
             self.run_overall.len(),
-            verdict(self.overall.mean(), self.run_overall.len() as u64, rlo, rhi)
+            run_verdict(self.overall.mean(), self.run_overall.len(), rlo, rhi)
         );
 
         let (blo, bhi) = stats::nis_interval(3, self.blocks[0].count());
@@ -244,7 +244,7 @@ impl NeesReport {
                 "  {name:<11} {:>8.3}   {:<14} [{rlo:.2}, {rhi:.2}]  {}",
                 r.mean(),
                 verdict(r.mean(), r.count(), blo, bhi),
-                verdict(r.mean(), self.run_blocks.len() as u64, rlo, rhi)
+                run_verdict(r.mean(), self.run_blocks.len(), rlo, rhi)
             );
         }
         let (plo, phi) = stats::nis_interval(6, self.pairs[0][1].count().max(1));
@@ -271,6 +271,19 @@ impl NeesReport {
              run they are not, so it is too narrow. The run-to-run interval takes\n\
              each run's own mean as one sample, and is the one to judge by."
         );
+    }
+}
+
+/// [`verdict`] against a run-to-run interval.
+///
+/// That interval is the scatter of the runs' own means, and one run has no
+/// scatter: [`stats::run_interval`] answers `[0, inf]` for fewer than two, which
+/// any mean lies inside. A single run is therefore not a verdict.
+pub(crate) fn run_verdict(value: f64, runs: usize, lo: f64, hi: f64) -> &'static str {
+    if runs < 2 {
+        "needs two runs"
+    } else {
+        verdict(value, runs as u64, lo, hi)
     }
 }
 
@@ -914,6 +927,19 @@ mod tests {
         assert_eq!(verdict(3.0, 10, 2.0, 4.0), "consistent");
     }
 
+    /// One run has no run-to-run scatter, so its interval is `[0, inf]` and
+    /// every mean is inside it. That is not a filter being consistent.
+    #[test]
+    fn one_run_gives_no_run_to_run_verdict() {
+        let (lo, hi) = stats::run_interval(21.0, &[24.6]);
+        assert_eq!((lo, hi), (0.0, f64::INFINITY));
+        assert_eq!(run_verdict(24.6, 1, lo, hi), "needs two runs");
+        assert_eq!(run_verdict(24.6, 0, lo, hi), "needs two runs");
+        let (lo, hi) = stats::run_interval(21.0, &[20.0, 22.0, 21.0]);
+        assert_eq!(run_verdict(21.0, 3, lo, hi), "consistent");
+        assert_eq!(run_verdict(40.0, 3, lo, hi), "OVERCONFIDENT");
+    }
+
     /// The campaign, small enough for CI.
     ///
     /// # The covariance is consistent
@@ -1020,7 +1046,7 @@ mod tests {
 /// defect: an unobservable state should hold its prior, and NEES checks that it
 /// does.
 pub mod eskf {
-    use super::{verdict, Rng, BLOCKS};
+    use super::{run_verdict, verdict, Rng, BLOCKS};
     use crate::stats::{self, Running};
     use drifters_core::earth::Wgs84;
     use drifters_core::frames::{Lla, Ned};
@@ -1543,7 +1569,7 @@ pub mod eskf {
         println!(
             "         run to run, over {} runs: [{rlo:.2}, {rhi:.2}]  {}",
             r.run_overall.len(),
-            verdict(r.overall.mean(), r.run_overall.len() as u64, rlo, rhi)
+            run_verdict(r.overall.mean(), r.run_overall.len(), rlo, rhi)
         );
         let (blo, bhi) = stats::nis_interval(3, r.blocks[0].count().max(1));
         println!("\nper block, expected 3, 95 % interval [{blo:.2}, {bhi:.2}]");

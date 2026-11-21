@@ -53,6 +53,13 @@ pub struct Report {
     /// before the first IMU sample, and the first sample is what sets the
     /// engine's clock.
     pub stale_fixes: u64,
+    /// IMU samples the engine refused as invalid.
+    pub invalid_imu: u32,
+    /// Intervals in the IMU stream that did not begin where the previous one
+    /// ended. A reader that derives each interval from two timestamps, as the
+    /// KF-GINS one does, can never produce one: a sample missing from such a
+    /// file shows as a longer interval, not as a gap.
+    pub imu_gaps: u32,
     /// See [`Report`].
     pub inflations: u32,
     /// See [`Report`].
@@ -107,6 +114,12 @@ impl Report {
             "GNSS fixes applied    : {} ({} rejected by the gate, {} stale)",
             self.applied_fixes, self.rejected_fixes, self.stale_fixes
         );
+        if self.invalid_imu > 0 || self.imu_gaps > 0 {
+            println!(
+                "IMU stream            : {} invalid samples dropped, {} gaps",
+                self.invalid_imu, self.imu_gaps
+            );
+        }
         if self.inflations > 0 {
             println!(
                 "covariance inflations : {} — the filter was confident and wrong",
@@ -235,6 +248,8 @@ pub fn replay_with<E: ReplayEngine>(
         applied_fixes: 0,
         rejected_fixes: 0,
         stale_fixes: 0,
+        invalid_imu: 0,
+        imu_gaps: 0,
         inflations: 0,
         nis: Running::new(),
         residual_north: Running::new(),
@@ -352,6 +367,8 @@ pub fn replay_with<E: ReplayEngine>(
     // clock, so a fix queued with it is judged on the next.
     report.stale_fixes = u64::from(engine.stale_fix_count());
     report.rejected_fixes = report.rejected_fixes.saturating_sub(report.stale_fixes);
+    report.invalid_imu = engine.invalid_imu_count();
+    report.imu_gaps = engine.imu_gap_count();
     Ok(report)
 }
 
