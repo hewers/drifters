@@ -37,6 +37,8 @@
 //!
 //! [`drifters_filter::range`]: https://docs.rs/drifters-filter/latest/drifters_filter/range/
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 

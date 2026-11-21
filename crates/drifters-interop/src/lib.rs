@@ -37,6 +37,8 @@
 //! would make swapping solvers a rewrite instead of an adapter, so these
 //! conversions deliberately touch as little of the upstream API as possible.
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

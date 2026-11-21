@@ -67,5 +67,8 @@ defmt = [
 unsafe_code = "forbid"
 
 [package.metadata.docs.rs]
-all-features = true
+# Not `all-features`: `reduced-state` is not additive, and with it on docs.rs
+# would document the 15-state build. `eqf` is additive and belongs here, so the
+# EqF's conversions are documented.
+features = ["std", "defmt", "eqf"]
 rustdoc-args = ["--cfg", "docsrs"]

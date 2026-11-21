@@ -51,6 +51,8 @@
 //!   unknown setting is an error.
 //! - `std`: passed through to `drifters-core`.
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

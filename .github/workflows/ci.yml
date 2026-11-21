@@ -215,7 +215,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --exclude drifters-interop --no-deps --all-features
+      # The feature set docs.rs builds with, from each crate's
+      # `[package.metadata.docs.rs]`, and not `--all-features`: that would turn
+      # on `reduced-state` and `f32-covariance` and check the docs of the
+      # 15-state, single-precision build, which is not the one published.
+      - run: >
+          cargo doc --workspace --exclude drifters-interop --no-deps
+          --features drifters-core/defmt,drifters-core/serde,drifters-core/std
+          --features drifters-filter/smoothing,drifters-filter/std,drifters-filter/defmt,drifters-filter/serde
+          --features drifters-eqf/std,drifters-eqf/defmt,drifters-eqf/serde
+          --features drifters-proto/std,drifters-proto/defmt,drifters-proto/eqf
 
   # The checked-in protobuf bindings must match the schemas that produced them.
   # `cargo xtask proto` needs no `protoc` — the whole toolchain is pure Rust,

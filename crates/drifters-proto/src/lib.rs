@@ -60,6 +60,8 @@
 //! of letting a malformed value reach the filter, where it would surface much
 //! later as a `NaN` covariance with nothing left to point at the cause.
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

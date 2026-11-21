@@ -60,6 +60,8 @@
 //!   [`StationarityConfig`], for configuration read on a host.
 //! - `std`: links `std` and adds no API; see `docs/adr/0004-linear-algebra.md`.
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(drifters_nightly_simd, feature(portable_simd))]
 #![no_std]
 #![forbid(unsafe_code)]

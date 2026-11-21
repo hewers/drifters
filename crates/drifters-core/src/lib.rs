@@ -47,6 +47,8 @@
 //! level frame is north-east-down (NED), and attitude is stored as the unit
 //! quaternion `q_nb` rotating a body vector into the navigation frame.
 
+// On docs.rs, mark each feature-gated item with the feature it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
