@@ -65,4 +65,5 @@ bit-identical to on-time delivery. It is the same machinery the ESKF's
 
 ## Licence
 
-Released into the public domain under The Unlicense (see `UNLICENSE`).
+Zero-Clause BSD (`0BSD`, see `LICENSE`): use it for any purpose, with no
+attribution required.

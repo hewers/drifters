@@ -10,17 +10,17 @@ What the library does, what checks it, and what is open. The reasoning is in
 | area | what exists | where |
 |---|---|---|
 | Core maths | fixed-size matrices with Cholesky, Hamilton quaternions, exponential and logarithm maps, WGS-84, `Lla`/`Ecef`/`Ned`, integer-nanosecond `GpsTime` | `drifters-core` |
-| Mechanization | two-sample coning and sculling, midpoint Earth terms, trapezoidal position | `drifters-filter` |
-| ESKF | 21 states, 15 with `reduced-state`; `U D Uᵀ` covariance, in `f32` with `f32-covariance` | `drifters-filter` |
-| GNSS aiding | position and velocity fixes applied at their own epoch, with the lever arm; single-differenced pseudoranges with per-row Huber reweighting | `drifters-filter` |
-| Other aiding | ZUPT with a stationarity detector, non-holonomic constraints, wheel speed, barometric height, scalar heading, three-axis magnetometer; chi-squared gates, and covariance inflation after repeated rejection | `drifters-filter` |
+| Mechanization | two-sample coning and sculling, midpoint Earth terms, trapezoidal position | `drifters-eskf` |
+| ESKF | 21 states, 15 with `reduced-state`; `U D Uᵀ` covariance, in `f32` with `f32-covariance` | `drifters-eskf` |
+| GNSS aiding | position and velocity fixes applied at their own epoch, with the lever arm; single-differenced pseudoranges with per-row Huber reweighting | `drifters-eskf` |
+| Other aiding | ZUPT with a stationarity detector, non-holonomic constraints, wheel speed, barometric height, scalar heading, three-axis magnetometer; chi-squared gates, and covariance inflation after repeated rejection | `drifters-eskf` |
 | Sensor calibration | hard and soft iron fits, IMU-to-vehicle mounting estimation | `drifters_core::magnetometer`, `drifters_core::mounting` |
 | Late fixes | a fix delivered after its epoch is applied by rewinding, bit-identically to on-time delivery, for either estimator | `drifters_core::rewind` |
-| Smoothing | Rauch–Tung–Striebel backward pass into a caller's slice; the `smoothing` feature adds the engine's recorder | `drifters_filter::smoother` |
+| Smoothing | Rauch–Tung–Striebel backward pass into a caller's slice; the `smoothing` feature adds the engine's recorder | `drifters_eskf::smoother` |
 | Equivariant filter | `SE₂(3)` filter with lever-arm and magnetometer self-calibration, GCU, dense or factored covariance, Earth compensation, or the Earth's rotation in the group with an optional horizontal gravity gradient | `drifters-eqf` |
-| Common interface | `Estimator`, the epoch placement rule, gates and errors shared by both engines; one contract test runs against each | `drifters_core::estimator` |
+| Common interface | `Estimator`, the epoch placement rule, gates and errors shared by both engines; one contract test runs against each; open to other engines, with defaults for every method added after 0.1.0 | `drifters_core::estimator` |
 | Initial alignment | levelling, biases at rest, gyrocompass, or heading from motion, with a sigma for each output | `drifters_core::align` |
-| Serialization | protobuf schemas and validated conversions, no allocator, generated code checked in | `drifters-proto` |
+| Serialization | protobuf schemas and validated conversions for both engines alike, each engine's behind a feature named for it; no allocator; generated code checked in | `drifters-proto` |
 | GNSS processing | robust pseudorange positioning, time-differenced carrier phase, RINEX, reference-station corrections, a banded trajectory fit | `drifters-gnss` (`std`) |
 | Tools | `replay`, `plot`, `eqf`, `gsdc`, `tune`, `comma` and `nees` commands | `drifters-cli` |
 | Firmware | stack, size, instruction, and panic measurements under QEMU; an RTIC example; hardware-in-the-loop firmware | `cortex-m-harness`, `examples/rtic-imu`, `cortex-m-hil` |
@@ -31,13 +31,13 @@ What the library does, what checks it, and what is open. The reasoning is in
 |---|---|
 | `test` | three operating systems; every feature (without `defmt` on Windows, where it cannot link), no default features, `reduced-state`, and `f32-covariance` with the whole CLI campaign; `engine_robustness` at `reduced-state` |
 | `lint` | `cargo fmt --check`, and clippy with `-D warnings` |
-| `no_std` | `drifters-core`, `-filter`, `-proto` and `-eqf` on `thumbv7em-none-eabihf`, `thumbv6m-none-eabi` and `riscv32imac-unknown-none-elf`, with `smoothing`, `f32-covariance`, `defmt` and `serde`; none of them may name `extern crate alloc` |
+| `no_std` | `drifters-core`, `-eskf`, `-proto` and `-eqf` on `thumbv7em-none-eabihf`, `thumbv6m-none-eabi` and `riscv32imac-unknown-none-elf`, with `smoothing`, `f32-covariance`, `defmt` and `serde`; none of them may name `extern crate alloc` |
 | `semver` | `cargo-semver-checks` against the most recent release tag; with no tag there is no baseline, which it reports |
-| `msrv` | Rust 1.85 for `drifters-core`, `-filter`, `-eqf`, `-gnss` and `-interop`, and 1.88 for the workspace |
+| `msrv` | Rust 1.85 for `drifters-core`, `-eskf`, `-eqf`, `-gnss` and `-interop`, and 1.88 for the workspace |
 | `docs` | rustdoc with `-D warnings` |
-| `proto` | the checked-in bindings match the `.proto` sources |
+| `proto` | the checked-in bindings match the `.proto` sources, and `drifters-proto`'s packaged copy of them matches too |
 | `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), the [lever-arm test](testing.md#what-the-recording-says-about-its-lever-arm), and the alignment test, with a missing dataset failing the job |
-| `licences` | every package's copy of `UNLICENSE` matches the root |
+| `licences` | every package's copy of `LICENSE` matches the root |
 | `fuzz` | the decode target, and the engine target in three filter configurations, 60 s each |
 | `interop` | the permissive `nav-types` adapter |
 | `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit, and agreement between builds |
@@ -128,7 +128,7 @@ do so. [ADR 0009](adr/0009-local-first-architecture.md) has the argument and the
 measurements.
 
 [`drifters_core::local`](../crates/drifters-core/src/local.rs) and
-[`drifters_filter::anchor`](../crates/drifters-filter/src/anchor.rs) hold the
+[`drifters_eskf::anchor`](../crates/drifters-eskf/src/anchor.rs) hold the
 conversions and the re-anchoring transform, tested and unused. What remains is the
 state representation, the position rows of the transition matrix, every position
 measurement Jacobian and the protobuf schema.

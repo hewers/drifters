@@ -1,0 +1,124 @@
+// The equivariant filter: its configuration and its estimate.
+//
+// The EqF reports the same navigation solution the ESKF does — geodetic
+// position, ground velocity in NED, attitude — but estimates a different set of
+// states. It carries the GNSS antenna lever arm and the magnetometer's
+// rotational calibration as states, and has no IMU scale factors. Those are
+// what this schema adds; see drifters_eqf and docs/eqf.md.
+
+syntax = "proto3";
+
+package drifters.v1;
+
+import "drifters/v1/types.proto";
+
+// Continuous-time process noise for the EqF, as power spectral densities per
+// axis, split by physical source rather than by state block.
+message EqfProcessNoise {
+  // Gyroscope white noise, (rad/s)^2/Hz.
+  Vec3 gyro = 1;
+  // Accelerometer white noise, (m/s^2)^2/Hz.
+  Vec3 accel = 2;
+  // Gyroscope bias random walk, (rad/s^2)^2/Hz.
+  Vec3 gyro_bias = 3;
+  // Accelerometer bias random walk, (m/s^3)^2/Hz.
+  Vec3 accel_bias = 4;
+  // GNSS lever-arm random walk. Usually zero; the antenna is fixed.
+  Vec3 lever = 5;
+  // Magnetometer calibration random walk. Usually zero.
+  Vec3 mag = 6;
+}
+
+// Everything EqfEngine needs to start.
+//
+// Deliberately the same shape as GinsOptions wherever the two estimators want
+// the same thing, so one can be configured from the other's numbers. Where they
+// differ, the models do: the lever arm is a first guess with an uncertainty
+// rather than a constant, and there are no scale factors.
+message EqfOptions {
+  Lla initial_position = 1;
+  Ned initial_velocity_mps = 2;
+  Euler initial_attitude = 3;
+  // Initial gyroscope bias, rad/s. Usually zero.
+  Vec3 initial_gyro_bias_rps = 4;
+  // Initial accelerometer bias, m/s^2. Usually zero.
+  Vec3 initial_accel_bias_mps2 = 5;
+  // First guess at the GNSS antenna phase centre in the body frame, metres
+  // (forward, right, down from the IMU reference point). Estimated from here.
+  Vec3 initial_lever_arm_m = 6;
+
+  // One-sigma initial uncertainties, in physical units.
+  Vec3 initial_position_std_m = 7;
+  Vec3 initial_velocity_std_mps = 8;
+  Vec3 initial_attitude_std_rad = 9;
+  Vec3 initial_gyro_bias_std_rps = 10;
+  Vec3 initial_accel_bias_std_mps2 = 11;
+  // How far the antenna could plausibly be from `initial_lever_arm_m`.
+  Vec3 initial_lever_arm_std_m = 12;
+  // One-sigma initial uncertainty of the magnetometer's rotational
+  // calibration, radians.
+  Vec3 initial_mag_std_rad = 13;
+
+  EqfProcessNoise process_noise = 14;
+
+  // Origin of the filter's local tangent frame. Absent anchors at the initial
+  // position, which is what a system that starts where it will operate wants.
+  Lla anchor = 15;
+
+  // Correct the IMU input for Earth rotation, transport rate, and Coriolis.
+  bool compensate_earth = 16;
+  // Let the anchor's tangent frame turn with the Earth, inside the filter's
+  // group. Cannot be combined with `compensate_earth`.
+  bool earth_in_group = 17;
+  // Add the horizontal gravity gradient to `earth_in_group`.
+  bool gravity_gradient = 18;
+
+  // GCU convergence rate in [0, 1] — the lower, the faster — or absent for no
+  // inflation at all. `optional` so that "no inflation" and "the fastest rate"
+  // stay distinguishable; absent means none.
+  optional double gcu_alpha = 19;
+  // Chi-squared gates on a position fix, a velocity, and a magnetometer
+  // direction. Absent means the gate is off.
+  optional double position_gate = 20;
+  optional double velocity_gate = 21;
+  optional double direction_gate = 22;
+  // Consecutive gate rejections tolerated before the covariance is inflated.
+  // Absent means the recommended default, 10.
+  optional uint32 max_consecutive_rejections = 23;
+  // Covariance scale factor applied when that limit is reached. Absent means
+  // the recommended default, 4.
+  optional double rejection_inflation = 24;
+}
+
+// The EqF's estimate at one epoch.
+//
+// The navigation fields match EskfSolution's and are reported the same way —
+// geodetic position, ground velocity in NED, attitude as a quaternion — so a
+// consumer can treat the two estimates alike. The states the EqF has and the
+// ESKF does not are `lever_arm_m` and `mag_calibration`.
+message EqfSolution {
+  GpsTime time = 1;
+  // Position of the IMU reference point, not the GNSS antenna.
+  Lla position = 2;
+  // Ground velocity in the NED navigation frame, m/s.
+  Ned velocity_mps = 3;
+  // Attitude q_nb. Authoritative.
+  Quaternion attitude = 4;
+  // Attitude as Euler angles. Derived from `attitude`, carried for the
+  // convenience of consumers that only plot; never round-trip through it.
+  Euler euler = 5;
+  // Estimated gyroscope bias, rad/s.
+  Vec3 gyro_bias_rps = 6;
+  // Estimated accelerometer bias, m/s^2.
+  Vec3 accel_bias_mps2 = 7;
+  // Estimated GNSS antenna phase centre in the body frame, metres.
+  Vec3 lever_arm_m = 8;
+  // Magnetometer rotational calibration, rotating a measured field into the
+  // body frame. Identity when no magnetometer is used.
+  Quaternion mag_calibration = 9;
+  // Per-state one-sigma uncertainties, 21 elements, in the EqF's block order:
+  // attitude, velocity, position, gyroscope bias, accelerometer bias, lever
+  // arm, magnetometer calibration. This is *not* the ESKF's state order, which
+  // EskfSolution carries.
+  repeated double state_std = 10 [packed = true];
+}

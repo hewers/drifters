@@ -1,5 +1,5 @@
 [package]
-name = "drifters-filter"
+name = "drifters-eskf"
 description = "no_std error-state Kalman filter for aided inertial navigation (GNSS/INS): estimates extended pose and IMU errors from IMU, GNSS, and auxiliary sensors"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 authors.workspace = true
-categories = ["no-std", "science", "embedded"]
+categories = ["no-std::no-alloc", "embedded", "science::robotics", "science::geo", "aerospace"]
 keywords = ["navigation", "gnss", "ins", "kalman", "sensor-fusion"]
 
 [dependencies]

@@ -3,15 +3,15 @@
 //! Run via the cargo alias in `.cargo/config.toml`:
 //!
 //! ```text
-//! cargo xtask proto           # regenerate the protobuf bindings
+//! cargo xtask proto           # regenerate the bindings, copy the schemas into drifters-proto
 //! cargo xtask proto --check   # verify the checked-in output is up to date
-//! cargo xtask licences        # deploy UNLICENSE into every crate
+//! cargo xtask licences        # deploy LICENSE into every crate
 //! cargo xtask licences --check# verify each copy matches the root
 //! cargo xtask agreement DIR   # compare the firmware builds' reports in DIR
 //! ```
 //!
 //! This crate is host-only and build-time. Nothing here is reachable from
-//! `drifters-core` or `drifters-filter`, so its dependency tree never reaches a
+//! `drifters-core` or `drifters-eskf`, so its dependency tree never reaches a
 //! firmware image — verify with `cargo tree -p drifters-core`.
 
 use std::path::{Path, PathBuf};
@@ -55,8 +55,8 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!(
         "tasks:\n  \
-         proto [--check]     regenerate protobuf bindings, or verify they are current\n  \
-         licences [--check]  deploy UNLICENSE into every crate, or verify the copies\n  \
+         proto [--check]     regenerate bindings and copy schemas, or verify both are current\n  \
+         licences [--check]  deploy LICENSE into every crate, or verify the copies\n  \
          agreement DIR       compare the reports of cortex-m-harness/check-core.sh"
     );
 }

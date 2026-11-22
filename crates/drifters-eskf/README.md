@@ -1,4 +1,4 @@
-# drifters-filter
+# drifters-eskf
 
 An error-state Kalman filter for aided inertial navigation.
 
@@ -46,6 +46,17 @@ The first two are not additive. Each changes what the filter computes, so
 enabling one through feature unification changes results. The last two are
 additive and change no arithmetic on target.
 
+## Credit
+
+The design follows [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) by the i2Nav
+Group, Wuhan University: its architecture, its mechanization's structure, its
+error-state order and index names, and the shape of its types and options.
+KF-GINS is GPL-3.0; this crate is a separate implementation and contains none of
+its source code. Cite X. Niu et al., "KF-GINS: an open-sourced software for
+GNSS/INS integrated navigation," *GPS Solutions* 29(4), art. 202, 2025,
+[doi:10.1007/s10291-025-01967-w](https://doi.org/10.1007/s10291-025-01967-w).
+
 ## Licence
 
-Released into the public domain under The Unlicense (see `UNLICENSE`).
+Zero-Clause BSD (`0BSD`, see `LICENSE`): use it for any purpose, with no
+attribution required.

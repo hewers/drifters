@@ -34,7 +34,7 @@ under QEMU.
 | **Safety** | the data path links **zero** `core::panicking` symbols |
 | **Dependencies** | **one** on the filter path: `libm`. Protobuf adds `micropb` and `heapless`; `defmt` and `serde` are opt-in features |
 | **Estimators** | two, behind one trait: a 21-state **ESKF** and an **equivariant filter** |
-| **Tests** | 854 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
+| **Tests** | 858 with every feature on, leaving out the opt-in `drifters-interop` adapters, plus fuzzing and a bare-metal QEMU harness |
 
 [^machine]: The release-build regression test, file parsing included, on a
     Lenovo Slim 7x: Qualcomm Snapdragon X Elite, 12 cores, 16 GB LPDDR5X, Linux under WSL2, Rust 1.100.
@@ -249,7 +249,8 @@ Jacobian checked against a numerical one. `EqfEngine` is driven exactly as the
 ESKF's engine is: sans-IO, validated configuration, the IMU sample split at the GNSS
 epoch, gated updates. Both engines implement
 [`Estimator`](crates/drifters-core/src/estimator.rs), and one contract test runs
-against the pair. A fix that arrives late is applied by rewinding for either one,
+against the pair. The trait is open, so another engine can implement it too, and
+a method added to it after 0.1.0 comes with a default. A fix that arrives late is applied by rewinding for either one,
 through the same generic layer in `drifters-core`, and every dataset replay above
 runs whichever engine `--engine` selects through one loop.
 
@@ -286,8 +287,8 @@ core longer, so which build is fastest there needs a board.
 drifters-core      no_std, no alloc, deps: libm
                    fixed-size matrices, quaternions, WGS-84, frames, time,
                    and the Estimator trait both engines implement
-drifters-filter    no_std, no alloc — mechanization, 21-state ESKF, GinsEngine
-drifters-proto     no_std — protobuf codecs (micropb), codegen needs no protoc
+drifters-eskf      no_std, no alloc — mechanization, 21-state ESKF, GinsEngine
+drifters-proto     no_std — protobuf for both engines (micropb), no protoc needed
 drifters-eqf       no_std, no alloc — equivariant filter, Lie groups,
                    self-calibration, EqfEngine
 drifters-interop   std ONLY — nav-types / gnss-rtk adapters, opt-in
@@ -302,13 +303,13 @@ cortex-m-hil       firmware — DWT cycle counts and a live IMU on a NUCLEO-H743
 ## Quick start
 
 ```bash
-cargo add drifters-core drifters-filter
+cargo add drifters-core drifters-eskf
 cargo add drifters-eqf  # if using the EqF as well
 ```
 
 ```rust
 use drifters_core::prelude::*;
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 let mut engine = GinsEngine::new(GinsOptions::default())?;
 
@@ -325,7 +326,7 @@ through `&mut dyn Estimator` using only public crate APIs. Run it from this
 checkout with `cargo run -p drifters-consumer-example`.
 
 On a device the IMU often has passed it: a receiver reports a fix after the
-epoch it describes. `drifters_filter::RewindEngine` wraps the engine and applies
+epoch it describes. `drifters_eskf::RewindEngine` wraps the engine and applies
 a late fix by rewinding, bit-identically to on-time delivery;
 `drifters_eqf::EqfRewindEngine` does the same for the equivariant filter, with
 the same code.
@@ -394,7 +395,7 @@ Its README works through how deep the IMU queue must be to absorb a rewind.
 On a Cortex-M4F, use these features:
 
 ```toml
-drifters-filter = { version = "0.1", features = ["f32-covariance", "defmt"] }
+drifters-eskf = { version = "0.1", features = ["f32-covariance", "defmt"] }
 ```
 
 `f32-covariance` puts the covariance arithmetic on the single-precision FPU, and
@@ -468,7 +469,7 @@ cargo test -p drifters-cli --release --test kf_gins_regression -- --nocapture
 
 ## Minimum supported Rust
 
-**1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf` — the crates
+**1.85** for `drifters-core`, `drifters-eskf` and `drifters-eqf` — the crates
 that go on the target, which depend on nothing but `libm`, and on `defmt` and
 `serde` only when asked — and for the host-side `drifters-gnss` and
 `drifters-interop`. **1.88** for `drifters-proto`, forced by `micropb` and
@@ -497,10 +498,48 @@ filter](docs/state-model.md), [why position stays `f64` while the covariance can
 be `f32`](docs/adr/0005-scalar-type.md), and [why the frame is NED/FRD rather
 than the ROS convention](docs/adr/0006-frame-convention.md).
 
+## Acknowledgements
+
+**KF-GINS.** The error-state filter is modelled on
+[KF-GINS](https://github.com/i2Nav-WHU/KF-GINS), the open-source GNSS/INS
+integration software of Prof. Xiaoji Niu's team at the Integrated and
+Intelligent Navigation (i2Nav) Group, GNSS Research Center, Wuhan University.
+From it drifters takes:
+
+- the architecture: a 21-state error-state EKF over a local-level (NED)
+  strapdown mechanization, with feedback after every measurement;
+- the mechanization's structure, as KF-GINS implements it from the literature it
+  cites: two-sample coning and sculling, then velocity, position, and attitude in
+  that order, with the Earth terms re-evaluated at the midpoint;
+- the order of the error states and their index names, `P_ID` to `SA_ID` and
+  `VRW_ID` to `SASTD_ID`;
+- the shape of the sensor and state types and of the options (`GinsOptions`
+  after `GINSOptions`), scale factors applied as a reciprocal, and splitting an
+  IMU interval at a GNSS epoch as `imuInterpolate` does;
+- the data formats `drifters-cli` reads, and the demo dataset and reference
+  trajectory the regression tests score against.
+
+KF-GINS is © 2022 i2Nav Group, Wuhan University, and licensed under GPL-3.0.
+drifters is a separate implementation in Rust and contains none of its source
+code. The dataset is fetched from upstream by
+[`scripts/fetch-kf-gins.sh`](scripts/fetch-kf-gins.sh) and never redistributed.
+Work that publishes results from that dataset, or that rests on this filter's
+KF-GINS design, should cite it as its authors ask:
+
+> X. Niu, L. Wang, Q. Chen, H. Tang, Q. Zhang, and T. Zhang, "KF-GINS: an
+> open-sourced software for GNSS/INS integrated navigation," *GPS Solutions*,
+> vol. 29, no. 4, art. 202, 2025.
+> doi:[10.1007/s10291-025-01967-w](https://doi.org/10.1007/s10291-025-01967-w)
+
+**The equivariant filter** follows van Goor, Hamel, and Mahony (2022) and
+Fornasier et al. (ICRA 2024). Their citations are in
+[docs/papers/](docs/papers/README.md).
+
 ## Licence
 
-This is free and unencumbered software released into the public domain, under
-[The Unlicense](UNLICENSE).
+Zero-Clause BSD (`0BSD`): use, copy, modify, and distribute drifters for any
+purpose, with or without fee, and with no attribution required. See
+[LICENSE](LICENSE); every crate carries its own copy.
 
 `drifters-interop`'s `gnss-rtk-interop` feature is **not** default and links
 AGPL-3.0 code; enabling it places the AGPL's obligations on the combined work.

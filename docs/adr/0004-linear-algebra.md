@@ -69,7 +69,7 @@ than the `libm` crate. Three things cause that:
 1. **The `#[test]` harness**, which injects `extern crate std` even into a
    `no_std` crate. The `use ... Real;` imports are then reported as unused under
    `cargo test` but not under `cargo build`.
-2. **This project's own `std` feature**, where `drifters-filter` declares
+2. **This project's own `std` feature**, where `drifters-eskf` declares
    `extern crate std`. `clippy --all-features` reports the same unused import
    against the library target rather than the test target.
 3. **A dependency that links `std`**, which brings in `std` as surely as
@@ -120,7 +120,7 @@ rather than an API-wide redesign. The one split made is `f32-covariance`, in
   than against captured outputs: Cholesky must reconstruct its input, the solve
   must match the explicit inverse, transposition must be an involution.
 - No eigendecomposition, SVD or QR. Nothing in the design needs them. The
-  square-root filter is `U D Uᵀ`, in `drifters_filter::ud`, written here rather
+  square-root filter is `U D Uᵀ`, in `drifters_eskf::ud`, written here rather
   than taken from a dependency.
 - One real ergonomic wart: the inherent `Matrix::matmul` is deliberately **not**
   named `mul`, because an `impl Mul<F> for Matrix` shadows an inherent `mul` at

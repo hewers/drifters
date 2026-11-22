@@ -1,6 +1,6 @@
 //! Adapters between `drifters` types and third-party navigation crates.
 //!
-//! Nothing here is on the path of `drifters-core`, `drifters-filter` or
+//! Nothing here is on the path of `drifters-core`, `drifters-eskf` or
 //! `drifters-proto`. This crate exists so that a host application *can* use
 //! these libraries without a firmware build acquiring them — see
 //! `docs/adr/0003-interop-boundary.md`.
@@ -15,8 +15,8 @@
 //!
 //! # Licensing warning
 //!
-//! `drifters` is released into the public domain under The Unlicense. Enabling
-//! `gnss-rtk-interop` links
+//! `drifters` is licensed under the permissive Zero-Clause BSD licence (`0BSD`).
+//! Enabling `gnss-rtk-interop` links
 //! [AGPL-3.0][agpl] code, and the AGPL's obligations then extend to the
 //! combined work — for firmware that means the whole device image, and for a
 //! networked service the AGPL's network clause applies to the service. That is

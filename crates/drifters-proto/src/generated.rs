@@ -1282,6 +1282,1485 @@ pub mod drifters_ {
                 size
             }
         }
+        /// Estimated IMU deterministic errors. The mechanization removes these from
+        /// every raw sample: corrected = (raw - bias*dt) / (1 + scale).
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct ImuError {
+            /// Gyroscope bias, rad/s.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_bias_rps: Vec3,
+            /// Accelerometer bias, m/s^2.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_bias_mps2: Vec3,
+            /// Gyroscope scale-factor error, dimensionless (1e-6 is 1 ppm).
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_scale: Vec3,
+            /// Accelerometer scale-factor error, dimensionless.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_scale: Vec3,
+            /// Tracks presence of optional and message fields
+            pub _has: ImuError_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for ImuError {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#gyro_bias_rps() == other.r#gyro_bias_rps());
+                ret &= (self.r#accel_bias_mps2() == other.r#accel_bias_mps2());
+                ret &= (self.r#gyro_scale() == other.r#gyro_scale());
+                ret &= (self.r#accel_scale() == other.r#accel_scale());
+                ret
+            }
+        }
+        impl ImuError {
+            /// Return a reference to `gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn r#gyro_bias_rps(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_bias_rps().then_some(&self.r#gyro_bias_rps)
+            }
+            /// Set the value and presence of `gyro_bias_rps`
+            #[inline]
+            pub fn set_gyro_bias_rps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_bias_rps();
+                self.r#gyro_bias_rps = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_bias_rps` as an `Option`
+            #[inline]
+            pub fn mut_gyro_bias_rps(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_bias_rps().then_some(&mut self.r#gyro_bias_rps)
+            }
+            /// Clear the presence of `gyro_bias_rps`
+            #[inline]
+            pub fn clear_gyro_bias_rps(&mut self) -> &mut Self {
+                self._has.clear_gyro_bias_rps();
+                self
+            }
+            /// Take the value of `gyro_bias_rps` and clear its presence
+            #[inline]
+            pub fn take_gyro_bias_rps(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_bias_rps()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_bias_rps));
+                self._has.clear_gyro_bias_rps();
+                val
+            }
+            /// Builder method that sets the value of `gyro_bias_rps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_bias_rps(mut self, value: Vec3) -> Self {
+                self.set_gyro_bias_rps(value);
+                self
+            }
+            /// Return a reference to `accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn r#accel_bias_mps2(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_bias_mps2().then_some(&self.r#accel_bias_mps2)
+            }
+            /// Set the value and presence of `accel_bias_mps2`
+            #[inline]
+            pub fn set_accel_bias_mps2(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_bias_mps2();
+                self.r#accel_bias_mps2 = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_bias_mps2` as an `Option`
+            #[inline]
+            pub fn mut_accel_bias_mps2(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_bias_mps2().then_some(&mut self.r#accel_bias_mps2)
+            }
+            /// Clear the presence of `accel_bias_mps2`
+            #[inline]
+            pub fn clear_accel_bias_mps2(&mut self) -> &mut Self {
+                self._has.clear_accel_bias_mps2();
+                self
+            }
+            /// Take the value of `accel_bias_mps2` and clear its presence
+            #[inline]
+            pub fn take_accel_bias_mps2(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_bias_mps2()
+                    .then(|| ::core::mem::take(&mut self.r#accel_bias_mps2));
+                self._has.clear_accel_bias_mps2();
+                val
+            }
+            /// Builder method that sets the value of `accel_bias_mps2`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_bias_mps2(mut self, value: Vec3) -> Self {
+                self.set_accel_bias_mps2(value);
+                self
+            }
+            /// Return a reference to `gyro_scale` as an `Option`
+            #[inline]
+            pub fn r#gyro_scale(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_scale().then_some(&self.r#gyro_scale)
+            }
+            /// Set the value and presence of `gyro_scale`
+            #[inline]
+            pub fn set_gyro_scale(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_scale();
+                self.r#gyro_scale = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_scale` as an `Option`
+            #[inline]
+            pub fn mut_gyro_scale(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_scale().then_some(&mut self.r#gyro_scale)
+            }
+            /// Clear the presence of `gyro_scale`
+            #[inline]
+            pub fn clear_gyro_scale(&mut self) -> &mut Self {
+                self._has.clear_gyro_scale();
+                self
+            }
+            /// Take the value of `gyro_scale` and clear its presence
+            #[inline]
+            pub fn take_gyro_scale(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_scale()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_scale));
+                self._has.clear_gyro_scale();
+                val
+            }
+            /// Builder method that sets the value of `gyro_scale`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_scale(mut self, value: Vec3) -> Self {
+                self.set_gyro_scale(value);
+                self
+            }
+            /// Return a reference to `accel_scale` as an `Option`
+            #[inline]
+            pub fn r#accel_scale(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_scale().then_some(&self.r#accel_scale)
+            }
+            /// Set the value and presence of `accel_scale`
+            #[inline]
+            pub fn set_accel_scale(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_scale();
+                self.r#accel_scale = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_scale` as an `Option`
+            #[inline]
+            pub fn mut_accel_scale(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_scale().then_some(&mut self.r#accel_scale)
+            }
+            /// Clear the presence of `accel_scale`
+            #[inline]
+            pub fn clear_accel_scale(&mut self) -> &mut Self {
+                self._has.clear_accel_scale();
+                self
+            }
+            /// Take the value of `accel_scale` and clear its presence
+            #[inline]
+            pub fn take_accel_scale(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_scale()
+                    .then(|| ::core::mem::take(&mut self.r#accel_scale));
+                self._has.clear_accel_scale();
+                val
+            }
+            /// Builder method that sets the value of `accel_scale`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_scale(mut self, value: Vec3) -> Self {
+                self.set_accel_scale(value);
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for ImuError {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#gyro_bias_rps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_bias_rps();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#accel_bias_mps2;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_bias_mps2();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#gyro_scale;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_scale();
+                        }
+                        4u32 => {
+                            let mut_ref = &mut self.r#accel_scale;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_scale();
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for ImuError {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
+                    {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_mps2()
+                    {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_scale() {
+                        encoder.encode_varint32(26u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_scale() {
+                        encoder.encode_varint32(34u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_mps2()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_scale() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_scale() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `ImuError`
+        pub mod ImuError_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn r#gyro_bias_rps(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn set_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `gyro_bias_rps`
+                #[inline]
+                pub const fn clear_gyro_bias_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_bias_rps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_bias_rps(mut self) -> Self {
+                    self.set_gyro_bias_rps();
+                    self
+                }
+                /// Query presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn r#accel_bias_mps2(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn set_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `accel_bias_mps2`
+                #[inline]
+                pub const fn clear_accel_bias_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_bias_mps2`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_bias_mps2(mut self) -> Self {
+                    self.set_accel_bias_mps2();
+                    self
+                }
+                /// Query presence of `gyro_scale`
+                #[inline]
+                pub const fn r#gyro_scale(&self) -> bool {
+                    (self.0[0] & 4) != 0
+                }
+                /// Set presence of `gyro_scale`
+                #[inline]
+                pub const fn set_gyro_scale(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `gyro_scale`
+                #[inline]
+                pub const fn clear_gyro_scale(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_scale`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_scale(mut self) -> Self {
+                    self.set_gyro_scale();
+                    self
+                }
+                /// Query presence of `accel_scale`
+                #[inline]
+                pub const fn r#accel_scale(&self) -> bool {
+                    (self.0[0] & 8) != 0
+                }
+                /// Set presence of `accel_scale`
+                #[inline]
+                pub const fn set_accel_scale(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `accel_scale`
+                #[inline]
+                pub const fn clear_accel_scale(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_scale`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_scale(mut self) -> Self {
+                    self.set_accel_scale();
+                    self
+                }
+            }
+        }
+        /// Continuous-time IMU stochastic error parameters.
+        ///
+        /// Biases and scale factors are first-order Gauss-Markov with correlation time
+        /// `correlation_time_s`; the random walks are white noise on rate and specific
+        /// force.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct ImuNoise {
+            /// Angle random walk, rad/sqrt(s). Datasheets usually quote deg/sqrt(hour):
+            /// multiply by pi/180/60.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_arw: Vec3,
+            /// Velocity random walk, (m/s)/sqrt(s). Datasheets usually quote
+            /// m/s/sqrt(hour): divide by 60.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_vrw: Vec3,
+            /// Gyro bias process standard deviation, rad/s.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_bias_std_rps: Vec3,
+            /// Accelerometer bias process standard deviation, m/s^2.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_bias_std_mps2: Vec3,
+            /// Gyro scale-factor process standard deviation, dimensionless.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#gyro_scale_std: Vec3,
+            /// Accelerometer scale-factor process standard deviation, dimensionless.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#accel_scale_std: Vec3,
+            /// Gauss-Markov correlation time, seconds. Must be > 0.
+            pub r#correlation_time_s: f64,
+            /// Tracks presence of optional and message fields
+            pub _has: ImuNoise_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for ImuNoise {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#gyro_arw() == other.r#gyro_arw());
+                ret &= (self.r#accel_vrw() == other.r#accel_vrw());
+                ret &= (self.r#gyro_bias_std_rps() == other.r#gyro_bias_std_rps());
+                ret &= (self.r#accel_bias_std_mps2() == other.r#accel_bias_std_mps2());
+                ret &= (self.r#gyro_scale_std() == other.r#gyro_scale_std());
+                ret &= (self.r#accel_scale_std() == other.r#accel_scale_std());
+                ret &= (self.r#correlation_time_s == other.r#correlation_time_s);
+                ret
+            }
+        }
+        impl ImuNoise {
+            /// Return a reference to `gyro_arw` as an `Option`
+            #[inline]
+            pub fn r#gyro_arw(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_arw().then_some(&self.r#gyro_arw)
+            }
+            /// Set the value and presence of `gyro_arw`
+            #[inline]
+            pub fn set_gyro_arw(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_arw();
+                self.r#gyro_arw = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_arw` as an `Option`
+            #[inline]
+            pub fn mut_gyro_arw(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_arw().then_some(&mut self.r#gyro_arw)
+            }
+            /// Clear the presence of `gyro_arw`
+            #[inline]
+            pub fn clear_gyro_arw(&mut self) -> &mut Self {
+                self._has.clear_gyro_arw();
+                self
+            }
+            /// Take the value of `gyro_arw` and clear its presence
+            #[inline]
+            pub fn take_gyro_arw(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_arw()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_arw));
+                self._has.clear_gyro_arw();
+                val
+            }
+            /// Builder method that sets the value of `gyro_arw`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_arw(mut self, value: Vec3) -> Self {
+                self.set_gyro_arw(value);
+                self
+            }
+            /// Return a reference to `accel_vrw` as an `Option`
+            #[inline]
+            pub fn r#accel_vrw(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_vrw().then_some(&self.r#accel_vrw)
+            }
+            /// Set the value and presence of `accel_vrw`
+            #[inline]
+            pub fn set_accel_vrw(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_vrw();
+                self.r#accel_vrw = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_vrw` as an `Option`
+            #[inline]
+            pub fn mut_accel_vrw(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_vrw().then_some(&mut self.r#accel_vrw)
+            }
+            /// Clear the presence of `accel_vrw`
+            #[inline]
+            pub fn clear_accel_vrw(&mut self) -> &mut Self {
+                self._has.clear_accel_vrw();
+                self
+            }
+            /// Take the value of `accel_vrw` and clear its presence
+            #[inline]
+            pub fn take_accel_vrw(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_vrw()
+                    .then(|| ::core::mem::take(&mut self.r#accel_vrw));
+                self._has.clear_accel_vrw();
+                val
+            }
+            /// Builder method that sets the value of `accel_vrw`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_vrw(mut self, value: Vec3) -> Self {
+                self.set_accel_vrw(value);
+                self
+            }
+            /// Return a reference to `gyro_bias_std_rps` as an `Option`
+            #[inline]
+            pub fn r#gyro_bias_std_rps(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_bias_std_rps().then_some(&self.r#gyro_bias_std_rps)
+            }
+            /// Set the value and presence of `gyro_bias_std_rps`
+            #[inline]
+            pub fn set_gyro_bias_std_rps(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_bias_std_rps();
+                self.r#gyro_bias_std_rps = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_bias_std_rps` as an `Option`
+            #[inline]
+            pub fn mut_gyro_bias_std_rps(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_bias_std_rps().then_some(&mut self.r#gyro_bias_std_rps)
+            }
+            /// Clear the presence of `gyro_bias_std_rps`
+            #[inline]
+            pub fn clear_gyro_bias_std_rps(&mut self) -> &mut Self {
+                self._has.clear_gyro_bias_std_rps();
+                self
+            }
+            /// Take the value of `gyro_bias_std_rps` and clear its presence
+            #[inline]
+            pub fn take_gyro_bias_std_rps(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_bias_std_rps()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_bias_std_rps));
+                self._has.clear_gyro_bias_std_rps();
+                val
+            }
+            /// Builder method that sets the value of `gyro_bias_std_rps`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_bias_std_rps(mut self, value: Vec3) -> Self {
+                self.set_gyro_bias_std_rps(value);
+                self
+            }
+            /// Return a reference to `accel_bias_std_mps2` as an `Option`
+            #[inline]
+            pub fn r#accel_bias_std_mps2(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_bias_std_mps2().then_some(&self.r#accel_bias_std_mps2)
+            }
+            /// Set the value and presence of `accel_bias_std_mps2`
+            #[inline]
+            pub fn set_accel_bias_std_mps2(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_bias_std_mps2();
+                self.r#accel_bias_std_mps2 = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_bias_std_mps2` as an `Option`
+            #[inline]
+            pub fn mut_accel_bias_std_mps2(
+                &mut self,
+            ) -> ::core::option::Option<&mut Vec3> {
+                self._has
+                    .r#accel_bias_std_mps2()
+                    .then_some(&mut self.r#accel_bias_std_mps2)
+            }
+            /// Clear the presence of `accel_bias_std_mps2`
+            #[inline]
+            pub fn clear_accel_bias_std_mps2(&mut self) -> &mut Self {
+                self._has.clear_accel_bias_std_mps2();
+                self
+            }
+            /// Take the value of `accel_bias_std_mps2` and clear its presence
+            #[inline]
+            pub fn take_accel_bias_std_mps2(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_bias_std_mps2()
+                    .then(|| ::core::mem::take(&mut self.r#accel_bias_std_mps2));
+                self._has.clear_accel_bias_std_mps2();
+                val
+            }
+            /// Builder method that sets the value of `accel_bias_std_mps2`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_bias_std_mps2(mut self, value: Vec3) -> Self {
+                self.set_accel_bias_std_mps2(value);
+                self
+            }
+            /// Return a reference to `gyro_scale_std` as an `Option`
+            #[inline]
+            pub fn r#gyro_scale_std(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#gyro_scale_std().then_some(&self.r#gyro_scale_std)
+            }
+            /// Set the value and presence of `gyro_scale_std`
+            #[inline]
+            pub fn set_gyro_scale_std(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_gyro_scale_std();
+                self.r#gyro_scale_std = value.into();
+                self
+            }
+            /// Return a mutable reference to `gyro_scale_std` as an `Option`
+            #[inline]
+            pub fn mut_gyro_scale_std(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#gyro_scale_std().then_some(&mut self.r#gyro_scale_std)
+            }
+            /// Clear the presence of `gyro_scale_std`
+            #[inline]
+            pub fn clear_gyro_scale_std(&mut self) -> &mut Self {
+                self._has.clear_gyro_scale_std();
+                self
+            }
+            /// Take the value of `gyro_scale_std` and clear its presence
+            #[inline]
+            pub fn take_gyro_scale_std(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#gyro_scale_std()
+                    .then(|| ::core::mem::take(&mut self.r#gyro_scale_std));
+                self._has.clear_gyro_scale_std();
+                val
+            }
+            /// Builder method that sets the value of `gyro_scale_std`. Useful for initializing the message.
+            #[inline]
+            pub fn init_gyro_scale_std(mut self, value: Vec3) -> Self {
+                self.set_gyro_scale_std(value);
+                self
+            }
+            /// Return a reference to `accel_scale_std` as an `Option`
+            #[inline]
+            pub fn r#accel_scale_std(&self) -> ::core::option::Option<&Vec3> {
+                self._has.r#accel_scale_std().then_some(&self.r#accel_scale_std)
+            }
+            /// Set the value and presence of `accel_scale_std`
+            #[inline]
+            pub fn set_accel_scale_std(&mut self, value: Vec3) -> &mut Self {
+                self._has.set_accel_scale_std();
+                self.r#accel_scale_std = value.into();
+                self
+            }
+            /// Return a mutable reference to `accel_scale_std` as an `Option`
+            #[inline]
+            pub fn mut_accel_scale_std(&mut self) -> ::core::option::Option<&mut Vec3> {
+                self._has.r#accel_scale_std().then_some(&mut self.r#accel_scale_std)
+            }
+            /// Clear the presence of `accel_scale_std`
+            #[inline]
+            pub fn clear_accel_scale_std(&mut self) -> &mut Self {
+                self._has.clear_accel_scale_std();
+                self
+            }
+            /// Take the value of `accel_scale_std` and clear its presence
+            #[inline]
+            pub fn take_accel_scale_std(&mut self) -> ::core::option::Option<Vec3> {
+                let val = self
+                    ._has
+                    .r#accel_scale_std()
+                    .then(|| ::core::mem::take(&mut self.r#accel_scale_std));
+                self._has.clear_accel_scale_std();
+                val
+            }
+            /// Builder method that sets the value of `accel_scale_std`. Useful for initializing the message.
+            #[inline]
+            pub fn init_accel_scale_std(mut self, value: Vec3) -> Self {
+                self.set_accel_scale_std(value);
+                self
+            }
+            /// Return a reference to `correlation_time_s`
+            #[inline]
+            pub fn r#correlation_time_s(&self) -> &f64 {
+                &self.r#correlation_time_s
+            }
+            /// Return a mutable reference to `correlation_time_s`
+            #[inline]
+            pub fn mut_correlation_time_s(&mut self) -> &mut f64 {
+                &mut self.r#correlation_time_s
+            }
+            /// Set the value of `correlation_time_s`
+            #[inline]
+            pub fn set_correlation_time_s(&mut self, value: f64) -> &mut Self {
+                self.r#correlation_time_s = value.into();
+                self
+            }
+            /// Builder method that sets the value of `correlation_time_s`. Useful for initializing the message.
+            #[inline]
+            pub fn init_correlation_time_s(mut self, value: f64) -> Self {
+                self.r#correlation_time_s = value.into();
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for ImuNoise {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#gyro_arw;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_arw();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#accel_vrw;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_vrw();
+                        }
+                        3u32 => {
+                            let mut_ref = &mut self.r#gyro_bias_std_rps;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_bias_std_rps();
+                        }
+                        4u32 => {
+                            let mut_ref = &mut self.r#accel_bias_std_mps2;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_bias_std_mps2();
+                        }
+                        5u32 => {
+                            let mut_ref = &mut self.r#gyro_scale_std;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_gyro_scale_std();
+                        }
+                        6u32 => {
+                            let mut_ref = &mut self.r#accel_scale_std;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_accel_scale_std();
+                        }
+                        7u32 => {
+                            let mut_ref = &mut self.r#correlation_time_s;
+                            {
+                                let val = decoder.decode_double()?;
+                                let val_ref = &val;
+                                if *val_ref != 0.0 {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for ImuNoise {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_arw() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_vrw() {
+                        encoder.encode_varint32(18u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#gyro_bias_std_rps()
+                    {
+                        encoder.encode_varint32(26u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_std_mps2()
+                    {
+                        encoder.encode_varint32(34u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#gyro_scale_std()
+                    {
+                        encoder.encode_varint32(42u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_scale_std()
+                    {
+                        encoder.encode_varint32(50u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#correlation_time_s;
+                    if *val_ref != 0.0 {
+                        encoder.encode_varint32(57u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_arw() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#accel_vrw() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#gyro_bias_std_rps()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_bias_std_mps2()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#gyro_scale_std()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    if let ::core::option::Option::Some(val_ref) = self
+                        .r#accel_scale_std()
+                    {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    let val_ref = &self.r#correlation_time_s;
+                    if *val_ref != 0.0 {
+                        size += 1usize + 8;
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `ImuNoise`
+        pub mod ImuNoise_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `gyro_arw`
+                #[inline]
+                pub const fn r#gyro_arw(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `gyro_arw`
+                #[inline]
+                pub const fn set_gyro_arw(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `gyro_arw`
+                #[inline]
+                pub const fn clear_gyro_arw(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_arw`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_arw(mut self) -> Self {
+                    self.set_gyro_arw();
+                    self
+                }
+                /// Query presence of `accel_vrw`
+                #[inline]
+                pub const fn r#accel_vrw(&self) -> bool {
+                    (self.0[0] & 2) != 0
+                }
+                /// Set presence of `accel_vrw`
+                #[inline]
+                pub const fn set_accel_vrw(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 2;
+                    self
+                }
+                /// Clear presence of `accel_vrw`
+                #[inline]
+                pub const fn clear_accel_vrw(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !2;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_vrw`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_vrw(mut self) -> Self {
+                    self.set_accel_vrw();
+                    self
+                }
+                /// Query presence of `gyro_bias_std_rps`
+                #[inline]
+                pub const fn r#gyro_bias_std_rps(&self) -> bool {
+                    (self.0[0] & 4) != 0
+                }
+                /// Set presence of `gyro_bias_std_rps`
+                #[inline]
+                pub const fn set_gyro_bias_std_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 4;
+                    self
+                }
+                /// Clear presence of `gyro_bias_std_rps`
+                #[inline]
+                pub const fn clear_gyro_bias_std_rps(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !4;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_bias_std_rps`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_bias_std_rps(mut self) -> Self {
+                    self.set_gyro_bias_std_rps();
+                    self
+                }
+                /// Query presence of `accel_bias_std_mps2`
+                #[inline]
+                pub const fn r#accel_bias_std_mps2(&self) -> bool {
+                    (self.0[0] & 8) != 0
+                }
+                /// Set presence of `accel_bias_std_mps2`
+                #[inline]
+                pub const fn set_accel_bias_std_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 8;
+                    self
+                }
+                /// Clear presence of `accel_bias_std_mps2`
+                #[inline]
+                pub const fn clear_accel_bias_std_mps2(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !8;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_bias_std_mps2`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_bias_std_mps2(mut self) -> Self {
+                    self.set_accel_bias_std_mps2();
+                    self
+                }
+                /// Query presence of `gyro_scale_std`
+                #[inline]
+                pub const fn r#gyro_scale_std(&self) -> bool {
+                    (self.0[0] & 16) != 0
+                }
+                /// Set presence of `gyro_scale_std`
+                #[inline]
+                pub const fn set_gyro_scale_std(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 16;
+                    self
+                }
+                /// Clear presence of `gyro_scale_std`
+                #[inline]
+                pub const fn clear_gyro_scale_std(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !16;
+                    self
+                }
+                /// Builder method that sets the presence of `gyro_scale_std`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_gyro_scale_std(mut self) -> Self {
+                    self.set_gyro_scale_std();
+                    self
+                }
+                /// Query presence of `accel_scale_std`
+                #[inline]
+                pub const fn r#accel_scale_std(&self) -> bool {
+                    (self.0[0] & 32) != 0
+                }
+                /// Set presence of `accel_scale_std`
+                #[inline]
+                pub const fn set_accel_scale_std(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 32;
+                    self
+                }
+                /// Clear presence of `accel_scale_std`
+                #[inline]
+                pub const fn clear_accel_scale_std(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !32;
+                    self
+                }
+                /// Builder method that sets the presence of `accel_scale_std`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_accel_scale_std(mut self) -> Self {
+                    self.set_accel_scale_std();
+                    self
+                }
+            }
+        }
+        /// How the IMU sits in the vehicle carrying it.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct VehicleMounting {
+            /// q_vb, rotating body vectors into the vehicle's forward-right-down frame.
+            ///
+            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
+            pub r#rotation: Quaternion,
+            /// One-sigma uncertainty of the vehicle forward axis's direction, radians.
+            pub r#forward_std_rad: f64,
+            /// Tracks presence of optional and message fields
+            pub _has: VehicleMounting_::_Hazzer,
+        }
+        impl ::core::cmp::PartialEq for VehicleMounting {
+            fn eq(&self, other: &Self) -> bool {
+                let mut ret = true;
+                ret &= (self.r#rotation() == other.r#rotation());
+                ret &= (self.r#forward_std_rad == other.r#forward_std_rad);
+                ret
+            }
+        }
+        impl VehicleMounting {
+            /// Return a reference to `rotation` as an `Option`
+            #[inline]
+            pub fn r#rotation(&self) -> ::core::option::Option<&Quaternion> {
+                self._has.r#rotation().then_some(&self.r#rotation)
+            }
+            /// Set the value and presence of `rotation`
+            #[inline]
+            pub fn set_rotation(&mut self, value: Quaternion) -> &mut Self {
+                self._has.set_rotation();
+                self.r#rotation = value.into();
+                self
+            }
+            /// Return a mutable reference to `rotation` as an `Option`
+            #[inline]
+            pub fn mut_rotation(&mut self) -> ::core::option::Option<&mut Quaternion> {
+                self._has.r#rotation().then_some(&mut self.r#rotation)
+            }
+            /// Clear the presence of `rotation`
+            #[inline]
+            pub fn clear_rotation(&mut self) -> &mut Self {
+                self._has.clear_rotation();
+                self
+            }
+            /// Take the value of `rotation` and clear its presence
+            #[inline]
+            pub fn take_rotation(&mut self) -> ::core::option::Option<Quaternion> {
+                let val = self
+                    ._has
+                    .r#rotation()
+                    .then(|| ::core::mem::take(&mut self.r#rotation));
+                self._has.clear_rotation();
+                val
+            }
+            /// Builder method that sets the value of `rotation`. Useful for initializing the message.
+            #[inline]
+            pub fn init_rotation(mut self, value: Quaternion) -> Self {
+                self.set_rotation(value);
+                self
+            }
+            /// Return a reference to `forward_std_rad`
+            #[inline]
+            pub fn r#forward_std_rad(&self) -> &f64 {
+                &self.r#forward_std_rad
+            }
+            /// Return a mutable reference to `forward_std_rad`
+            #[inline]
+            pub fn mut_forward_std_rad(&mut self) -> &mut f64 {
+                &mut self.r#forward_std_rad
+            }
+            /// Set the value of `forward_std_rad`
+            #[inline]
+            pub fn set_forward_std_rad(&mut self, value: f64) -> &mut Self {
+                self.r#forward_std_rad = value.into();
+                self
+            }
+            /// Builder method that sets the value of `forward_std_rad`. Useful for initializing the message.
+            #[inline]
+            pub fn init_forward_std_rad(mut self, value: f64) -> Self {
+                self.r#forward_std_rad = value.into();
+                self
+            }
+        }
+        impl ::micropb::MessageDecode for VehicleMounting {
+            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
+                &mut self,
+                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
+                len: usize,
+            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
+                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
+                let before = decoder.bytes_read();
+                while decoder.bytes_read() - before < len {
+                    let tag = decoder.decode_tag()?;
+                    match tag.field_num() {
+                        0 => return Err(::micropb::DecodeError::ZeroField),
+                        1u32 => {
+                            let mut_ref = &mut self.r#rotation;
+                            {
+                                mut_ref.decode_len_delimited(decoder)?;
+                            };
+                            self._has.set_rotation();
+                        }
+                        2u32 => {
+                            let mut_ref = &mut self.r#forward_std_rad;
+                            {
+                                let val = decoder.decode_double()?;
+                                let val_ref = &val;
+                                if *val_ref != 0.0 {
+                                    *mut_ref = val as _;
+                                }
+                            };
+                        }
+                        _ => {
+                            decoder.skip_wire_value(tag.wire_type())?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        impl ::micropb::MessageEncode for VehicleMounting {
+            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
+                let mut max_size = 0;
+                match ::micropb::const_map!(
+                    ::micropb::const_map!(< Quaternion as ::micropb::MessageEncode >
+                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
+                    size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                match ::micropb::const_map!(
+                    ::core::result::Result::Ok(8usize), | size | size + 1usize
+                ) {
+                    ::core::result::Result::Ok(size) => {
+                        max_size += size;
+                    }
+                    ::core::result::Result::Err(err) => {
+                        break 'msg (::core::result::Result::<usize, _>::Err(err));
+                    }
+                }
+                ::core::result::Result::Ok(max_size)
+            };
+            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
+                &self,
+                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
+            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
+                use ::micropb::{PbMap, FieldEncode};
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
+                        encoder.encode_varint32(10u32)?;
+                        val_ref.encode_len_delimited(encoder)?;
+                    }
+                }
+                {
+                    let val_ref = &self.r#forward_std_rad;
+                    if *val_ref != 0.0 {
+                        encoder.encode_varint32(17u32)?;
+                        encoder.encode_double(*val_ref)?;
+                    }
+                }
+                Ok(())
+            }
+            fn compute_size(&self) -> usize {
+                use ::micropb::{PbMap, FieldEncode};
+                let mut size = 0;
+                {
+                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
+                        size
+                            += 1usize
+                                + ::micropb::size::sizeof_len_record(
+                                    val_ref.compute_size(),
+                                );
+                    }
+                }
+                {
+                    let val_ref = &self.r#forward_std_rad;
+                    if *val_ref != 0.0 {
+                        size += 1usize + 8;
+                    }
+                }
+                size
+            }
+        }
+        /// Inner types for `VehicleMounting`
+        pub mod VehicleMounting_ {
+            /// Compact bitfield for tracking presence of optional and message fields
+            #[derive(Debug, Default, PartialEq, Clone, Copy)]
+            pub struct _Hazzer([u8; 1]);
+            impl _Hazzer {
+                /// New hazzer with all fields set to off
+                #[inline]
+                pub const fn _new() -> Self {
+                    Self([0; 1])
+                }
+                /// Query presence of `rotation`
+                #[inline]
+                pub const fn r#rotation(&self) -> bool {
+                    (self.0[0] & 1) != 0
+                }
+                /// Set presence of `rotation`
+                #[inline]
+                pub const fn set_rotation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem |= 1;
+                    self
+                }
+                /// Clear presence of `rotation`
+                #[inline]
+                pub const fn clear_rotation(&mut self) -> &mut Self {
+                    let elem = &mut self.0[0];
+                    *elem &= !1;
+                    self
+                }
+                /// Builder method that sets the presence of `rotation`. Useful for initializing the Hazzer.
+                #[inline]
+                pub const fn init_rotation(mut self) -> Self {
+                    self.set_rotation();
+                    self
+                }
+            }
+        }
         /// One inertial measurement, in INCREMENTAL form.
         ///
         /// `dtheta` and `dvel` are the integrals of angular rate and specific force over
@@ -3983,493 +5462,9 @@ pub mod drifters_ {
                 }
             }
         }
-        /// Estimated IMU deterministic errors. The mechanization removes these from
-        /// every raw sample: corrected = (raw - bias*dt) / (1 + scale).
-        #[derive(Debug, Default, Clone, Copy)]
-        pub struct ImuError {
-            /// Gyroscope bias, rad/s.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#gyro_bias_rps: Vec3,
-            /// Accelerometer bias, m/s^2.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#accel_bias_mps2: Vec3,
-            /// Gyroscope scale-factor error, dimensionless (1e-6 is 1 ppm).
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#gyro_scale: Vec3,
-            /// Accelerometer scale-factor error, dimensionless.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#accel_scale: Vec3,
-            /// Tracks presence of optional and message fields
-            pub _has: ImuError_::_Hazzer,
-        }
-        impl ::core::cmp::PartialEq for ImuError {
-            fn eq(&self, other: &Self) -> bool {
-                let mut ret = true;
-                ret &= (self.r#gyro_bias_rps() == other.r#gyro_bias_rps());
-                ret &= (self.r#accel_bias_mps2() == other.r#accel_bias_mps2());
-                ret &= (self.r#gyro_scale() == other.r#gyro_scale());
-                ret &= (self.r#accel_scale() == other.r#accel_scale());
-                ret
-            }
-        }
-        impl ImuError {
-            /// Return a reference to `gyro_bias_rps` as an `Option`
-            #[inline]
-            pub fn r#gyro_bias_rps(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#gyro_bias_rps().then_some(&self.r#gyro_bias_rps)
-            }
-            /// Set the value and presence of `gyro_bias_rps`
-            #[inline]
-            pub fn set_gyro_bias_rps(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_gyro_bias_rps();
-                self.r#gyro_bias_rps = value.into();
-                self
-            }
-            /// Return a mutable reference to `gyro_bias_rps` as an `Option`
-            #[inline]
-            pub fn mut_gyro_bias_rps(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#gyro_bias_rps().then_some(&mut self.r#gyro_bias_rps)
-            }
-            /// Clear the presence of `gyro_bias_rps`
-            #[inline]
-            pub fn clear_gyro_bias_rps(&mut self) -> &mut Self {
-                self._has.clear_gyro_bias_rps();
-                self
-            }
-            /// Take the value of `gyro_bias_rps` and clear its presence
-            #[inline]
-            pub fn take_gyro_bias_rps(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#gyro_bias_rps()
-                    .then(|| ::core::mem::take(&mut self.r#gyro_bias_rps));
-                self._has.clear_gyro_bias_rps();
-                val
-            }
-            /// Builder method that sets the value of `gyro_bias_rps`. Useful for initializing the message.
-            #[inline]
-            pub fn init_gyro_bias_rps(mut self, value: Vec3) -> Self {
-                self.set_gyro_bias_rps(value);
-                self
-            }
-            /// Return a reference to `accel_bias_mps2` as an `Option`
-            #[inline]
-            pub fn r#accel_bias_mps2(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#accel_bias_mps2().then_some(&self.r#accel_bias_mps2)
-            }
-            /// Set the value and presence of `accel_bias_mps2`
-            #[inline]
-            pub fn set_accel_bias_mps2(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_accel_bias_mps2();
-                self.r#accel_bias_mps2 = value.into();
-                self
-            }
-            /// Return a mutable reference to `accel_bias_mps2` as an `Option`
-            #[inline]
-            pub fn mut_accel_bias_mps2(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#accel_bias_mps2().then_some(&mut self.r#accel_bias_mps2)
-            }
-            /// Clear the presence of `accel_bias_mps2`
-            #[inline]
-            pub fn clear_accel_bias_mps2(&mut self) -> &mut Self {
-                self._has.clear_accel_bias_mps2();
-                self
-            }
-            /// Take the value of `accel_bias_mps2` and clear its presence
-            #[inline]
-            pub fn take_accel_bias_mps2(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#accel_bias_mps2()
-                    .then(|| ::core::mem::take(&mut self.r#accel_bias_mps2));
-                self._has.clear_accel_bias_mps2();
-                val
-            }
-            /// Builder method that sets the value of `accel_bias_mps2`. Useful for initializing the message.
-            #[inline]
-            pub fn init_accel_bias_mps2(mut self, value: Vec3) -> Self {
-                self.set_accel_bias_mps2(value);
-                self
-            }
-            /// Return a reference to `gyro_scale` as an `Option`
-            #[inline]
-            pub fn r#gyro_scale(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#gyro_scale().then_some(&self.r#gyro_scale)
-            }
-            /// Set the value and presence of `gyro_scale`
-            #[inline]
-            pub fn set_gyro_scale(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_gyro_scale();
-                self.r#gyro_scale = value.into();
-                self
-            }
-            /// Return a mutable reference to `gyro_scale` as an `Option`
-            #[inline]
-            pub fn mut_gyro_scale(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#gyro_scale().then_some(&mut self.r#gyro_scale)
-            }
-            /// Clear the presence of `gyro_scale`
-            #[inline]
-            pub fn clear_gyro_scale(&mut self) -> &mut Self {
-                self._has.clear_gyro_scale();
-                self
-            }
-            /// Take the value of `gyro_scale` and clear its presence
-            #[inline]
-            pub fn take_gyro_scale(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#gyro_scale()
-                    .then(|| ::core::mem::take(&mut self.r#gyro_scale));
-                self._has.clear_gyro_scale();
-                val
-            }
-            /// Builder method that sets the value of `gyro_scale`. Useful for initializing the message.
-            #[inline]
-            pub fn init_gyro_scale(mut self, value: Vec3) -> Self {
-                self.set_gyro_scale(value);
-                self
-            }
-            /// Return a reference to `accel_scale` as an `Option`
-            #[inline]
-            pub fn r#accel_scale(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#accel_scale().then_some(&self.r#accel_scale)
-            }
-            /// Set the value and presence of `accel_scale`
-            #[inline]
-            pub fn set_accel_scale(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_accel_scale();
-                self.r#accel_scale = value.into();
-                self
-            }
-            /// Return a mutable reference to `accel_scale` as an `Option`
-            #[inline]
-            pub fn mut_accel_scale(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#accel_scale().then_some(&mut self.r#accel_scale)
-            }
-            /// Clear the presence of `accel_scale`
-            #[inline]
-            pub fn clear_accel_scale(&mut self) -> &mut Self {
-                self._has.clear_accel_scale();
-                self
-            }
-            /// Take the value of `accel_scale` and clear its presence
-            #[inline]
-            pub fn take_accel_scale(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#accel_scale()
-                    .then(|| ::core::mem::take(&mut self.r#accel_scale));
-                self._has.clear_accel_scale();
-                val
-            }
-            /// Builder method that sets the value of `accel_scale`. Useful for initializing the message.
-            #[inline]
-            pub fn init_accel_scale(mut self, value: Vec3) -> Self {
-                self.set_accel_scale(value);
-                self
-            }
-        }
-        impl ::micropb::MessageDecode for ImuError {
-            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
-                &mut self,
-                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
-                len: usize,
-            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
-                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
-                let before = decoder.bytes_read();
-                while decoder.bytes_read() - before < len {
-                    let tag = decoder.decode_tag()?;
-                    match tag.field_num() {
-                        0 => return Err(::micropb::DecodeError::ZeroField),
-                        1u32 => {
-                            let mut_ref = &mut self.r#gyro_bias_rps;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_gyro_bias_rps();
-                        }
-                        2u32 => {
-                            let mut_ref = &mut self.r#accel_bias_mps2;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_accel_bias_mps2();
-                        }
-                        3u32 => {
-                            let mut_ref = &mut self.r#gyro_scale;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_gyro_scale();
-                        }
-                        4u32 => {
-                            let mut_ref = &mut self.r#accel_scale;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_accel_scale();
-                        }
-                        _ => {
-                            decoder.skip_wire_value(tag.wire_type())?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-        }
-        impl ::micropb::MessageEncode for ImuError {
-            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
-                let mut max_size = 0;
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                ::core::result::Result::Ok(max_size)
-            };
-            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
-                &self,
-                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
-            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
-                use ::micropb::{PbMap, FieldEncode};
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
-                    {
-                        encoder.encode_varint32(10u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_bias_mps2()
-                    {
-                        encoder.encode_varint32(18u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_scale() {
-                        encoder.encode_varint32(26u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#accel_scale() {
-                        encoder.encode_varint32(34u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                Ok(())
-            }
-            fn compute_size(&self) -> usize {
-                use ::micropb::{PbMap, FieldEncode};
-                let mut size = 0;
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_bias_rps()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_bias_mps2()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_scale() {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#accel_scale() {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                size
-            }
-        }
-        /// Inner types for `ImuError`
-        pub mod ImuError_ {
-            /// Compact bitfield for tracking presence of optional and message fields
-            #[derive(Debug, Default, PartialEq, Clone, Copy)]
-            pub struct _Hazzer([u8; 1]);
-            impl _Hazzer {
-                /// New hazzer with all fields set to off
-                #[inline]
-                pub const fn _new() -> Self {
-                    Self([0; 1])
-                }
-                /// Query presence of `gyro_bias_rps`
-                #[inline]
-                pub const fn r#gyro_bias_rps(&self) -> bool {
-                    (self.0[0] & 1) != 0
-                }
-                /// Set presence of `gyro_bias_rps`
-                #[inline]
-                pub const fn set_gyro_bias_rps(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 1;
-                    self
-                }
-                /// Clear presence of `gyro_bias_rps`
-                #[inline]
-                pub const fn clear_gyro_bias_rps(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !1;
-                    self
-                }
-                /// Builder method that sets the presence of `gyro_bias_rps`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_gyro_bias_rps(mut self) -> Self {
-                    self.set_gyro_bias_rps();
-                    self
-                }
-                /// Query presence of `accel_bias_mps2`
-                #[inline]
-                pub const fn r#accel_bias_mps2(&self) -> bool {
-                    (self.0[0] & 2) != 0
-                }
-                /// Set presence of `accel_bias_mps2`
-                #[inline]
-                pub const fn set_accel_bias_mps2(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 2;
-                    self
-                }
-                /// Clear presence of `accel_bias_mps2`
-                #[inline]
-                pub const fn clear_accel_bias_mps2(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !2;
-                    self
-                }
-                /// Builder method that sets the presence of `accel_bias_mps2`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_accel_bias_mps2(mut self) -> Self {
-                    self.set_accel_bias_mps2();
-                    self
-                }
-                /// Query presence of `gyro_scale`
-                #[inline]
-                pub const fn r#gyro_scale(&self) -> bool {
-                    (self.0[0] & 4) != 0
-                }
-                /// Set presence of `gyro_scale`
-                #[inline]
-                pub const fn set_gyro_scale(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 4;
-                    self
-                }
-                /// Clear presence of `gyro_scale`
-                #[inline]
-                pub const fn clear_gyro_scale(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !4;
-                    self
-                }
-                /// Builder method that sets the presence of `gyro_scale`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_gyro_scale(mut self) -> Self {
-                    self.set_gyro_scale();
-                    self
-                }
-                /// Query presence of `accel_scale`
-                #[inline]
-                pub const fn r#accel_scale(&self) -> bool {
-                    (self.0[0] & 8) != 0
-                }
-                /// Set presence of `accel_scale`
-                #[inline]
-                pub const fn set_accel_scale(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 8;
-                    self
-                }
-                /// Clear presence of `accel_scale`
-                #[inline]
-                pub const fn clear_accel_scale(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !8;
-                    self
-                }
-                /// Builder method that sets the presence of `accel_scale`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_accel_scale(mut self) -> Self {
-                    self.set_accel_scale();
-                    self
-                }
-            }
-        }
-        /// A navigation solution at one epoch.
+        /// The ESKF's estimate at one epoch.
         #[derive(Debug, Default, Clone)]
-        pub struct NavSolution {
+        pub struct EskfSolution {
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#time: GpsTime,
             /// Position of the IMU reference point, not the GNSS antenna.
@@ -4493,14 +5488,15 @@ pub mod drifters_ {
             ///
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#imu_error: ImuError,
-            /// Per-state one-sigma uncertainties, 21 elements in the order given by
-            /// drifters_filter::state: position, velocity, attitude, gyro bias, accel
-            /// bias, gyro scale, accel scale.
+            /// Per-state one-sigma uncertainties in the order given by
+            /// drifters_eskf::state: position, velocity, attitude, gyro bias, accel
+            /// bias, gyro scale, accel scale. 21 elements, or 15 from a build with
+            /// `reduced-state`, which has no scale-factor states.
             pub r#state_std: ::heapless::Vec<f64, 21>,
             /// Tracks presence of optional and message fields
-            pub _has: NavSolution_::_Hazzer,
+            pub _has: EskfSolution_::_Hazzer,
         }
-        impl ::core::cmp::PartialEq for NavSolution {
+        impl ::core::cmp::PartialEq for EskfSolution {
             fn eq(&self, other: &Self) -> bool {
                 let mut ret = true;
                 ret &= (self.r#time() == other.r#time());
@@ -4513,7 +5509,7 @@ pub mod drifters_ {
                 ret
             }
         }
-        impl NavSolution {
+        impl EskfSolution {
             /// Return a reference to `time` as an `Option`
             #[inline]
             pub fn r#time(&self) -> ::core::option::Option<&GpsTime> {
@@ -4749,7 +5745,7 @@ pub mod drifters_ {
                 self
             }
         }
-        impl ::micropb::MessageDecode for NavSolution {
+        impl ::micropb::MessageDecode for EskfSolution {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
                 &mut self,
                 decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
@@ -4827,7 +5823,7 @@ pub mod drifters_ {
                 Ok(())
             }
         }
-        impl ::micropb::MessageEncode for NavSolution {
+        impl ::micropb::MessageEncode for EskfSolution {
             const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
                 let mut max_size = 0;
                 match ::micropb::const_map!(
@@ -5041,8 +6037,8 @@ pub mod drifters_ {
                 size
             }
         }
-        /// Inner types for `NavSolution`
-        pub mod NavSolution_ {
+        /// Inner types for `EskfSolution`
+        pub mod EskfSolution_ {
             /// Compact bitfield for tracking presence of optional and message fields
             #[derive(Debug, Default, PartialEq, Clone, Copy)]
             pub struct _Hazzer([u8; 1]);
@@ -5204,19 +6200,20 @@ pub mod drifters_ {
                 }
             }
         }
-        /// The full 21x21 error-state covariance, row-major, 441 elements.
+        /// The ESKF's full error-state covariance, row-major: 21x21, 441 elements, or
+        /// 15x15, 225 elements, from a build with `reduced-state`.
         ///
-        /// Separate from NavSolution because it is large and usually only wanted for
+        /// Separate from EskfSolution because it is large and usually only wanted for
         /// diagnostics — logging it at IMU rate is rarely what anyone means to do.
         #[derive(Debug, Default, Clone)]
-        pub struct Covariance {
+        pub struct EskfCovariance {
             /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
             pub r#time: GpsTime,
             pub r#row_major: ::heapless::Vec<f64, 441>,
             /// Tracks presence of optional and message fields
-            pub _has: Covariance_::_Hazzer,
+            pub _has: EskfCovariance_::_Hazzer,
         }
-        impl ::core::cmp::PartialEq for Covariance {
+        impl ::core::cmp::PartialEq for EskfCovariance {
             fn eq(&self, other: &Self) -> bool {
                 let mut ret = true;
                 ret &= (self.r#time() == other.r#time());
@@ -5224,7 +6221,7 @@ pub mod drifters_ {
                 ret
             }
         }
-        impl Covariance {
+        impl EskfCovariance {
             /// Return a reference to `time` as an `Option`
             #[inline]
             pub fn r#time(&self) -> ::core::option::Option<&GpsTime> {
@@ -5265,7 +6262,7 @@ pub mod drifters_ {
                 self
             }
         }
-        impl ::micropb::MessageDecode for Covariance {
+        impl ::micropb::MessageDecode for EskfCovariance {
             fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
                 &mut self,
                 decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
@@ -5308,7 +6305,7 @@ pub mod drifters_ {
                 Ok(())
             }
         }
-        impl ::micropb::MessageEncode for Covariance {
+        impl ::micropb::MessageEncode for EskfCovariance {
             const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
                 let mut max_size = 0;
                 match ::micropb::const_map!(
@@ -5385,8 +6382,8 @@ pub mod drifters_ {
                 size
             }
         }
-        /// Inner types for `Covariance`
-        pub mod Covariance_ {
+        /// Inner types for `EskfCovariance`
+        pub mod EskfCovariance_ {
             /// Compact bitfield for tracking presence of optional and message fields
             #[derive(Debug, Default, PartialEq, Clone, Copy)]
             pub struct _Hazzer([u8; 1]);
@@ -5423,1003 +6420,8 @@ pub mod drifters_ {
                 }
             }
         }
-        /// Continuous-time IMU stochastic error parameters.
-        ///
-        /// Biases and scale factors are first-order Gauss-Markov with correlation time
-        /// `correlation_time_s`; the random walks are white noise on rate and specific
-        /// force.
-        #[derive(Debug, Default, Clone, Copy)]
-        pub struct ImuNoise {
-            /// Angle random walk, rad/sqrt(s). Datasheets usually quote deg/sqrt(hour):
-            /// multiply by pi/180/60.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#gyro_arw: Vec3,
-            /// Velocity random walk, (m/s)/sqrt(s). Datasheets usually quote
-            /// m/s/sqrt(hour): divide by 60.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#accel_vrw: Vec3,
-            /// Gyro bias process standard deviation, rad/s.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#gyro_bias_std_rps: Vec3,
-            /// Accelerometer bias process standard deviation, m/s^2.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#accel_bias_std_mps2: Vec3,
-            /// Gyro scale-factor process standard deviation, dimensionless.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#gyro_scale_std: Vec3,
-            /// Accelerometer scale-factor process standard deviation, dimensionless.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#accel_scale_std: Vec3,
-            /// Gauss-Markov correlation time, seconds. Must be > 0.
-            pub r#correlation_time_s: f64,
-            /// Tracks presence of optional and message fields
-            pub _has: ImuNoise_::_Hazzer,
-        }
-        impl ::core::cmp::PartialEq for ImuNoise {
-            fn eq(&self, other: &Self) -> bool {
-                let mut ret = true;
-                ret &= (self.r#gyro_arw() == other.r#gyro_arw());
-                ret &= (self.r#accel_vrw() == other.r#accel_vrw());
-                ret &= (self.r#gyro_bias_std_rps() == other.r#gyro_bias_std_rps());
-                ret &= (self.r#accel_bias_std_mps2() == other.r#accel_bias_std_mps2());
-                ret &= (self.r#gyro_scale_std() == other.r#gyro_scale_std());
-                ret &= (self.r#accel_scale_std() == other.r#accel_scale_std());
-                ret &= (self.r#correlation_time_s == other.r#correlation_time_s);
-                ret
-            }
-        }
-        impl ImuNoise {
-            /// Return a reference to `gyro_arw` as an `Option`
-            #[inline]
-            pub fn r#gyro_arw(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#gyro_arw().then_some(&self.r#gyro_arw)
-            }
-            /// Set the value and presence of `gyro_arw`
-            #[inline]
-            pub fn set_gyro_arw(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_gyro_arw();
-                self.r#gyro_arw = value.into();
-                self
-            }
-            /// Return a mutable reference to `gyro_arw` as an `Option`
-            #[inline]
-            pub fn mut_gyro_arw(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#gyro_arw().then_some(&mut self.r#gyro_arw)
-            }
-            /// Clear the presence of `gyro_arw`
-            #[inline]
-            pub fn clear_gyro_arw(&mut self) -> &mut Self {
-                self._has.clear_gyro_arw();
-                self
-            }
-            /// Take the value of `gyro_arw` and clear its presence
-            #[inline]
-            pub fn take_gyro_arw(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#gyro_arw()
-                    .then(|| ::core::mem::take(&mut self.r#gyro_arw));
-                self._has.clear_gyro_arw();
-                val
-            }
-            /// Builder method that sets the value of `gyro_arw`. Useful for initializing the message.
-            #[inline]
-            pub fn init_gyro_arw(mut self, value: Vec3) -> Self {
-                self.set_gyro_arw(value);
-                self
-            }
-            /// Return a reference to `accel_vrw` as an `Option`
-            #[inline]
-            pub fn r#accel_vrw(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#accel_vrw().then_some(&self.r#accel_vrw)
-            }
-            /// Set the value and presence of `accel_vrw`
-            #[inline]
-            pub fn set_accel_vrw(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_accel_vrw();
-                self.r#accel_vrw = value.into();
-                self
-            }
-            /// Return a mutable reference to `accel_vrw` as an `Option`
-            #[inline]
-            pub fn mut_accel_vrw(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#accel_vrw().then_some(&mut self.r#accel_vrw)
-            }
-            /// Clear the presence of `accel_vrw`
-            #[inline]
-            pub fn clear_accel_vrw(&mut self) -> &mut Self {
-                self._has.clear_accel_vrw();
-                self
-            }
-            /// Take the value of `accel_vrw` and clear its presence
-            #[inline]
-            pub fn take_accel_vrw(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#accel_vrw()
-                    .then(|| ::core::mem::take(&mut self.r#accel_vrw));
-                self._has.clear_accel_vrw();
-                val
-            }
-            /// Builder method that sets the value of `accel_vrw`. Useful for initializing the message.
-            #[inline]
-            pub fn init_accel_vrw(mut self, value: Vec3) -> Self {
-                self.set_accel_vrw(value);
-                self
-            }
-            /// Return a reference to `gyro_bias_std_rps` as an `Option`
-            #[inline]
-            pub fn r#gyro_bias_std_rps(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#gyro_bias_std_rps().then_some(&self.r#gyro_bias_std_rps)
-            }
-            /// Set the value and presence of `gyro_bias_std_rps`
-            #[inline]
-            pub fn set_gyro_bias_std_rps(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_gyro_bias_std_rps();
-                self.r#gyro_bias_std_rps = value.into();
-                self
-            }
-            /// Return a mutable reference to `gyro_bias_std_rps` as an `Option`
-            #[inline]
-            pub fn mut_gyro_bias_std_rps(
-                &mut self,
-            ) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#gyro_bias_std_rps().then_some(&mut self.r#gyro_bias_std_rps)
-            }
-            /// Clear the presence of `gyro_bias_std_rps`
-            #[inline]
-            pub fn clear_gyro_bias_std_rps(&mut self) -> &mut Self {
-                self._has.clear_gyro_bias_std_rps();
-                self
-            }
-            /// Take the value of `gyro_bias_std_rps` and clear its presence
-            #[inline]
-            pub fn take_gyro_bias_std_rps(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#gyro_bias_std_rps()
-                    .then(|| ::core::mem::take(&mut self.r#gyro_bias_std_rps));
-                self._has.clear_gyro_bias_std_rps();
-                val
-            }
-            /// Builder method that sets the value of `gyro_bias_std_rps`. Useful for initializing the message.
-            #[inline]
-            pub fn init_gyro_bias_std_rps(mut self, value: Vec3) -> Self {
-                self.set_gyro_bias_std_rps(value);
-                self
-            }
-            /// Return a reference to `accel_bias_std_mps2` as an `Option`
-            #[inline]
-            pub fn r#accel_bias_std_mps2(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#accel_bias_std_mps2().then_some(&self.r#accel_bias_std_mps2)
-            }
-            /// Set the value and presence of `accel_bias_std_mps2`
-            #[inline]
-            pub fn set_accel_bias_std_mps2(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_accel_bias_std_mps2();
-                self.r#accel_bias_std_mps2 = value.into();
-                self
-            }
-            /// Return a mutable reference to `accel_bias_std_mps2` as an `Option`
-            #[inline]
-            pub fn mut_accel_bias_std_mps2(
-                &mut self,
-            ) -> ::core::option::Option<&mut Vec3> {
-                self._has
-                    .r#accel_bias_std_mps2()
-                    .then_some(&mut self.r#accel_bias_std_mps2)
-            }
-            /// Clear the presence of `accel_bias_std_mps2`
-            #[inline]
-            pub fn clear_accel_bias_std_mps2(&mut self) -> &mut Self {
-                self._has.clear_accel_bias_std_mps2();
-                self
-            }
-            /// Take the value of `accel_bias_std_mps2` and clear its presence
-            #[inline]
-            pub fn take_accel_bias_std_mps2(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#accel_bias_std_mps2()
-                    .then(|| ::core::mem::take(&mut self.r#accel_bias_std_mps2));
-                self._has.clear_accel_bias_std_mps2();
-                val
-            }
-            /// Builder method that sets the value of `accel_bias_std_mps2`. Useful for initializing the message.
-            #[inline]
-            pub fn init_accel_bias_std_mps2(mut self, value: Vec3) -> Self {
-                self.set_accel_bias_std_mps2(value);
-                self
-            }
-            /// Return a reference to `gyro_scale_std` as an `Option`
-            #[inline]
-            pub fn r#gyro_scale_std(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#gyro_scale_std().then_some(&self.r#gyro_scale_std)
-            }
-            /// Set the value and presence of `gyro_scale_std`
-            #[inline]
-            pub fn set_gyro_scale_std(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_gyro_scale_std();
-                self.r#gyro_scale_std = value.into();
-                self
-            }
-            /// Return a mutable reference to `gyro_scale_std` as an `Option`
-            #[inline]
-            pub fn mut_gyro_scale_std(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#gyro_scale_std().then_some(&mut self.r#gyro_scale_std)
-            }
-            /// Clear the presence of `gyro_scale_std`
-            #[inline]
-            pub fn clear_gyro_scale_std(&mut self) -> &mut Self {
-                self._has.clear_gyro_scale_std();
-                self
-            }
-            /// Take the value of `gyro_scale_std` and clear its presence
-            #[inline]
-            pub fn take_gyro_scale_std(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#gyro_scale_std()
-                    .then(|| ::core::mem::take(&mut self.r#gyro_scale_std));
-                self._has.clear_gyro_scale_std();
-                val
-            }
-            /// Builder method that sets the value of `gyro_scale_std`. Useful for initializing the message.
-            #[inline]
-            pub fn init_gyro_scale_std(mut self, value: Vec3) -> Self {
-                self.set_gyro_scale_std(value);
-                self
-            }
-            /// Return a reference to `accel_scale_std` as an `Option`
-            #[inline]
-            pub fn r#accel_scale_std(&self) -> ::core::option::Option<&Vec3> {
-                self._has.r#accel_scale_std().then_some(&self.r#accel_scale_std)
-            }
-            /// Set the value and presence of `accel_scale_std`
-            #[inline]
-            pub fn set_accel_scale_std(&mut self, value: Vec3) -> &mut Self {
-                self._has.set_accel_scale_std();
-                self.r#accel_scale_std = value.into();
-                self
-            }
-            /// Return a mutable reference to `accel_scale_std` as an `Option`
-            #[inline]
-            pub fn mut_accel_scale_std(&mut self) -> ::core::option::Option<&mut Vec3> {
-                self._has.r#accel_scale_std().then_some(&mut self.r#accel_scale_std)
-            }
-            /// Clear the presence of `accel_scale_std`
-            #[inline]
-            pub fn clear_accel_scale_std(&mut self) -> &mut Self {
-                self._has.clear_accel_scale_std();
-                self
-            }
-            /// Take the value of `accel_scale_std` and clear its presence
-            #[inline]
-            pub fn take_accel_scale_std(&mut self) -> ::core::option::Option<Vec3> {
-                let val = self
-                    ._has
-                    .r#accel_scale_std()
-                    .then(|| ::core::mem::take(&mut self.r#accel_scale_std));
-                self._has.clear_accel_scale_std();
-                val
-            }
-            /// Builder method that sets the value of `accel_scale_std`. Useful for initializing the message.
-            #[inline]
-            pub fn init_accel_scale_std(mut self, value: Vec3) -> Self {
-                self.set_accel_scale_std(value);
-                self
-            }
-            /// Return a reference to `correlation_time_s`
-            #[inline]
-            pub fn r#correlation_time_s(&self) -> &f64 {
-                &self.r#correlation_time_s
-            }
-            /// Return a mutable reference to `correlation_time_s`
-            #[inline]
-            pub fn mut_correlation_time_s(&mut self) -> &mut f64 {
-                &mut self.r#correlation_time_s
-            }
-            /// Set the value of `correlation_time_s`
-            #[inline]
-            pub fn set_correlation_time_s(&mut self, value: f64) -> &mut Self {
-                self.r#correlation_time_s = value.into();
-                self
-            }
-            /// Builder method that sets the value of `correlation_time_s`. Useful for initializing the message.
-            #[inline]
-            pub fn init_correlation_time_s(mut self, value: f64) -> Self {
-                self.r#correlation_time_s = value.into();
-                self
-            }
-        }
-        impl ::micropb::MessageDecode for ImuNoise {
-            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
-                &mut self,
-                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
-                len: usize,
-            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
-                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
-                let before = decoder.bytes_read();
-                while decoder.bytes_read() - before < len {
-                    let tag = decoder.decode_tag()?;
-                    match tag.field_num() {
-                        0 => return Err(::micropb::DecodeError::ZeroField),
-                        1u32 => {
-                            let mut_ref = &mut self.r#gyro_arw;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_gyro_arw();
-                        }
-                        2u32 => {
-                            let mut_ref = &mut self.r#accel_vrw;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_accel_vrw();
-                        }
-                        3u32 => {
-                            let mut_ref = &mut self.r#gyro_bias_std_rps;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_gyro_bias_std_rps();
-                        }
-                        4u32 => {
-                            let mut_ref = &mut self.r#accel_bias_std_mps2;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_accel_bias_std_mps2();
-                        }
-                        5u32 => {
-                            let mut_ref = &mut self.r#gyro_scale_std;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_gyro_scale_std();
-                        }
-                        6u32 => {
-                            let mut_ref = &mut self.r#accel_scale_std;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_accel_scale_std();
-                        }
-                        7u32 => {
-                            let mut_ref = &mut self.r#correlation_time_s;
-                            {
-                                let val = decoder.decode_double()?;
-                                let val_ref = &val;
-                                if *val_ref != 0.0 {
-                                    *mut_ref = val as _;
-                                }
-                            };
-                        }
-                        _ => {
-                            decoder.skip_wire_value(tag.wire_type())?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-        }
-        impl ::micropb::MessageEncode for ImuNoise {
-            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
-                let mut max_size = 0;
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Vec3 as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::core::result::Result::Ok(8usize), | size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                ::core::result::Result::Ok(max_size)
-            };
-            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
-                &self,
-                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
-            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
-                use ::micropb::{PbMap, FieldEncode};
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_arw() {
-                        encoder.encode_varint32(10u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#accel_vrw() {
-                        encoder.encode_varint32(18u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#gyro_bias_std_rps()
-                    {
-                        encoder.encode_varint32(26u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_bias_std_mps2()
-                    {
-                        encoder.encode_varint32(34u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#gyro_scale_std()
-                    {
-                        encoder.encode_varint32(42u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_scale_std()
-                    {
-                        encoder.encode_varint32(50u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    let val_ref = &self.r#correlation_time_s;
-                    if *val_ref != 0.0 {
-                        encoder.encode_varint32(57u32)?;
-                        encoder.encode_double(*val_ref)?;
-                    }
-                }
-                Ok(())
-            }
-            fn compute_size(&self) -> usize {
-                use ::micropb::{PbMap, FieldEncode};
-                let mut size = 0;
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#gyro_arw() {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#accel_vrw() {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#gyro_bias_std_rps()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_bias_std_mps2()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#gyro_scale_std()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    if let ::core::option::Option::Some(val_ref) = self
-                        .r#accel_scale_std()
-                    {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    let val_ref = &self.r#correlation_time_s;
-                    if *val_ref != 0.0 {
-                        size += 1usize + 8;
-                    }
-                }
-                size
-            }
-        }
-        /// Inner types for `ImuNoise`
-        pub mod ImuNoise_ {
-            /// Compact bitfield for tracking presence of optional and message fields
-            #[derive(Debug, Default, PartialEq, Clone, Copy)]
-            pub struct _Hazzer([u8; 1]);
-            impl _Hazzer {
-                /// New hazzer with all fields set to off
-                #[inline]
-                pub const fn _new() -> Self {
-                    Self([0; 1])
-                }
-                /// Query presence of `gyro_arw`
-                #[inline]
-                pub const fn r#gyro_arw(&self) -> bool {
-                    (self.0[0] & 1) != 0
-                }
-                /// Set presence of `gyro_arw`
-                #[inline]
-                pub const fn set_gyro_arw(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 1;
-                    self
-                }
-                /// Clear presence of `gyro_arw`
-                #[inline]
-                pub const fn clear_gyro_arw(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !1;
-                    self
-                }
-                /// Builder method that sets the presence of `gyro_arw`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_gyro_arw(mut self) -> Self {
-                    self.set_gyro_arw();
-                    self
-                }
-                /// Query presence of `accel_vrw`
-                #[inline]
-                pub const fn r#accel_vrw(&self) -> bool {
-                    (self.0[0] & 2) != 0
-                }
-                /// Set presence of `accel_vrw`
-                #[inline]
-                pub const fn set_accel_vrw(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 2;
-                    self
-                }
-                /// Clear presence of `accel_vrw`
-                #[inline]
-                pub const fn clear_accel_vrw(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !2;
-                    self
-                }
-                /// Builder method that sets the presence of `accel_vrw`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_accel_vrw(mut self) -> Self {
-                    self.set_accel_vrw();
-                    self
-                }
-                /// Query presence of `gyro_bias_std_rps`
-                #[inline]
-                pub const fn r#gyro_bias_std_rps(&self) -> bool {
-                    (self.0[0] & 4) != 0
-                }
-                /// Set presence of `gyro_bias_std_rps`
-                #[inline]
-                pub const fn set_gyro_bias_std_rps(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 4;
-                    self
-                }
-                /// Clear presence of `gyro_bias_std_rps`
-                #[inline]
-                pub const fn clear_gyro_bias_std_rps(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !4;
-                    self
-                }
-                /// Builder method that sets the presence of `gyro_bias_std_rps`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_gyro_bias_std_rps(mut self) -> Self {
-                    self.set_gyro_bias_std_rps();
-                    self
-                }
-                /// Query presence of `accel_bias_std_mps2`
-                #[inline]
-                pub const fn r#accel_bias_std_mps2(&self) -> bool {
-                    (self.0[0] & 8) != 0
-                }
-                /// Set presence of `accel_bias_std_mps2`
-                #[inline]
-                pub const fn set_accel_bias_std_mps2(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 8;
-                    self
-                }
-                /// Clear presence of `accel_bias_std_mps2`
-                #[inline]
-                pub const fn clear_accel_bias_std_mps2(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !8;
-                    self
-                }
-                /// Builder method that sets the presence of `accel_bias_std_mps2`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_accel_bias_std_mps2(mut self) -> Self {
-                    self.set_accel_bias_std_mps2();
-                    self
-                }
-                /// Query presence of `gyro_scale_std`
-                #[inline]
-                pub const fn r#gyro_scale_std(&self) -> bool {
-                    (self.0[0] & 16) != 0
-                }
-                /// Set presence of `gyro_scale_std`
-                #[inline]
-                pub const fn set_gyro_scale_std(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 16;
-                    self
-                }
-                /// Clear presence of `gyro_scale_std`
-                #[inline]
-                pub const fn clear_gyro_scale_std(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !16;
-                    self
-                }
-                /// Builder method that sets the presence of `gyro_scale_std`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_gyro_scale_std(mut self) -> Self {
-                    self.set_gyro_scale_std();
-                    self
-                }
-                /// Query presence of `accel_scale_std`
-                #[inline]
-                pub const fn r#accel_scale_std(&self) -> bool {
-                    (self.0[0] & 32) != 0
-                }
-                /// Set presence of `accel_scale_std`
-                #[inline]
-                pub const fn set_accel_scale_std(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 32;
-                    self
-                }
-                /// Clear presence of `accel_scale_std`
-                #[inline]
-                pub const fn clear_accel_scale_std(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !32;
-                    self
-                }
-                /// Builder method that sets the presence of `accel_scale_std`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_accel_scale_std(mut self) -> Self {
-                    self.set_accel_scale_std();
-                    self
-                }
-            }
-        }
         /// Everything the engine needs to start.
         ///
-        /// How the IMU sits in the vehicle carrying it.
-        #[derive(Debug, Default, Clone, Copy)]
-        pub struct VehicleMounting {
-            /// q_vb, rotating body vectors into the vehicle's forward-right-down frame.
-            ///
-            /// *Note:* The presence of this field is tracked separately in the `_has` field. It's recommended to access this field via the accessor rather than directly.
-            pub r#rotation: Quaternion,
-            /// One-sigma uncertainty of the vehicle forward axis's direction, radians.
-            pub r#forward_std_rad: f64,
-            /// Tracks presence of optional and message fields
-            pub _has: VehicleMounting_::_Hazzer,
-        }
-        impl ::core::cmp::PartialEq for VehicleMounting {
-            fn eq(&self, other: &Self) -> bool {
-                let mut ret = true;
-                ret &= (self.r#rotation() == other.r#rotation());
-                ret &= (self.r#forward_std_rad == other.r#forward_std_rad);
-                ret
-            }
-        }
-        impl VehicleMounting {
-            /// Return a reference to `rotation` as an `Option`
-            #[inline]
-            pub fn r#rotation(&self) -> ::core::option::Option<&Quaternion> {
-                self._has.r#rotation().then_some(&self.r#rotation)
-            }
-            /// Set the value and presence of `rotation`
-            #[inline]
-            pub fn set_rotation(&mut self, value: Quaternion) -> &mut Self {
-                self._has.set_rotation();
-                self.r#rotation = value.into();
-                self
-            }
-            /// Return a mutable reference to `rotation` as an `Option`
-            #[inline]
-            pub fn mut_rotation(&mut self) -> ::core::option::Option<&mut Quaternion> {
-                self._has.r#rotation().then_some(&mut self.r#rotation)
-            }
-            /// Clear the presence of `rotation`
-            #[inline]
-            pub fn clear_rotation(&mut self) -> &mut Self {
-                self._has.clear_rotation();
-                self
-            }
-            /// Take the value of `rotation` and clear its presence
-            #[inline]
-            pub fn take_rotation(&mut self) -> ::core::option::Option<Quaternion> {
-                let val = self
-                    ._has
-                    .r#rotation()
-                    .then(|| ::core::mem::take(&mut self.r#rotation));
-                self._has.clear_rotation();
-                val
-            }
-            /// Builder method that sets the value of `rotation`. Useful for initializing the message.
-            #[inline]
-            pub fn init_rotation(mut self, value: Quaternion) -> Self {
-                self.set_rotation(value);
-                self
-            }
-            /// Return a reference to `forward_std_rad`
-            #[inline]
-            pub fn r#forward_std_rad(&self) -> &f64 {
-                &self.r#forward_std_rad
-            }
-            /// Return a mutable reference to `forward_std_rad`
-            #[inline]
-            pub fn mut_forward_std_rad(&mut self) -> &mut f64 {
-                &mut self.r#forward_std_rad
-            }
-            /// Set the value of `forward_std_rad`
-            #[inline]
-            pub fn set_forward_std_rad(&mut self, value: f64) -> &mut Self {
-                self.r#forward_std_rad = value.into();
-                self
-            }
-            /// Builder method that sets the value of `forward_std_rad`. Useful for initializing the message.
-            #[inline]
-            pub fn init_forward_std_rad(mut self, value: f64) -> Self {
-                self.r#forward_std_rad = value.into();
-                self
-            }
-        }
-        impl ::micropb::MessageDecode for VehicleMounting {
-            fn decode<IMPL_MICROPB_READ: ::micropb::PbRead>(
-                &mut self,
-                decoder: &mut ::micropb::PbDecoder<IMPL_MICROPB_READ>,
-                len: usize,
-            ) -> Result<(), ::micropb::DecodeError<IMPL_MICROPB_READ::Error>> {
-                use ::micropb::{PbBytes, PbString, PbVec, PbMap, FieldDecode};
-                let before = decoder.bytes_read();
-                while decoder.bytes_read() - before < len {
-                    let tag = decoder.decode_tag()?;
-                    match tag.field_num() {
-                        0 => return Err(::micropb::DecodeError::ZeroField),
-                        1u32 => {
-                            let mut_ref = &mut self.r#rotation;
-                            {
-                                mut_ref.decode_len_delimited(decoder)?;
-                            };
-                            self._has.set_rotation();
-                        }
-                        2u32 => {
-                            let mut_ref = &mut self.r#forward_std_rad;
-                            {
-                                let val = decoder.decode_double()?;
-                                let val_ref = &val;
-                                if *val_ref != 0.0 {
-                                    *mut_ref = val as _;
-                                }
-                            };
-                        }
-                        _ => {
-                            decoder.skip_wire_value(tag.wire_type())?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-        }
-        impl ::micropb::MessageEncode for VehicleMounting {
-            const MAX_SIZE: ::core::result::Result<usize, &'static str> = 'msg: {
-                let mut max_size = 0;
-                match ::micropb::const_map!(
-                    ::micropb::const_map!(< Quaternion as ::micropb::MessageEncode >
-                    ::MAX_SIZE, | size | ::micropb::size::sizeof_len_record(size)), |
-                    size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                match ::micropb::const_map!(
-                    ::core::result::Result::Ok(8usize), | size | size + 1usize
-                ) {
-                    ::core::result::Result::Ok(size) => {
-                        max_size += size;
-                    }
-                    ::core::result::Result::Err(err) => {
-                        break 'msg (::core::result::Result::<usize, _>::Err(err));
-                    }
-                }
-                ::core::result::Result::Ok(max_size)
-            };
-            fn encode<IMPL_MICROPB_WRITE: ::micropb::PbWrite>(
-                &self,
-                encoder: &mut ::micropb::PbEncoder<IMPL_MICROPB_WRITE>,
-            ) -> Result<(), IMPL_MICROPB_WRITE::Error> {
-                use ::micropb::{PbMap, FieldEncode};
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
-                        encoder.encode_varint32(10u32)?;
-                        val_ref.encode_len_delimited(encoder)?;
-                    }
-                }
-                {
-                    let val_ref = &self.r#forward_std_rad;
-                    if *val_ref != 0.0 {
-                        encoder.encode_varint32(17u32)?;
-                        encoder.encode_double(*val_ref)?;
-                    }
-                }
-                Ok(())
-            }
-            fn compute_size(&self) -> usize {
-                use ::micropb::{PbMap, FieldEncode};
-                let mut size = 0;
-                {
-                    if let ::core::option::Option::Some(val_ref) = self.r#rotation() {
-                        size
-                            += 1usize
-                                + ::micropb::size::sizeof_len_record(
-                                    val_ref.compute_size(),
-                                );
-                    }
-                }
-                {
-                    let val_ref = &self.r#forward_std_rad;
-                    if *val_ref != 0.0 {
-                        size += 1usize + 8;
-                    }
-                }
-                size
-            }
-        }
-        /// Inner types for `VehicleMounting`
-        pub mod VehicleMounting_ {
-            /// Compact bitfield for tracking presence of optional and message fields
-            #[derive(Debug, Default, PartialEq, Clone, Copy)]
-            pub struct _Hazzer([u8; 1]);
-            impl _Hazzer {
-                /// New hazzer with all fields set to off
-                #[inline]
-                pub const fn _new() -> Self {
-                    Self([0; 1])
-                }
-                /// Query presence of `rotation`
-                #[inline]
-                pub const fn r#rotation(&self) -> bool {
-                    (self.0[0] & 1) != 0
-                }
-                /// Set presence of `rotation`
-                #[inline]
-                pub const fn set_rotation(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem |= 1;
-                    self
-                }
-                /// Clear presence of `rotation`
-                #[inline]
-                pub const fn clear_rotation(&mut self) -> &mut Self {
-                    let elem = &mut self.0[0];
-                    *elem &= !1;
-                    self
-                }
-                /// Builder method that sets the presence of `rotation`. Useful for initializing the Hazzer.
-                #[inline]
-                pub const fn init_rotation(mut self) -> Self {
-                    self.set_rotation();
-                    self
-                }
-            }
-        }
         /// The initial standard deviations matter as much as the initial state: they set
         /// the diagonal of P and therefore how hard the first fixes are allowed to pull
         /// the solution. All must be strictly positive.
@@ -11591,7 +11593,7 @@ pub mod drifters_ {
         }
         /// The EqF's estimate at one epoch.
         ///
-        /// The navigation fields match NavSolution's and are reported the same way —
+        /// The navigation fields match EskfSolution's and are reported the same way —
         /// geodetic position, ground velocity in NED, attitude as a quaternion — so a
         /// consumer can treat the two estimates alike. The states the EqF has and the
         /// ESKF does not are `lever_arm_m` and `mag_calibration`.
@@ -11636,7 +11638,7 @@ pub mod drifters_ {
             /// Per-state one-sigma uncertainties, 21 elements, in the EqF's block order:
             /// attitude, velocity, position, gyroscope bias, accelerometer bias, lever
             /// arm, magnetometer calibration. This is *not* the ESKF's state order, which
-            /// NavSolution carries.
+            /// EskfSolution carries.
             pub r#state_std: ::heapless::Vec<f64, 21>,
             /// Tracks presence of optional and message fields
             pub _has: EqfSolution_::_Hazzer,

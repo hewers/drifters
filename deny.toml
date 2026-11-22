@@ -18,8 +18,8 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Permissive licences only. `drifters` itself is public domain (The Unlicense)
-# and must stay usable in a proprietary firmware image.
+# Permissive licences only. `drifters` itself is 0BSD and must stay usable in a
+# proprietary firmware image.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -32,6 +32,7 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
     "Unlicense",
+    "0BSD",
 ]
 confidence-threshold = 0.9
 # The allow list is a policy, not an inventory: entries that no current

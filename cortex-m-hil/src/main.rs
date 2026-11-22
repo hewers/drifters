@@ -40,8 +40,8 @@ use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::linear::StateMatrix as DenseEqf;
 use drifters_eqf::{EqfEngine, EqfOptions, Ud};
-use drifters_filter::state::N_STATE;
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::state::N_STATE;
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 /// The IMU rate a synthetic step is budgeted against.
 const BUDGET_HZ: u32 = 200;

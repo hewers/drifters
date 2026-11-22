@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 drifters-core.workspace = true
-drifters-filter.workspace = true
+drifters-eskf.workspace = true
 drifters-eqf.workspace = true

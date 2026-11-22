@@ -1,7 +1,7 @@
 //! What the estimators have in common, and nothing they do not.
 //!
 //! This workspace has two estimators over the same problem: the error-state
-//! Kalman filter in `drifters-filter` and the equivariant filter in
+//! Kalman filter in `drifters-eskf` and the equivariant filter in
 //! `drifters-eqf`. They share no arithmetic. One carries a geodetic state and
 //! a factored covariance of a local error; the other carries a group element
 //! and a covariance in the chart its symmetry induces. What they share is how
@@ -284,6 +284,21 @@ pub struct PvaStd {
 ///
 /// The trait is object safe, so a caller that selects the estimator at run
 /// time can hold a `&mut dyn Estimator`.
+///
+/// # Implementing it
+///
+/// The trait is open: an engine outside this workspace can implement it and
+/// then runs wherever the two engines here do. The required methods are the
+/// ones only the engine can answer: ingest, the solution and its sigmas, the
+/// update sequence, the input-integrity counters, and health. Where a neutral
+/// answer is also a true one, a default supplies it: [`Estimator::timestamp`]
+/// comes from the solution, and an engine with no gate has no NIS, no
+/// rejections, and no inflations to report.
+///
+/// A method added to this trait after 0.1.0 comes with a default
+/// implementation, so adding one is never a breaking change for an
+/// implementor. A test in this module implements only the required methods,
+/// and fails to compile if a new one is added without a default.
 pub trait Estimator {
     /// Process one IMU sample, applying any pending GNSS fix at the right
     /// point inside the interval.
@@ -325,8 +340,12 @@ pub trait Estimator {
     /// Normalised innovation squared of the most recent applied measurement.
     ///
     /// `None` before any update has been applied. Over a long run this should
-    /// average the measurement dimension.
-    fn last_nis(&self) -> Option<F>;
+    /// average the measurement dimension. The default is `None`, for an engine
+    /// that does not compute it.
+    #[inline]
+    fn last_nis(&self) -> Option<F> {
+        None
+    }
 
     /// Sequence number of applied measurement updates, wrapping at `u32::MAX`.
     /// Compare before and after a call to tell whether it applied a measurement,
@@ -336,14 +355,21 @@ pub trait Estimator {
 
     /// How many gated measurements have been rejected since the last accepted
     /// one. An engine set to count each sensor separately reports its
-    /// longest run.
-    fn consecutive_rejections(&self) -> u32;
+    /// longest run. The default is zero, for an engine with no gate.
+    #[inline]
+    fn consecutive_rejections(&self) -> u32 {
+        0
+    }
 
     /// How many times the covariance has been inflated to recover from
     /// persistent rejection.
     ///
     /// Non-zero means the filter has been confident and wrong at least once.
-    fn inflation_count(&self) -> u32;
+    /// The default is zero, for an engine that never inflates.
+    #[inline]
+    fn inflation_count(&self) -> u32 {
+        0
+    }
 
     /// How many fixes were refused because the engine had already passed their
     /// epoch.
@@ -377,6 +403,73 @@ pub trait Estimator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Implements only the required methods of [`Estimator`] and
+    /// [`Rewindable`](crate::rewind::Rewindable). If a method is added to either
+    /// without a default, this stops compiling: give the new method a default,
+    /// as the traits' documentation promises implementors.
+    #[derive(Clone, Copy, Default)]
+    struct RequiredOnly {
+        state: NavState,
+    }
+
+    impl Estimator for RequiredOnly {
+        fn add_imu(&mut self, sample: ImuSample) -> Result<(), FilterError> {
+            self.state.time = sample.time;
+            Ok(())
+        }
+        fn add_gnss(&mut self, _fix: GnssFix) -> GnssQueued {
+            GnssQueued::Queued
+        }
+        fn nav_state(&self) -> NavState {
+            self.state
+        }
+        fn antenna_position(&self) -> Lla {
+            self.state.pva.position
+        }
+        fn pva_std(&self) -> PvaStd {
+            PvaStd::default()
+        }
+        fn update_sequence(&self) -> u32 {
+            0
+        }
+        fn stale_fix_count(&self) -> u32 {
+            0
+        }
+        fn invalid_imu_count(&self) -> u32 {
+            0
+        }
+        fn imu_gap_count(&self) -> u32 {
+            0
+        }
+        fn is_healthy(&self) -> bool {
+            true
+        }
+    }
+
+    impl crate::rewind::Rewindable for RequiredOnly {
+        type Aid = ();
+        fn apply_aid(&mut self, _aid: &()) -> Result<bool, FilterError> {
+            Ok(false)
+        }
+        fn has_time_origin(&self) -> bool {
+            false
+        }
+        fn latest_interval(&self) -> F {
+            0.0
+        }
+    }
+
+    #[test]
+    fn an_engine_need_implement_only_the_required_methods() {
+        let mut engine = RequiredOnly::default();
+        let estimator: &mut dyn Estimator = &mut engine;
+        estimator.add_imu(sample(0.02, 0.01)).unwrap();
+        assert_eq!(estimator.timestamp(), GpsTime::from_tow(0.02));
+        assert_eq!(estimator.last_nis(), None);
+        assert_eq!(estimator.consecutive_rejections(), 0);
+        assert_eq!(estimator.inflation_count(), 0);
+    }
 
     fn sample(end: F, dt: F) -> ImuSample {
         ImuSample {

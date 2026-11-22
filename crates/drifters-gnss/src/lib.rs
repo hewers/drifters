@@ -21,8 +21,8 @@
 //! and a batch fit spans a whole trace — none of which belongs on a
 //! microcontroller.
 //!
-//! The runtime half is `drifters-filter`, which is `no_std` and touches no
-//! heap at all: [`drifters_filter::range`] takes the same pseudoranges into a
+//! The runtime half is `drifters-eskf`, which is `no_std` and touches no
+//! heap at all: [`drifters_eskf::range`] takes the same pseudoranges into a
 //! filter update with fixed-size arrays. Keeping the two apart is what lets
 //! the embedded side stay honest — see
 //! [`adr/0009`](https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md).
@@ -35,7 +35,7 @@
 //! [`differential`]. The numbers and the method are in
 //! [`docs/gsdc-observables.md`](https://github.com/hewers/drifters/blob/main/docs/gsdc-observables.md).
 //!
-//! [`drifters_filter::range`]: https://docs.rs/drifters-filter/latest/drifters_filter/range/
+//! [`drifters_eskf::range`]: https://docs.rs/drifters-eskf/latest/drifters_eskf/range/
 
 // On docs.rs, mark each feature-gated item with the feature it needs.
 #![cfg_attr(docsrs, feature(doc_cfg))]

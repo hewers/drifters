@@ -7,10 +7,10 @@ registry, so a crate cannot be published before the crates it depends on.
 
 ```text
 1. drifters-core        no internal dependencies
-2. drifters-filter      depends on core
+2. drifters-eskf        depends on core
 3. drifters-gnss        depends on core
 4. drifters-eqf         depends on core
-5. drifters-proto       depends on core + filter
+5. drifters-proto       depends on core, and eskf and eqf behind features
 6. drifters-interop     depends on core
 ```
 
@@ -34,8 +34,9 @@ tool, so there is no umbrella facade crate. Nothing depends on having one.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace --release
-cargo test -p drifters-filter -p drifters-proto --features reduced-state
-cargo test -p drifters-filter -p drifters-cli --features f32-covariance
+cargo test -p drifters-proto --features eskf,eqf
+cargo test -p drifters-eskf -p drifters-proto --features reduced-state
+cargo test -p drifters-eskf -p drifters-cli --features f32-covariance
 cargo deny check
 cargo package --list -p <crate>          # confirm nothing unexpected ships
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked --dry-run --workspace
@@ -60,7 +61,7 @@ both `version` and `path`, and cargo strips the path at publish time.
 
 Two floors, deliberately.
 
-- **1.85** for `drifters-core`, `drifters-filter` and `drifters-eqf`. These
+- **1.85** for `drifters-core`, `drifters-eskf` and `drifters-eqf`. These
   depend on nothing but `libm`, and a firmware project on a pinned older
   toolchain is exactly the user this library is for. CI builds them at 1.85 on
   every push, including under the features that change the filter.
@@ -76,9 +77,11 @@ dependencies do.
 
 ## What ships
 
-Verified for `drifters-core`: 22 files — sources, README, manifests. The 67 MB
-dataset, the papers in [`papers/`](papers/) and `target/` are all outside the crate directories and
-never enter a package.
+Each crate ships its sources, README, manifests, and its copy of `LICENSE`;
+`drifters-proto` also ships the `.proto` schemas, under `proto/drifters/v1/`.
+`cargo xtask licences --check` and `cargo xtask proto --check` keep those copies
+equal to the root's. The 67 MB dataset, the papers in [`papers/`](papers/) and
+`target/` are all outside the crate directories and never enter a package.
 
 ## Versioning
 

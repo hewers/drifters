@@ -20,10 +20,10 @@ The AGPL is strongly copyleft with a network-use clause. Linking a library into 
 program generally makes the combined work subject to the AGPL, which for firmware
 means the whole device image, and for a networked service means the service.
 Most commercial embedded deployments cannot accept that, and — critically — a
-developer who adds `drifters-filter` to a project has no reason to expect that it
+developer who adds `drifters-eskf` to a project has no reason to expect that it
 dragged an AGPL obligation in with it.
 
-This project is released into the public domain (The Unlicense). A permissive
+This project is licensed under the Zero-Clause BSD licence (`0BSD`). A permissive
 crate must not put an AGPL dependency anywhere on its default path.
 
 ### Neither crate is `no_std`

@@ -4,9 +4,9 @@ use std::time::Instant;
 use drifters_core::math::Vec3;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{ImuNoise, ImuSample};
-use drifters_filter::eskf::{noise_mapping, process_noise, transition_matrix};
-use drifters_filter::state::{NoiseMatrix, StateMatrix, N_NOISE, N_STATE};
-use drifters_filter::ud::Ud;
+use drifters_eskf::eskf::{noise_mapping, process_noise, transition_matrix};
+use drifters_eskf::state::{NoiseMatrix, StateMatrix, N_NOISE, N_STATE};
+use drifters_eskf::ud::Ud;
 
 fn best<F: FnMut()>(trials: usize, iterations: usize, mut body: F) -> f64 {
     let mut best = f64::INFINITY;
@@ -93,7 +93,7 @@ fn main() {
     // The measurement update, which should be where a factored form wins
     // outright: Bierman is O(n²) per row against the dense Joseph form's
     // O(n³).
-    let mut h = drifters_filter::state::StateVector::zeros();
+    let mut h = drifters_eskf::state::StateVector::zeros();
     for i in 0..N_STATE {
         h[(i, 0)] = 0.1 + i as f64 * 0.01;
     }
@@ -110,7 +110,7 @@ fn main() {
     let mut r1 = drifters_core::math::Matrix::<1, 1>::zeros();
     r1[(0, 0)] = 1.0;
     let z1 = drifters_core::math::Matrix::<1, 1>::zeros();
-    let mut filter = drifters_filter::Eskf::new(&[1.0; N_STATE]);
+    let mut filter = drifters_eskf::Eskf::new(&[1.0; N_STATE]);
     let t = best(7, 200_000, || {
         let mut copy = filter;
         let _ = std::hint::black_box(copy.update(&z1, &hrow, &r1));

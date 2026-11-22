@@ -1115,7 +1115,7 @@ sample that consumes a fix at 15 616 and 14 616.
 
 ## Implementation map
 
-`crates/drifters-eqf`, separate from `drifters-filter`, so the ESKF's dependency
+`crates/drifters-eqf`, separate from `drifters-eskf`, so the ESKF's dependency
 footprint and measured firmware budget are untouched.
 
 - **Lie machinery, `lie.rs`.** `SO(3)`, `SE₂(3)`, `se(3)`/`se₂(3)`, wedge/vee,

@@ -66,3 +66,48 @@ message Euler {
   double pitch_rad = 2;
   double yaw_rad = 3;
 }
+
+// Estimated IMU deterministic errors. The mechanization removes these from
+// every raw sample: corrected = (raw - bias*dt) / (1 + scale).
+message ImuError {
+  // Gyroscope bias, rad/s.
+  Vec3 gyro_bias_rps = 1;
+  // Accelerometer bias, m/s^2.
+  Vec3 accel_bias_mps2 = 2;
+  // Gyroscope scale-factor error, dimensionless (1e-6 is 1 ppm).
+  Vec3 gyro_scale = 3;
+  // Accelerometer scale-factor error, dimensionless.
+  Vec3 accel_scale = 4;
+}
+
+// Continuous-time IMU stochastic error parameters.
+//
+// Biases and scale factors are first-order Gauss-Markov with correlation time
+// `correlation_time_s`; the random walks are white noise on rate and specific
+// force.
+message ImuNoise {
+  // Angle random walk, rad/sqrt(s). Datasheets usually quote deg/sqrt(hour):
+  // multiply by pi/180/60.
+  Vec3 gyro_arw = 1;
+  // Velocity random walk, (m/s)/sqrt(s). Datasheets usually quote
+  // m/s/sqrt(hour): divide by 60.
+  Vec3 accel_vrw = 2;
+  // Gyro bias process standard deviation, rad/s.
+  Vec3 gyro_bias_std_rps = 3;
+  // Accelerometer bias process standard deviation, m/s^2.
+  Vec3 accel_bias_std_mps2 = 4;
+  // Gyro scale-factor process standard deviation, dimensionless.
+  Vec3 gyro_scale_std = 5;
+  // Accelerometer scale-factor process standard deviation, dimensionless.
+  Vec3 accel_scale_std = 6;
+  // Gauss-Markov correlation time, seconds. Must be > 0.
+  double correlation_time_s = 7;
+}
+
+// How the IMU sits in the vehicle carrying it.
+message VehicleMounting {
+  // q_vb, rotating body vectors into the vehicle's forward-right-down frame.
+  Quaternion rotation = 1;
+  // One-sigma uncertainty of the vehicle forward axis's direction, radians.
+  double forward_std_rad = 2;
+}

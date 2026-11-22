@@ -128,7 +128,7 @@ and no motion. That capability is most of what the sensor is bought for.
 The ESKF has this channel. It appears in the transition matrix as the
 attitude-from-position blocks, `−ω·sin(lat)/(R_M+h)` and `−ω·cos(lat)/(R_N+h)`,
 together with `−(ω_ie + ω_en)^` on the attitude diagonal
-([`eskf.rs`](../../crates/drifters-filter/src/eskf.rs)).
+([`eskf.rs`](../../crates/drifters-eskf/src/eskf.rs)).
 
 Input-side compensation removes it. `compensate_earth` subtracts `R̂ᵀω_ie` using
 the filter's own attitude estimate and hands the result to a filter whose

@@ -18,7 +18,12 @@ is never a broken checkout.
 ## KF-GINS demo dataset
 
 Tactical-grade IMU (Leador-A15) at 200 Hz with RTK GNSS, 57 minutes of driving,
-from the [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) authors.
+from the [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS) authors, the i2Nav
+Group at Wuhan University. It ships in their GPL-3.0 repository, which states no
+separate terms for the data, so it is fetched from there and never copied into
+this one. Results published from it should cite X. Niu et al., "KF-GINS: an
+open-sourced software for GNSS/INS integrated navigation," *GPS Solutions*
+29(4), art. 202, 2025, doi:10.1007/s10291-025-01967-w.
 
 ```bash
 scripts/fetch-kf-gins.sh

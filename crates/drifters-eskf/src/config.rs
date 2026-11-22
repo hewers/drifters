@@ -22,7 +22,7 @@ use drifters_core::F;
 /// ```
 /// use drifters_core::frames::{Lla, Ned};
 /// use drifters_core::math::{Euler, Vec3};
-/// use drifters_filter::{GinsEngine, GinsOptions};
+/// use drifters_eskf::{GinsEngine, GinsOptions};
 ///
 /// let mut options = GinsOptions::default()
 ///     .with_initial_state(

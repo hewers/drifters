@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
-categories = ["science", "algorithms"]
+categories = ["science::geo", "algorithms"]
 keywords = ["gnss", "gps", "rinex", "carrier-phase", "navigation"]
 
 [dependencies]

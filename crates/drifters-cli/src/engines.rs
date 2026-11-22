@@ -17,14 +17,14 @@
 use drifters_core::estimator::{Estimator, FilterError};
 use drifters_core::math::Vec3;
 use drifters_eqf::{EqfEngine, Ud};
-use drifters_filter::range::RangeObservation;
-use drifters_filter::smoother::Checkpoint;
-use drifters_filter::GinsEngine;
+use drifters_eskf::range::RangeObservation;
+use drifters_eskf::smoother::Checkpoint;
+use drifters_eskf::GinsEngine;
 
 /// Which estimator to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EngineKind {
-    /// The 21-state error-state Kalman filter, `drifters-filter`.
+    /// The 21-state error-state Kalman filter, `drifters-eskf`.
     Eskf,
     /// The equivariant filter, `drifters-eqf`.
     Eqf,

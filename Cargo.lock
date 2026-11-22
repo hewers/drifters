@@ -463,7 +463,7 @@ dependencies = [
  "approx",
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
  "drifters-gnss",
 ]
 
@@ -473,7 +473,7 @@ version = "0.1.0"
 dependencies = [
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
 ]
 
 [[package]]
@@ -500,7 +500,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drifters-filter"
+name = "drifters-eskf"
 version = "0.1.0"
 dependencies = [
  "approx",
@@ -535,7 +535,7 @@ dependencies = [
  "defmt",
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
  "heapless 0.9.4",
  "micropb",
  "proptest",

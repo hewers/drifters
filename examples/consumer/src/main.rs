@@ -4,7 +4,7 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::prelude::{GnssFix, GpsTime, ImuSample, Wgs84};
 use drifters_eqf::{EqfEngine, EqfOptions};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 // A level, north-facing IMU at rest senses Earth rate and the reaction to gravity.
 fn run(name: &str, engine: &mut dyn Estimator, origin: Lla) -> Result<(), FilterError> {

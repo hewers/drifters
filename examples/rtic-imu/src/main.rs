@@ -46,7 +46,7 @@ use panic_semihosting as _;
 
 use drifters_core::estimator::PvaStd;
 use drifters_core::types::NavState;
-use drifters_filter::{GinsOptions, RewindEngine};
+use drifters_eskf::{GinsOptions, RewindEngine};
 
 /// The engine: the ESKF, wrapped so that a fix arriving after its epoch is
 /// still applied at it.

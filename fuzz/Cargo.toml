@@ -2,7 +2,7 @@
 name = "drifters-fuzz"
 version = "0.0.0"
 edition = "2021"
-license = "Unlicense"
+license = "0BSD"
 repository = "https://github.com/hewers/drifters"
 publish = false
 
@@ -17,8 +17,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 drifters-core = { path = "../crates/drifters-core" }
 drifters-eqf = { path = "../crates/drifters-eqf" }
-drifters-filter = { path = "../crates/drifters-filter" }
-drifters-proto = { path = "../crates/drifters-proto", features = ["eqf"] }
+drifters-eskf = { path = "../crates/drifters-eskf" }
+drifters-proto = { path = "../crates/drifters-proto", features = ["eskf", "eqf"] }
 micropb = { version = "0.6", default-features = false, features = [
     "encode",
     "decode",
@@ -29,8 +29,8 @@ micropb = { version = "0.6", default-features = false, features = [
 # The two configurations that change the ESKF's arithmetic, so that the `engine`
 # target can search them as well: `--features f32-covariance`.
 [features]
-reduced-state = ["drifters-filter/reduced-state"]
-f32-covariance = ["drifters-filter/f32-covariance"]
+reduced-state = ["drifters-eskf/reduced-state"]
+f32-covariance = ["drifters-eskf/f32-covariance"]
 
 [[bin]]
 name = "decode"

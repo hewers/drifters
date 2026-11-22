@@ -4,11 +4,11 @@
 //!
 //! # ⚠ Licensing
 //!
-//! **`gnss-rtk` is AGPL-3.0.** `drifters` is released into the public domain
-//! under The Unlicense. Enabling this
-//! feature links AGPL code, and the AGPL's obligations then extend to the
-//! combined work: for firmware that is the whole device image, and for a
-//! networked service the AGPL's network clause applies to the service itself.
+//! **`gnss-rtk` is AGPL-3.0.** `drifters` is licensed under the permissive
+//! Zero-Clause BSD licence (`0BSD`). Enabling this feature links AGPL code, and
+//! the AGPL's obligations then extend to the combined work: for firmware that
+//! is the whole device image, and for a networked service the AGPL's network
+//! clause applies to the service itself.
 //!
 //! Nothing enables this implicitly. If you turn it on, you are taking on the
 //! AGPL knowingly — which is the informed version of "just use `gnss-rtk`".

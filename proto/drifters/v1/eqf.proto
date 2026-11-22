@@ -92,7 +92,7 @@ message EqfOptions {
 
 // The EqF's estimate at one epoch.
 //
-// The navigation fields match NavSolution's and are reported the same way —
+// The navigation fields match EskfSolution's and are reported the same way —
 // geodetic position, ground velocity in NED, attitude as a quaternion — so a
 // consumer can treat the two estimates alike. The states the EqF has and the
 // ESKF does not are `lever_arm_m` and `mag_calibration`.
@@ -119,6 +119,6 @@ message EqfSolution {
   // Per-state one-sigma uncertainties, 21 elements, in the EqF's block order:
   // attitude, velocity, position, gyroscope bias, accelerometer bias, lever
   // arm, magnetometer calibration. This is *not* the ESKF's state order, which
-  // NavSolution carries.
+  // EskfSolution carries.
   repeated double state_std = 10 [packed = true];
 }

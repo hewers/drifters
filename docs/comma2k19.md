@@ -93,7 +93,7 @@ accepted, and the 10 s heading RMS goes from 0.82° to 1.68°.
 
 **The wheel speed reads about 1 % low, and estimating that shortens the outage
 drift.** Starting every segment from a scale of one,
-[`WheelSpeedScale`](../crates/drifters-filter/src/measurement.rs) ends at a median
+[`WheelSpeedScale`](../crates/drifters-eskf/src/measurement.rs) ends at a median
 of 0.9901 on the holdout segments (0.9850 to 0.9985) and 0.9913 on the fit segments
 (0.9861 to 0.9956). The median outage falls by about 40 % at 10 s and 37 % at 30 s
 on the holdout. The 30 s tail does not improve, and the error while fixes are

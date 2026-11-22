@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use drifters_cli::{run_comma, CommaOptions};
-use drifters_filter::WheelScaleConfig;
+use drifters_eskf::WheelScaleConfig;
 
 /// Observed 0.426 m against the fixes' 0.432 m.
 const MAX_HORIZONTAL_RMS_M: f64 = 0.6;

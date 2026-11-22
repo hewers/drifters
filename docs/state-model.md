@@ -1,6 +1,6 @@
 # The 21-state error model
 
-Derivation of every block in `drifters_filter::eskf::transition_matrix`. Frame
+Derivation of every block in `drifters_eskf::eskf::transition_matrix`. Frame
 and sign conventions are in [frames.md](frames.md).
 
 ## Why an error state
@@ -188,7 +188,7 @@ That is the model, and it is what the tests compare against. It is not how the
 filter computes it. `P` is stored factored as `U D Uᵀ` and updated one scalar
 row at a time by the **Bierman** recursion, which produces the same `K` and the
 same posterior without ever forming `P` — see
-[`ud`](../crates/drifters-filter/src/ud.rs) and
+[`ud`](../crates/drifters-eskf/src/ud.rs) and
 [adr/0005](adr/0005-scalar-type.md).
 
 The distinction matters for the last line above. Joseph's extra 21×21 product

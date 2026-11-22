@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/drifters-core",
-    "crates/drifters-filter",
+    "crates/drifters-eskf",
     "crates/drifters-eqf",
     "crates/drifters-gnss",
     "crates/drifters-proto",
@@ -15,12 +15,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# The floor for the library crates. `drifters-core`, `-filter` and `-eqf` have
+# The floor for the library crates. `drifters-core`, `-eskf` and `-eqf` have
 # no dependencies beyond `libm`; `drifters-gnss` and `drifters-interop` add only
 # `std` and the optional adapters. `drifters-proto` overrides it, because
 # `micropb` and `heapless` need newer releases, and so does `drifters-cli`.
 rust-version = "1.85"
-license = "Unlicense"
+license = "0BSD"
 repository = "https://github.com/hewers/drifters"
 authors = ["drifters contributors"]
 
@@ -28,7 +28,7 @@ authors = ["drifters contributors"]
 drifters-core = { version = "0.1.0", path = "crates/drifters-core", default-features = false }
 drifters-eqf = { version = "0.1.0", path = "crates/drifters-eqf", default-features = false }
 drifters-gnss = { version = "0.1.0", path = "crates/drifters-gnss" }
-drifters-filter = { version = "0.1.0", path = "crates/drifters-filter", default-features = false }
+drifters-eskf = { version = "0.1.0", path = "crates/drifters-eskf", default-features = false }
 
 # The only required non-dev dependency in the no_std core stack.
 libm = "0.2"

@@ -15,7 +15,7 @@ build breaks weeks later — or worse, silently pulls in an allocator.
 Split the workspace along the `no_std` boundary and make the boundary
 structural, not conditional:
 
-- `drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are
+- `drifters-core`, `drifters-eskf`, `drifters-eqf` and `drifters-proto` are
   `#![no_std]` **unconditionally**. No feature changes their data structures, and
   their error types implement `core::error::Error` without `std`.
 - None of them uses `alloc`. Every type is fixed size.

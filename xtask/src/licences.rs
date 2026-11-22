@@ -2,10 +2,10 @@
 //!
 //! Cargo packages only files under a package's own directory, so a licence kept
 //! at the workspace root never reaches a published tarball. That is the whole
-//! reason the copies exist: `drifters` is public domain, and a crate published
-//! without the dedication text is published without its licence.
+//! reason the copies exist: 0BSD asks for nothing but its own text, and a crate
+//! published without that text is published without its licence.
 //!
-//! The root `UNLICENSE` is the source of truth. `cargo xtask licences` writes it
+//! The root `LICENSE` is the source of truth. `cargo xtask licences` writes it
 //! next to every manifest — the published crates and the unpublished firmware
 //! and tooling alike, so a reader finds the terms wherever they are — and
 //! `--check` fails if any copy has drifted. CI runs the check.
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::repo_root;
 
 /// The licence file's name, at the root and in every crate.
-const NAME: &str = "UNLICENSE";
+const NAME: &str = "LICENSE";
 
 pub fn run(check: bool) -> Result<(), Box<dyn Error>> {
     let root = repo_root();

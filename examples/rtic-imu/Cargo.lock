@@ -165,7 +165,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drifters-filter"
+name = "drifters-eskf"
 version = "0.1.0"
 dependencies = [
  "defmt",
@@ -485,7 +485,7 @@ dependencies = [
  "defmt",
  "defmt-rtt",
  "drifters-core",
- "drifters-filter",
+ "drifters-eskf",
  "panic-semihosting",
  "rtic",
  "rtic-monotonics",

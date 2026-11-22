@@ -4,6 +4,9 @@
 //! published reference implementation. Matching the formats exactly is the
 //! point — any translation step would be somewhere for a discrepancy to hide.
 //!
+//! The formats and the dataset are the i2Nav Group's, Wuhan University; KF-GINS
+//! itself is GPL-3.0. These readers parse its files and share none of its code.
+//!
 //! # Formats
 //!
 //! **IMU** — whitespace-separated, at least 7 columns:
@@ -40,7 +43,7 @@ use drifters_core::math::{
 };
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuNoise, ImuSample};
-use drifters_filter::GinsOptions;
+use drifters_eskf::GinsOptions;
 
 /// An error reading a dataset file.
 #[derive(Debug)]

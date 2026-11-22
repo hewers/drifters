@@ -62,7 +62,7 @@ use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_core::F;
-use drifters_filter::{GinsEngine, GinsOptions, GnssQueued, WheelScaleConfig, WheelSpeedScale};
+use drifters_eskf::{GinsEngine, GinsOptions, GnssQueued, WheelScaleConfig, WheelSpeedScale};
 
 use crate::kfgins::DataError;
 use crate::npy;
@@ -425,7 +425,7 @@ pub struct ReplayOptions {
     /// Apply a zero-angular-rate update, with this one-sigma in rad/s,
     /// whenever CAN speed reads below 0.05 m/s. A stop is when a residual yaw
     /// bias walks the heading and nothing else observes it; see
-    /// [`drifters_filter::measurement::zero_angular_rate`].
+    /// [`drifters_eskf::measurement::zero_angular_rate`].
     pub zaru_sigma: Option<F>,
     /// Estimate the wheel-speed scale factor against the fixes' ground speed,
     /// and take it out of the wheel speed before applying it. Fixes withheld

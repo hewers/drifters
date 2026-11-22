@@ -315,7 +315,7 @@ For this dataset, at the tuning that scores best, the answer is not to smooth.
 
 ## Tight coupling, and why this dataset cannot judge it
 
-[`range`](../crates/drifters-filter/src/range.rs) feeds the filter per-satellite
+[`range`](../crates/drifters-eskf/src/range.rs) feeds the filter per-satellite
 pseudoranges instead of a position fix. It differences them within each
 constellation rather than estimating receiver-clock states, which keeps the
 21-state filter and its footprint unchanged; see

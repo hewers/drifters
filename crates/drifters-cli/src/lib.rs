@@ -33,7 +33,7 @@ use drifters_core::frames::Lla;
 use drifters_core::math::RAD_TO_DEG;
 use drifters_core::time::GpsTime;
 use drifters_core::types::ImuSample;
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 pub use engines::{EngineKind, ReplayEngine};
 
@@ -616,7 +616,7 @@ pub struct GsdcOptions {
     /// corrections. See [`differential`].
     pub base: Option<std::path::PathBuf>,
     /// Feed the ESKF per-satellite pseudoranges instead of a position fix.
-    /// See [`drifters_filter::range`]. An engine that has no pseudorange
+    /// See [`drifters_eskf::range`]. An engine that has no pseudorange
     /// update is still fed the fix; asking for tight coupling with no engine
     /// that has one is an error.
     pub tight: bool,
@@ -685,7 +685,7 @@ pub fn run_gsdc(
     }
     if tight && !engines.contains(&EngineKind::Eskf) {
         return Err(
-            "--tight needs the ESKF: tight coupling is drifters-filter's pseudorange update, \
+            "--tight needs the ESKF: tight coupling is drifters-eskf's pseudorange update, \
              and the equivariant filter has none"
                 .into(),
         );
@@ -1018,7 +1018,7 @@ fn gsdc_pass<E: ReplayEngine>(
     // Record the transition matrices the backward pass needs, where the engine
     // can. Costs the ESKF a 21×21 product per IMU sample.
     let recording = engine.start_recording();
-    let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
+    let mut checkpoints: Vec<drifters_eskf::smoother::Checkpoint> = Vec::new();
     for sample in imu {
         let t = sample.time.tow();
         if t < first.time.tow() {
@@ -1048,7 +1048,7 @@ fn gsdc_pass<E: ReplayEngine>(
             engine.add_imu(*sample)?;
             if tight {
                 if let Some((_, obs)) = ranges.get(next - 1) {
-                    let mut tracked: Vec<drifters_filter::range::RangeObservation> =
+                    let mut tracked: Vec<drifters_eskf::range::RangeObservation> =
                         Vec::with_capacity(obs.len());
                     // Not the batch solver's weights. A least-squares fit is
                     // scale-invariant, so `wls` only ever needed the *relative*
@@ -1076,7 +1076,7 @@ fn gsdc_pass<E: ReplayEngine>(
                         if o.elevation < set.mask {
                             continue;
                         }
-                        tracked.push(drifters_filter::range::RangeObservation {
+                        tracked.push(drifters_eskf::range::RangeObservation {
                             constellation: o.constellation,
                             satellite: drifters_core::math::Vec3::new(
                                 o.satellite[0],
@@ -1150,14 +1150,14 @@ fn gsdc_pass<E: ReplayEngine>(
     // contract, so the storage is ours to choose.
     if recording && checkpoints.len() > 1 {
         let mut smoothed = vec![
-            drifters_filter::smoother::Smoothed {
+            drifters_eskf::smoother::Smoothed {
                 state: checkpoints[0].state,
                 correction: Default::default(),
                 covariance: checkpoints[0].posterior,
             };
             checkpoints.len()
         ];
-        match drifters_filter::smoother::smooth(&checkpoints, &mut smoothed) {
+        match drifters_eskf::smoother::smooth(&checkpoints, &mut smoothed) {
             Ok(()) => {
                 let mut stats = truth::ErrorStats::new();
                 for s in &smoothed {

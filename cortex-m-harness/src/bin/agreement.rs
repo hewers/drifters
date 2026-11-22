@@ -30,8 +30,8 @@ use drifters_core::types::{Attitude, GnssFix, ImuNoise, ImuSample, Pva};
 use drifters_core::F;
 use drifters_eqf::linear::StateMatrix as DenseEqf;
 use drifters_eqf::{Covariance, EqfEngine, EqfOptions, Ud};
-use drifters_filter::state::N_STATE;
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::state::N_STATE;
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 const RATE_HZ: u32 = 100;
 const DT: F = 1.0 / RATE_HZ as F;

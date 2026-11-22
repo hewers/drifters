@@ -1,0 +1,101 @@
+// The ESKF's (GinsEngine's) output and the configuration that produced it.
+//
+// The EqF's messages are in eqf.proto. Both live in the same package and share
+// the value types in types.proto, including the IMU error, noise, and mounting
+// models that are drifters-core's rather than either engine's.
+
+syntax = "proto3";
+
+package drifters.v1;
+
+import "drifters/v1/types.proto";
+
+// The ESKF's estimate at one epoch.
+message EskfSolution {
+  GpsTime time = 1;
+  // Position of the IMU reference point, not the GNSS antenna.
+  Lla position = 2;
+  // Ground velocity in the NED navigation frame, m/s.
+  Ned velocity_mps = 3;
+  // Attitude q_nb. Authoritative.
+  Quaternion attitude = 4;
+  // Attitude as Euler angles. Derived from `attitude`, carried for the
+  // convenience of consumers that only plot; never round-trip through it.
+  Euler euler = 5;
+  // Estimated IMU errors at this epoch.
+  ImuError imu_error = 6;
+  // Per-state one-sigma uncertainties in the order given by
+  // drifters_eskf::state: position, velocity, attitude, gyro bias, accel
+  // bias, gyro scale, accel scale. 21 elements, or 15 from a build with
+  // `reduced-state`, which has no scale-factor states.
+  repeated double state_std = 7 [packed = true];
+}
+
+// The ESKF's full error-state covariance, row-major: 21x21, 441 elements, or
+// 15x15, 225 elements, from a build with `reduced-state`.
+//
+// Separate from EskfSolution because it is large and usually only wanted for
+// diagnostics — logging it at IMU rate is rarely what anyone means to do.
+message EskfCovariance {
+  GpsTime time = 1;
+  repeated double row_major = 2 [packed = true];
+}
+
+// Everything the engine needs to start.
+//
+// The initial standard deviations matter as much as the initial state: they set
+// the diagonal of P and therefore how hard the first fixes are allowed to pull
+// the solution. All must be strictly positive.
+message GinsOptions {
+  Lla initial_position = 1;
+  Ned initial_velocity_mps = 2;
+  Euler initial_attitude = 3;
+  ImuError initial_imu_error = 4;
+
+  Vec3 initial_position_std_m = 5;
+  Vec3 initial_velocity_std_mps = 6;
+  // One-sigma initial attitude uncertainty, radians about north, east, and down.
+  Vec3 initial_attitude_std_rad = 7;
+  Vec3 initial_gyro_bias_std_rps = 8;
+  Vec3 initial_accel_bias_std_mps2 = 9;
+  Vec3 initial_gyro_scale_std = 10;
+  Vec3 initial_accel_scale_std = 11;
+
+  ImuNoise imu_noise = 12;
+
+  // GNSS antenna phase centre in the BODY frame, metres (forward, right, down
+  // from the IMU reference point). A sign error here appears as a
+  // heading-dependent position bias.
+  Vec3 antenna_lever_arm_m = 13;
+
+  // Consecutive chi-squared gate rejections tolerated before the covariance is
+  // inflated. A filter that rejects every measurement has a covariance that is
+  // confident and wrong, and discards exactly the information that would fix
+  // it. Zero disables the recovery.
+  uint32 max_consecutive_rejections = 14;
+  // Covariance scale factor applied when that limit is reached. Must be >= 1.
+  double rejection_inflation = 15;
+
+  // Whether a zero-velocity update may correct attitude. Stationary,
+  // accelerometer bias and tilt produce identical velocity signatures, so a
+  // ZUPT observes only their sum; letting it correct both makes the pair drift
+  // apart until the tilt's gravity mis-projection dominates. Holding attitude
+  // sends the whole correction to the bias, which ZUPT can actually pin down.
+  //
+  // `optional` so that absence is distinguishable from an explicit false. A
+  // plain proto3 bool defaults to false, which is the UNSAFE setting here — a
+  // config that simply predates this field would silently decode to the
+  // behaviour that diverges. Absent means "use the recommended default", which
+  // is true.
+  optional bool zupt_holds_attitude = 16;
+
+  // Rotation from the sensor to the vehicle, used by the non-holonomic and
+  // wheel-speed updates. Absent means the two are aligned, which is what a
+  // configuration written before this field meant.
+  VehicleMounting vehicle_mounting = 17;
+
+  // Count gate rejections separately for each kind of measurement, so that an
+  // accepted one does not restart the count of another. Absent means false,
+  // which is what a configuration written before this field meant.
+  bool count_rejections_per_kind = 18;
+}

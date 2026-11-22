@@ -21,8 +21,8 @@ That covers the default configuration. Two features change what the filter
 computes rather than adding to it, so each needs its own run:
 
 ```bash
-cargo test -p drifters-filter --features reduced-state
-cargo test -p drifters-filter -p drifters-cli --features f32-covariance
+cargo test -p drifters-eskf --features reduced-state
+cargo test -p drifters-eskf -p drifters-cli --features f32-covariance
 ```
 
 ## Layer 1 — algebraic identities
@@ -57,7 +57,7 @@ Numbers that can be checked against a published source or a hand computation.
 ## Layer 3 — closed-form dynamics
 
 Simulated inputs whose exact answer is known analytically. In
-`drifters-filter::mechanization`.
+`drifters-eskf::mechanization`.
 
 - **Stationary.** A perfectly calibrated unit at rest senses gravity's reaction
   and the earth's rotation. Position must not move and attitude must not wander,
@@ -101,7 +101,7 @@ Properties a correct Kalman filter has regardless of the data.
 
 ## Layer 5 — end-to-end behaviour
 
-`drifters-filter::engine`.
+`drifters-eskf::engine`.
 
 - Free-running on stationary data stays within 1 mm over 10 s.
 - A GNSS fix 3 m away pulls the solution nearly all the way, given a tight
@@ -1219,7 +1219,7 @@ The ESKF's error state does not use one sign convention. Position and velocity
 are estimate minus truth and are fed back by *subtraction*; the attitude and
 IMU-bias states are corrections and are fed back by *addition* and by a
 pre-multiplication — `q_true = exp(φ) ⊗ q_est`. `apply_correction` in
-[`engine.rs`](../crates/drifters-filter/src/engine.rs) is the one statement of that,
+[`engine.rs`](../crates/drifters-eskf/src/engine.rs) is the one statement of that,
 `error_between` is its inverse, `error_state_round_trips` holds them to each other,
 and the NEES harness scores the filter through `error_between`.
 

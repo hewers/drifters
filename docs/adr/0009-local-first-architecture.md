@@ -155,7 +155,7 @@ The mechanization is 25 % of `add_imu` with `f32-covariance`. Converting it as w
 as the covariance converted, about nine tenths, saves about **22 %**, and it spends
 accuracy: `f32` position storage alone costs 7 % of NIS at a 1 km anchor.
 `drifters_core::local::LocalFrame` (exact geodesic conversions and the frame rotation,
-157 µrad at 1 km) and `drifters_filter::anchor` (the block-diagonal Jacobian,
+157 µrad at 1 km) and `drifters_eskf::anchor` (the block-diagonal Jacobian,
 `P ← J P Jᵀ` and the NEES-invariance gate) are tested and unused.
 
 ### 2. UD factorisation (Bierman–Thornton) replaces stored `P` — **done**
@@ -221,7 +221,7 @@ receivers already speak.
 
 ### 4. The runtime crates need neither `std` nor `alloc` — **done**
 
-`drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are
+`drifters-core`, `drifters-eskf`, `drifters-eqf` and `drifters-proto` are
 `#![no_std]` and use no allocator. `drifters-gnss`, `drifters-interop` and
 `drifters-cli` are the host side.
 
@@ -251,7 +251,7 @@ fix needs, which is the case that matters.
 drift, plus an inter-system bias per constellation. The number of those depends
 on which constellations are in view, so a fixed-size filter must carry the worst
 case always — against a crate whose argument is a 3 328-byte engine.
-[`range`](../../crates/drifters-filter/src/range.rs) differences the ranges
+[`range`](../../crates/drifters-eskf/src/range.rs) differences the ranges
 within each constellation instead, against that constellation's highest
 satellite. That cancels the receiver clock and the inter-system bias exactly,
 adds no states, and leaves the footprint untouched. It costs one satellite per
@@ -300,7 +300,7 @@ satellites spread across four constellations yield no measurement at all, where
 clock states would still have extracted information from each. If that regime
 matters more than the footprint, the trade should be revisited.
 
-**RTS smoothing** is `drifters_filter::smoother::smooth`, a backward recursion over
+**RTS smoothing** is `drifters_eskf::smoother::smooth`, a backward recursion over
 stored checkpoints into a caller's slice, with no allocator. The `smoothing` feature
 adds the engine's recorder. The reverse-pass failure recorded above is the direct
 evidence that a backward *filter* is the wrong construction, and RTS, a backward

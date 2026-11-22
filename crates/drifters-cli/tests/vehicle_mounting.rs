@@ -20,7 +20,7 @@ use drifters_core::math::{MGAL_TO_M_S2, PPM};
 use drifters_core::mounting::{MountingEstimate, MountingEstimator, VehicleMounting};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuNoise, ImuSample};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 const IMU_DT: f64 = 0.01;
 const TAU: f64 = core::f64::consts::TAU;

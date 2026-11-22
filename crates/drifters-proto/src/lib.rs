@@ -1,13 +1,16 @@
 //! Protobuf serialization for the drifters navigation types.
 //!
 //! Extended pose, sensor samples, and filter configuration, on the wire, for
-//! both estimators: the ESKF ([`pb::GinsOptions`], [`pb::NavSolution`]) and the
-//! EqF ([`pb::EqfOptions`], [`pb::EqfSolution`], carrying the GNSS lever arm and
-//! magnetometer calibration it estimates).
+//! both estimators: the ESKF ([`pb::GinsOptions`], [`pb::EskfSolution`],
+//! [`pb::EskfCovariance`]) and the EqF ([`pb::EqfOptions`], [`pb::EqfSolution`],
+//! carrying the GNSS lever arm and magnetometer calibration it estimates).
 //!
-//! The EqF's messages are always generated. Its `EqfOptions`/`ProcessNoise`
-//! conversions and `convert::eqf_solution` need the `eqf` feature, the crate's
-//! only dependency on `drifters-eqf`; decoding an EqF solution needs no engine.
+//! The two are treated alike. Both engines' messages are always generated, and
+//! decoding either's solution needs no engine. The conversions from an engine's
+//! own types are behind a feature named for it, `eskf` or `eqf`, the crate's only
+//! dependency on `drifters-eskf` or `drifters-eqf`. Neither is on by default, so
+//! a firmware that serializes one engine's messages does not compile the other
+//! engine.
 //!
 //! `no_std` and allocation-free, so the same code encodes a solution on a
 //! microcontroller and decodes it in a host replay tool.
@@ -16,7 +19,9 @@
 //!
 //! - [`pb`] — the generated message types, produced by `cargo xtask proto` from
 //!   the schemas in `proto/drifters/v1/`. Checked in; see
-//!   `docs/adr/0002-protobuf.md`.
+//!   `docs/adr/0002-protobuf.md`. The schemas ship in this crate's package under
+//!   the same path, so the `.proto` files matching a published version can be
+//!   taken from its tarball.
 //! - [`convert`] — conversions between those and the in-memory types.
 //!
 //! # Encoding and decoding

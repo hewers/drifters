@@ -21,6 +21,11 @@
 //! radians of latitude and longitude. That makes the covariance isotropic and
 //! directly interpretable — a diagonal entry is a variance in m² at every
 //! latitude — and it makes the GNSS measurement Jacobian the identity.
+//!
+//! The block order and the index names, `P_ID` to `SA_ID` for the states and
+//! `VRW_ID` to `SASTD_ID` for the noise channels, are
+//! [KF-GINS](https://github.com/i2Nav-WHU/KF-GINS)'s `StateID` and `NoiseID`,
+//! kept so that the two can be read side by side.
 
 use drifters_core::math::Matrix;
 

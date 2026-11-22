@@ -25,7 +25,7 @@ use drifters_core::mounting::{MountingEstimator, VehicleMounting};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::{EqfEngine, EqfOptions, EqfRewindEngine, Ud};
-use drifters_filter::{GinsEngine, GinsOptions, RewindEngine, WheelScaleConfig, WheelSpeedScale};
+use drifters_eskf::{GinsEngine, GinsOptions, RewindEngine, WheelScaleConfig, WheelSpeedScale};
 
 /// Abort without formatting. `panic-semihosting` would drag in `core::fmt`,
 /// which is exactly what this binary is trying to exclude.

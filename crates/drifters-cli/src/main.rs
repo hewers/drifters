@@ -352,7 +352,7 @@ fn run_replay_command(
         }
         let report = match kind {
             EngineKind::Eskf => {
-                let engine = drifters_filter::GinsEngine::new(config.options)?;
+                let engine = drifters_eskf::GinsEngine::new(config.options)?;
                 let report = replay_with(engine, &config, &imu, &gnss, &out_dir, quiet)?;
                 report.print();
                 report
@@ -546,7 +546,7 @@ fn run_comma_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             wheel_scale: args
                 .iter()
                 .any(|a| a == "--wheel-scale")
-                .then(drifters_filter::WheelScaleConfig::default),
+                .then(drifters_eskf::WheelScaleConfig::default),
             outage: pair("--outage")?,
             settle: flag(args, "--settle")
                 .map(str::parse)

@@ -20,8 +20,8 @@ satellites in view is not known at compile time, a RINEX file has to be read
 from somewhere, and a batch fit spans a whole trace. None of that belongs on a
 microcontroller.
 
-The runtime half is `drifters-filter`, which is `no_std` and touches no heap at
-all: `drifters_filter::range` takes the same pseudoranges into a filter update
+The runtime half is `drifters-eskf`, which is `no_std` and touches no heap at
+all: `drifters_eskf::range` takes the same pseudoranges into a filter update
 with fixed-size arrays. Keeping the two apart is what lets the embedded side
 stay honest.
 
@@ -29,4 +29,7 @@ Every figure in these modules' documentation was measured on the Google
 Smartphone Decimeter Challenge traces against survey-grade truth. See
 [`docs/gsdc-observables.md`](https://github.com/hewers/drifters/blob/main/docs/gsdc-observables.md).
 
-Released into the public domain under The Unlicense (see `UNLICENSE`).
+## Licence
+
+Zero-Clause BSD (`0BSD`, see `LICENSE`): use it for any purpose, with no
+attribution required.

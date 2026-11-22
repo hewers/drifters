@@ -4,7 +4,7 @@
 //! stream. It wants rates in a flat Cartesian frame, an interval, a
 //! measurement already converted and already placed in time, and a covariance
 //! in its own coordinates. [`EqfEngine`] is the layer that owns those
-//! questions, and it answers each the way `drifters-filter`'s `GinsEngine`
+//! questions, and it answers each the way `drifters-eskf`'s `GinsEngine`
 //! does, so the two are driven identically:
 //!
 //! - **Sans-IO.** [`ImuSample`]s and [`GnssFix`]es are pushed in and a

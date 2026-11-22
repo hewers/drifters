@@ -27,7 +27,7 @@
 //! [`Rewindable`]: that it is an [`Estimator`], that a copy of it is a
 //! snapshot, and that its aiding calls can be recorded and repeated. Each
 //! estimator crate wraps this type with named aiding methods —
-//! `drifters_filter::RewindEngine` and `drifters_eqf::EqfRewindEngine` — and
+//! `drifters_eskf::RewindEngine` and `drifters_eqf::EqfRewindEngine` — and
 //! the tests that hold the result to on-time delivery live there, against the
 //! real filters, as well as here against a filter that does no arithmetic.
 //!
@@ -140,6 +140,9 @@ use crate::F;
 ///   whether a fix is behind it. A rewind asks the same question of a
 ///   recorded sample before spending a replay on the answer, and it must get
 ///   the answer the engine will give.
+///
+/// Like [`Estimator`], it is open to engines outside this workspace, and a
+/// method added after 0.1.0 comes with a default implementation.
 pub trait Rewindable: Estimator + Copy {
     /// One aiding call, as a value a replay can repeat.
     type Aid: Copy + core::fmt::Debug;

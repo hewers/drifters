@@ -3,7 +3,7 @@ name = "rtic-imu"
 description = "Worked example: an IMU interrupt feeding a drifters engine under RTIC, with telemetry out"
 version = "0.0.0"
 edition = "2021"
-license = "Unlicense"
+license = "0BSD"
 repository = "https://github.com/hewers/drifters"
 publish = false
 
@@ -18,7 +18,7 @@ publish = false
 # configuration that keeps up with a 100 Hz IMU on this class of part; `defmt`
 # lets every drifters type go into a log line.
 drifters-core = { path = "../../crates/drifters-core", features = ["defmt"] }
-drifters-filter = { path = "../../crates/drifters-filter", features = ["defmt", "f32-covariance"] }
+drifters-eskf = { path = "../../crates/drifters-eskf", features = ["defmt", "f32-covariance"] }
 
 rtic = { version = "2.4", features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "3", features = ["cortex-m-systick"] }

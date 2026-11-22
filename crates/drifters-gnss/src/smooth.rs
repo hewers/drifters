@@ -26,7 +26,7 @@
 //! multipath is correlated over tens of seconds, so a slowly wandering bias
 //! survives and sets the floor.
 //!
-//! This is the batch half of [`adr/0009`](../../../docs/adr/0009-local-first-architecture.md):
+//! This is the batch half of [`adr/0009`](https://github.com/hewers/drifters/blob/main/docs/adr/0009-local-first-architecture.md):
 //! a desktop tool over the same measurements the on-target filter uses, not a
 //! second estimator with its own models.
 

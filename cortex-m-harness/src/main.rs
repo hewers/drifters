@@ -60,8 +60,8 @@ use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuNoise, ImuSample};
 use drifters_eqf::linear::StateMatrix as DenseEqf;
 use drifters_eqf::{Covariance, EqFilter, EqfEngine, EqfOptions, Ud};
-use drifters_filter::state::{StateMatrix, N_STATE};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::state::{StateMatrix, N_STATE};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 /// Word written over unused stack so the high-water mark can be found later.
 ///
@@ -756,7 +756,7 @@ fn main() -> ! {
     hprintln!(
         "config: {}-state, scale factors {}",
         N_STATE,
-        if drifters_filter::state::ESTIMATES_SCALE_FACTORS {
+        if drifters_eskf::state::ESTIMATES_SCALE_FACTORS {
             "estimated"
         } else {
             "fixed"
@@ -771,7 +771,7 @@ fn main() -> ! {
         N_STATE,
         N_STATE
     );
-    hprintln!("Eskf            {}", size_of::<drifters_filter::Eskf>());
+    hprintln!("Eskf            {}", size_of::<drifters_eskf::Eskf>());
     hprintln!("GinsEngine      {}", size_of::<GinsEngine>());
     hprintln!("GinsOptions     {}", size_of::<GinsOptions>());
     hprintln!("N_STATE         {}", N_STATE);
@@ -823,7 +823,7 @@ fn main() -> ! {
     let rewind_step = late_fix_step(
         bottom,
         engine,
-        drifters_filter::rewind::Aid::Zupt {
+        drifters_eskf::rewind::Aid::Zupt {
             sigma: Vec3::splat(0.02),
         },
     );

@@ -1,7 +1,8 @@
 // The ESKF's (GinsEngine's) output and the configuration that produced it.
 //
-// The EqF's messages are in eqf.proto; both live in the same package and share
-// the value types in types.proto.
+// The EqF's messages are in eqf.proto. Both live in the same package and share
+// the value types in types.proto, including the IMU error, noise, and mounting
+// models that are drifters-core's rather than either engine's.
 
 syntax = "proto3";
 
@@ -9,21 +10,8 @@ package drifters.v1;
 
 import "drifters/v1/types.proto";
 
-// Estimated IMU deterministic errors. The mechanization removes these from
-// every raw sample: corrected = (raw - bias*dt) / (1 + scale).
-message ImuError {
-  // Gyroscope bias, rad/s.
-  Vec3 gyro_bias_rps = 1;
-  // Accelerometer bias, m/s^2.
-  Vec3 accel_bias_mps2 = 2;
-  // Gyroscope scale-factor error, dimensionless (1e-6 is 1 ppm).
-  Vec3 gyro_scale = 3;
-  // Accelerometer scale-factor error, dimensionless.
-  Vec3 accel_scale = 4;
-}
-
-// A navigation solution at one epoch.
-message NavSolution {
+// The ESKF's estimate at one epoch.
+message EskfSolution {
   GpsTime time = 1;
   // Position of the IMU reference point, not the GNSS antenna.
   Lla position = 2;
@@ -36,55 +24,25 @@ message NavSolution {
   Euler euler = 5;
   // Estimated IMU errors at this epoch.
   ImuError imu_error = 6;
-  // Per-state one-sigma uncertainties, 21 elements in the order given by
-  // drifters_filter::state: position, velocity, attitude, gyro bias, accel
-  // bias, gyro scale, accel scale.
+  // Per-state one-sigma uncertainties in the order given by
+  // drifters_eskf::state: position, velocity, attitude, gyro bias, accel
+  // bias, gyro scale, accel scale. 21 elements, or 15 from a build with
+  // `reduced-state`, which has no scale-factor states.
   repeated double state_std = 7 [packed = true];
 }
 
-// The full 21x21 error-state covariance, row-major, 441 elements.
+// The ESKF's full error-state covariance, row-major: 21x21, 441 elements, or
+// 15x15, 225 elements, from a build with `reduced-state`.
 //
-// Separate from NavSolution because it is large and usually only wanted for
+// Separate from EskfSolution because it is large and usually only wanted for
 // diagnostics — logging it at IMU rate is rarely what anyone means to do.
-message Covariance {
+message EskfCovariance {
   GpsTime time = 1;
   repeated double row_major = 2 [packed = true];
 }
 
-// Continuous-time IMU stochastic error parameters.
-//
-// Biases and scale factors are first-order Gauss-Markov with correlation time
-// `correlation_time_s`; the random walks are white noise on rate and specific
-// force.
-message ImuNoise {
-  // Angle random walk, rad/sqrt(s). Datasheets usually quote deg/sqrt(hour):
-  // multiply by pi/180/60.
-  Vec3 gyro_arw = 1;
-  // Velocity random walk, (m/s)/sqrt(s). Datasheets usually quote
-  // m/s/sqrt(hour): divide by 60.
-  Vec3 accel_vrw = 2;
-  // Gyro bias process standard deviation, rad/s.
-  Vec3 gyro_bias_std_rps = 3;
-  // Accelerometer bias process standard deviation, m/s^2.
-  Vec3 accel_bias_std_mps2 = 4;
-  // Gyro scale-factor process standard deviation, dimensionless.
-  Vec3 gyro_scale_std = 5;
-  // Accelerometer scale-factor process standard deviation, dimensionless.
-  Vec3 accel_scale_std = 6;
-  // Gauss-Markov correlation time, seconds. Must be > 0.
-  double correlation_time_s = 7;
-}
-
 // Everything the engine needs to start.
 //
-// How the IMU sits in the vehicle carrying it.
-message VehicleMounting {
-  // q_vb, rotating body vectors into the vehicle's forward-right-down frame.
-  Quaternion rotation = 1;
-  // One-sigma uncertainty of the vehicle forward axis's direction, radians.
-  double forward_std_rad = 2;
-}
-
 // The initial standard deviations matter as much as the initial state: they set
 // the diagonal of P and therefore how hard the first fixes are allowed to pull
 // the solution. All must be strictly positive.

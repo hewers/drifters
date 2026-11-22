@@ -8,8 +8,8 @@ use drifters_cli::engines::ReplayEngine;
 use drifters_core::math::{wrap_pi, Mat3, Vec3};
 use drifters_core::types::NavState;
 use drifters_eqf::{physical, EqfOptions};
-use drifters_filter::smoother::{smooth, Checkpoint, Smoothed};
-use drifters_filter::state::PHI_ID;
+use drifters_eskf::smoother::{smooth, Checkpoint, Smoothed};
+use drifters_eskf::state::PHI_ID;
 
 /// Differential of atan2(east, north) of the body's forward axis for a
 /// left rotation in NED. The down-axis diagonal alone is not yaw variance.
@@ -146,7 +146,7 @@ fn backward(points: &[Checkpoint], start: f64, reference: &kfgins::Reference) ->
         }
         let j = yaw_row(&c.state);
         let variance =
-            |p: &drifters_filter::state::StateMatrix| j.dot(p.block::<3, 3>(PHI_ID, PHI_ID) * j);
+            |p: &drifters_eskf::state::StateMatrix| j.dot(p.block::<3, 3>(PHI_ID, PHI_ID) * j);
         if i + 1 < points.len() {
             // Terminal state is identical by construction.
             revision.push(

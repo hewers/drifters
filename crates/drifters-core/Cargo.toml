@@ -8,7 +8,7 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 authors.workspace = true
-categories = ["no-std", "science", "embedded"]
+categories = ["no-std::no-alloc", "embedded", "science::geo", "science::robotics", "mathematics"]
 keywords = ["navigation", "gnss", "ins", "kalman", "imu"]
 
 [dependencies]

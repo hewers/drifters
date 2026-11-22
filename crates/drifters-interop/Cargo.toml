@@ -8,11 +8,12 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 authors.workspace = true
-categories = ["science", "api-bindings"]
+categories = ["science::geo", "api-bindings"]
 keywords = ["navigation", "gnss", "nav-types", "interop"]
 
 [dependencies]
-drifters-core = { workspace = true, features = ["std"] }
+# Only the adapters use it, so with no feature on the crate depends on nothing.
+drifters-core = { workspace = true, features = ["std"], optional = true }
 
 # Both adapters are OPTIONAL and OFF BY DEFAULT. See docs/adr/0003.
 #
@@ -30,10 +31,10 @@ approx = { workspace = true }
 [features]
 default = []
 ## `nav-types` coordinate conversions. MIT, `std` only.
-nav-types-interop = ["dep:nav-types"]
+nav-types-interop = ["dep:nav-types", "dep:drifters-core"]
 ## `gnss-rtk` PVT solution adapter. **AGPL-3.0** — read the crate docs before
 ## enabling.
-gnss-rtk-interop = ["dep:gnss-rtk"]
+gnss-rtk-interop = ["dep:gnss-rtk", "dep:drifters-core"]
 
 [lints.rust]
 unsafe_code = "forbid"

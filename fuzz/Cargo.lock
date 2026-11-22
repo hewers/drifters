@@ -53,7 +53,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drifters-filter"
+name = "drifters-eskf"
 version = "0.1.0"
 dependencies = [
  "drifters-core",
@@ -65,7 +65,7 @@ version = "0.0.0"
 dependencies = [
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
  "drifters-proto",
  "libfuzzer-sys",
  "micropb",
@@ -77,7 +77,7 @@ version = "0.1.0"
 dependencies = [
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
  "heapless",
  "micropb",
 ]

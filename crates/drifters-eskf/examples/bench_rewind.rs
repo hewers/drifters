@@ -15,8 +15,8 @@ use drifters_core::frames::{Lla, Ned};
 use drifters_core::math::{Euler, Vec3};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuNoise, ImuSample};
-use drifters_filter::rewind::{FixOutcome, RewindEngine};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::rewind::{FixOutcome, RewindEngine};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 /// A 200 Hz IMU and a receiver up to 300 ms late: a window of 60 samples, so
 /// a ring of 120, and room for 32 aiding records.

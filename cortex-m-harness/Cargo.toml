@@ -3,7 +3,7 @@ name = "cortex-m-harness"
 description = "Bare-metal measurement harness for drifters on Cortex-M, run under QEMU"
 version = "0.1.0"
 edition = "2021"
-license = "Unlicense"
+license = "0BSD"
 repository = "https://github.com/hewers/drifters"
 publish = false
 # Two binaries live here — the measurement harness and the panic audit — so
@@ -16,7 +16,7 @@ default-run = "cortex-m-harness"
 
 [dependencies]
 drifters-core = { path = "../crates/drifters-core" }
-drifters-filter = { path = "../crates/drifters-filter" }
+drifters-eskf = { path = "../crates/drifters-eskf" }
 drifters-eqf = { path = "../crates/drifters-eqf" }
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
@@ -26,12 +26,12 @@ panic-semihosting = "0.6"
 [features]
 default = []
 ## Build the filter in its 15-state configuration.
-reduced-state = ["drifters-filter/reduced-state"]
+reduced-state = ["drifters-eskf/reduced-state"]
 ## Carry the covariance factors in `f32`. On a Cortex-M4F, whose FPU is
 ## single-precision only, this is the difference between hardware arithmetic
 ## and calls into the soft-float `__aeabi_d*` routines. On a Cortex-M7 built
 ## for its double-precision FPU it saves about 2 %.
-f32-covariance = ["drifters-filter/f32-covariance"]
+f32-covariance = ["drifters-eskf/f32-covariance"]
 
 [profile.release]
 opt-level = "s"

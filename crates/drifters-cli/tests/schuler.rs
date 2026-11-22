@@ -22,9 +22,9 @@ use drifters_core::math::{
 use drifters_core::time::GpsTime;
 use drifters_core::types::{Attitude, GnssFix, ImuNoise, ImuSample, Pva};
 use drifters_eqf::{EqfEngine, EqfOptions};
-use drifters_filter::eskf::transition_matrix;
-use drifters_filter::state::{PHI_ID, V_ID};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::eskf::transition_matrix;
+use drifters_eskf::state::{PHI_ID, V_ID};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 const DT: f64 = 0.1;
 const TILT: f64 = 2.0e-5;

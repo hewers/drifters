@@ -34,7 +34,7 @@ use drifters_core::rewind::{FixOutcome, Rewind, Rewindable};
 use drifters_core::time::GpsTime;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::{EqfEngine, EqfOptions, Ud};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 fn origin() -> Lla {
     Lla::from_degrees(30.5282, 114.3569, 25.0)

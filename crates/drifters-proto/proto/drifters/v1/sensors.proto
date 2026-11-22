@@ -1,0 +1,115 @@
+// Sensor measurements entering the filter.
+
+syntax = "proto3";
+
+package drifters.v1;
+
+import "drifters/v1/types.proto";
+
+// One inertial measurement, in INCREMENTAL form.
+//
+// `dtheta` and `dvel` are the integrals of angular rate and specific force over
+// `dt`, which is what a coning/sculling-corrected IMU reports natively and what
+// the two-sample mechanization consumes. Producers holding instantaneous rates
+// must multiply by `dt` before filling these in.
+message ImuSample {
+  // Timestamp at the END of the integration interval.
+  GpsTime time = 1;
+  // Length of the integration interval, seconds. Must be > 0.
+  double dt_s = 2;
+  // Integrated angular increment about the body axes (forward-right-down),
+  // radians.
+  Vec3 dtheta_rad = 3;
+  // Integrated specific-force increment along the body axes, m/s.
+  //
+  // Specific force, not acceleration: a stationary level unit reads +9.8 m/s²
+  // upward, so `dvel.z` is about -9.8 * dt.
+  Vec3 dvel_mps = 4;
+}
+
+// A GNSS position fix — the loosely-coupled measurement.
+message GnssFix {
+  GpsTime time = 1;
+  // Antenna phase-centre position.
+  Lla position = 2;
+  // One-sigma position uncertainty in the local NED frame, metres. Every
+  // component must be strictly positive; a zero makes the innovation
+  // covariance singular and the fix is rejected.
+  Vec3 position_std_m = 3;
+  // Ground velocity in NED, m/s. Absent when the receiver does not report it —
+  // `optional` so that "absent" and "zero velocity" stay distinguishable.
+  optional Ned velocity_mps = 4;
+  // One-sigma velocity uncertainty in NED, m/s.
+  Vec3 velocity_std_mps = 5;
+}
+
+// Auxiliary measurements — the aiding sources that keep a low-cost system
+// usable through a GNSS outage.
+message AuxMeasurement {
+  GpsTime time = 1;
+
+  oneof measurement {
+    // Detected stationarity: velocity is zero in all three axes.
+    ZeroVelocity zero_velocity = 2;
+    // Barometric height, which bounds the unstable INS vertical channel.
+    BarometricHeight barometric_height = 3;
+    // Odometer / wheel speed along the vehicle forward axis.
+    WheelSpeed wheel_speed = 4;
+    // Non-holonomic constraints for a wheeled vehicle.
+    NonHolonomic non_holonomic = 5;
+    // Magnetometer heading.
+    MagneticHeading magnetic_heading = 6;
+    // Three-axis magnetometer.
+    Magnetometer magnetometer = 7;
+  }
+}
+
+message ZeroVelocity {
+  // One-sigma on the assumed-zero velocity, m/s.
+  Vec3 velocity_std_mps = 1;
+}
+
+message BarometricHeight {
+  // Height above the WGS-84 ellipsoid, metres.
+  double height_m = 1;
+  double height_std_m = 2;
+}
+
+message WheelSpeed {
+  // Speed along the vehicle forward axis, m/s. The vehicle frame is the body
+  // frame turned by GinsOptions.vehicle_mounting.
+  double speed_mps = 1;
+  double speed_std_mps = 2;
+}
+
+// A wheeled vehicle does not slip sideways and does not leave the ground, so
+// the vehicle-frame lateral and vertical velocities are zero. The vehicle frame
+// is the body frame turned by GinsOptions.vehicle_mounting.
+message NonHolonomic {
+  // One-sigma slip allowance, lateral (vehicle y), m/s.
+  double lateral_std_mps = 1;
+  // One-sigma allowance, vertical (vehicle z), m/s.
+  double vertical_std_mps = 2;
+  // Minimum speed below which the constraint carries no information and must
+  // not be applied, m/s.
+  double min_speed_mps = 3;
+}
+
+message MagneticHeading {
+  // TRUE heading, radians clockwise from north. Magnetic declination must
+  // already have been applied — feeding magnetic heading here produces a bias
+  // equal to the local declination, which reaches tens of degrees.
+  double heading_rad = 1;
+  double heading_std_rad = 2;
+}
+
+message Magnetometer {
+  // The field in the body frame, hard and soft iron already removed. Only its
+  // direction is used, so any unit will do.
+  Vec3 field = 1;
+  // The field at this place in the local NED frame, declination included.
+  Vec3 reference_ned = 2;
+  // One-sigma noise of the measured direction, radians. It must also cover what
+  // remains of the calibration, which does not average out.
+  double direction_std_rad = 3;
+}

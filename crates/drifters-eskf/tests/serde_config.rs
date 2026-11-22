@@ -10,7 +10,7 @@
 
 use drifters_core::math::Vec3;
 use drifters_core::mounting::VehicleMounting;
-use drifters_filter::{ConfigError, GinsEngine, GinsOptions, StationarityConfig};
+use drifters_eskf::{ConfigError, GinsEngine, GinsOptions, StationarityConfig};
 
 /// What a project actually keeps in a file: the installation and a tuning
 /// change or two. The initial state comes from alignment at run time.

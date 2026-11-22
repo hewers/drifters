@@ -16,7 +16,7 @@ use crate::linear::DIM;
 
 /// Everything [`EqfEngine`](crate::engine::EqfEngine) needs to start.
 ///
-/// Deliberately the same shape as `drifters-filter`'s `GinsOptions` wherever
+/// Deliberately the same shape as `drifters-eskf`'s `GinsOptions` wherever
 /// the two estimators want the same thing, so one can be configured from the
 /// other's numbers: the initial state is a geodetic [`Pva`], and every initial
 /// uncertainty is a one-sigma value in **physical** units. The engine maps

@@ -680,7 +680,7 @@ mod tests {
     /// so the comparison means something.
     ///
     /// A backward pass that returns zeros — which the textbook recursion does
-    /// on a feedback error-state filter, see [`drifters_filter::smoother`] —
+    /// on a feedback error-state filter, see [`drifters_eskf::smoother`] —
     /// scores exactly equal to the filter and fails this.
     /// What the smoother needs from the measurements, and what it does when it
     /// does not get it.
@@ -1053,9 +1053,9 @@ pub mod eskf {
     use drifters_core::math::{Cholesky, Matrix, Quat, Vec3};
     use drifters_core::time::GpsTime;
     use drifters_core::types::{GnssFix, ImuSample};
-    use drifters_filter::config::GinsOptions;
-    use drifters_filter::engine::GinsEngine;
-    use drifters_filter::state::N_STATE;
+    use drifters_eskf::config::GinsOptions;
+    use drifters_eskf::engine::GinsEngine;
+    use drifters_eskf::state::N_STATE;
 
     /// Run the campaign. Returns the same shape of report as the EqF's.
     /// What one smoothed run looked like.
@@ -1171,7 +1171,7 @@ pub mod eskf {
         let decay = (-dt / tau).exp();
         let walk = (2.0 * dt / tau).sqrt();
         let per_second = (1.0 / dt).round() as usize;
-        let mut checkpoints: Vec<drifters_filter::smoother::Checkpoint> = Vec::new();
+        let mut checkpoints: Vec<drifters_eskf::smoother::Checkpoint> = Vec::new();
         let mut filtered: Vec<(f64, f64)> = Vec::new();
 
         for k in 1..=steps {
@@ -1230,14 +1230,14 @@ pub mod eskf {
         }
 
         let mut smoothed = vec![
-            drifters_filter::smoother::Smoothed {
+            drifters_eskf::smoother::Smoothed {
                 state: checkpoints[0].state,
                 correction: Default::default(),
                 covariance: checkpoints[0].posterior,
             };
             checkpoints.len()
         ];
-        drifters_filter::smoother::smooth(&checkpoints, &mut smoothed).expect("well-posed");
+        drifters_eskf::smoother::smooth(&checkpoints, &mut smoothed).expect("well-posed");
 
         let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt();
         let f: Vec<f64> = filtered.iter().map(|(_, e)| *e).collect();
@@ -1256,7 +1256,7 @@ pub mod eskf {
         // states whose truth is exactly known — position, velocity and
         // attitude — as their own marginal, which the leading block of P is.
         let score = |state: &drifters_core::types::NavState,
-                     p: &drifters_filter::state::StateMatrix|
+                     p: &drifters_eskf::state::StateMatrix|
          -> Option<f64> {
             let tow = state.time.tow();
             let d = state.position().ned_from(truth_at(tow));
@@ -1459,7 +1459,7 @@ pub mod eskf {
                         ..nav.imu_error
                     },
                 };
-                let dx = drifters_filter::engine::error_between(&truth_state, &nav);
+                let dx = drifters_eskf::engine::error_between(&truth_state, &nav);
                 let mut e = [0.0; N_STATE];
                 for (i, slot) in e.iter_mut().enumerate() {
                     *slot = dx[(i, 0)];

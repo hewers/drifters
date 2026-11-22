@@ -18,7 +18,7 @@
 //!
 //! ```
 //! use drifters_core::prelude::*;
-//! use drifters_filter::{GinsEngine, GinsOptions};
+//! use drifters_eskf::{GinsEngine, GinsOptions};
 //!
 //! let options = GinsOptions::default().with_initial_state(
 //!     Lla::from_degrees(30.5282, 114.3569, 25.0),

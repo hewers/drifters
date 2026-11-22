@@ -49,7 +49,7 @@ use drifters_cli::{antenna_at, eqf, kfgins};
 use drifters_core::math::Vec3;
 use drifters_core::types::{GnssFix, ImuSample};
 use drifters_eqf::EqfEngine;
-use drifters_filter::engine::GinsEngine;
+use drifters_eskf::engine::GinsEngine;
 
 /// Yaw rate above which a fix counts as taken in a turn, rad/s. About 3°/s:
 /// 326 of the 3 362 fixes.

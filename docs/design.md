@@ -27,7 +27,7 @@ which makes it a good thing to be *comparable to* — see
 - Auditable numerics: every frame convention, unit, and sign is stated in the
   type that carries it, and checked by a test.
 - Minimum dependencies. `drifters-core` has exactly one, `libm`, and
-  `drifters-filter` and `drifters-eqf` add nothing to it. `drifters-proto` needs
+  `drifters-eskf` and `drifters-eqf` add nothing to it. `drifters-proto` needs
   `micropb` and `heapless` for the wire format; both are `no_std` and neither
   allocates.
 
@@ -46,14 +46,14 @@ the ellipsoid with no harmonic terms. The IMU error models are Gauss-Markov
   configurable lever arm.
 
 **In scope, though filters of this kind often leave them out:**
-- **Tightly-coupled GNSS.** [`range`](../crates/drifters-filter/src/range.rs)
+- **Tightly-coupled GNSS.** [`range`](../crates/drifters-eskf/src/range.rs)
   takes per-satellite pseudoranges, single-differenced within each constellation
   so no receiver-clock states are needed and the filter's footprint is
   unchanged. It keeps working below the four satellites a position solution
   needs, and wins below about twenty. Carrier phase is handled on the desktop
   side, as time-differenced carrier phase in `drifters-gnss`, rather than in the
   filter.
-- **Smoothing.** [`smoother`](../crates/drifters-filter/src/smoother.rs) is a
+- **Smoothing.** [`smoother`](../crates/drifters-eskf/src/smoother.rs) is a
   Rauch–Tung–Striebel backward pass, always compiled and allocation-free — it
   writes into a caller-provided slice, so a bounded window is a fixed-lag
   smoother that runs on the target. The filter itself is causal and
@@ -74,7 +74,7 @@ drifters-core      no_std, no alloc, deps: libm
         ▲
         ├────────────────────────┐
         │                        │
-drifters-filter            drifters-eqf
+drifters-eskf              drifters-eqf
 no_std, no alloc           no_std, no alloc
 INS mechanization,         equivariant filter over SE2(3),
 21-state ESKF over a       self-calibrating lever arm,
@@ -92,15 +92,17 @@ protobuf codecs   gnss-rtk adapters    WLS, TDCP, RINEX,  and validation
                                        DGNSS, batch fit
 ```
 
-`drifters-proto` sits below both estimators: it carries the ESKF's messages and
-the EqF's, so it depends on `drifters-filter` and `drifters-eqf`.
+`drifters-proto` sits below both estimators and treats them alike: it carries
+both engines' messages, and depends on each only through a feature named for it,
+`eskf` or `eqf`, off by default. Decoding either engine's solution needs neither
+engine.
 
-`drifters-filter::anchor` and `drifters-core::local` hold the local-frame and
+`drifters-eskf::anchor` and `drifters-core::local` hold the local-frame and
 re-anchoring transforms. Nothing calls them: the state representation change they
 exist for is [parked](milestones.md#local-frame-state), because the measurements
 say it would not pay.
 
-`drifters-core`, `drifters-filter`, `drifters-eqf` and `drifters-proto` are the
+`drifters-core`, `drifters-eskf`, `drifters-eqf` and `drifters-proto` are the
 firmware side: `no_std`, no allocator, and CI fails if any of them so much as
 names `extern crate alloc`. `drifters-gnss` is the desktop half and uses `std`
 deliberately — its solvers size themselves to a satellite count not known at
@@ -189,7 +191,7 @@ stream has passed it. `add_gnss` refuses such a fix as `GnssQueued::Stale` and
 counts it.
 
 [`drifters_core::rewind`](../crates/drifters-core/src/rewind.rs) is how a late
-fix gets applied, to either estimator: `RewindEngine` in `drifters-filter` and
+fix gets applied, to either estimator: `RewindEngine` in `drifters-eskf` and
 `EqfRewindEngine` in `drifters-eqf` are the same `Rewind<E>` over each engine,
 with that engine's aiding calls under their own names. It wraps the engine with
 two earlier snapshots of it and a ring of the IMU samples and aiding calls since
@@ -325,6 +327,17 @@ aids except to record one and repeat it, so
 the EqF's one. `Estimator` itself says nothing about aiding, for the reason
 above. The last contract test runs the shared `Rewind` over each engine and
 requires a late fix to land exactly where it would have on time.
+
+Both traits are open: an engine outside this workspace can implement them, and
+then gets the rewind layer and runs anywhere the two engines here do. The
+required methods are the ones only an engine can answer: ingest, the solution and
+its sigmas, the update sequence, the input-integrity counters, and health. The
+gating diagnostics (NIS, the rejection run, inflations) have defaults, because an
+engine with no gate truly has none to report, and a zero there would not hide
+anything. Every method added after 0.1.0 comes with a default, so adding one is
+never a breaking change for an implementor. A test in `drifters_core::estimator`
+implements only the required methods of both traits and stops compiling if that
+promise is broken.
 
 ## Resource budget
 
@@ -524,7 +537,7 @@ fn update<const M: usize>(
 ```
 
 so any sensor reduces to producing `(innovation, H, R)`. All of these are
-implemented, in `drifters-filter::measurement`:
+implemented, in `drifters-eskf::measurement`:
 
 | sensor | dim | observes | note |
 |---|---|---|---|
@@ -592,13 +605,14 @@ is **checked into the repository** rather than produced by a `build.rs`, so
 building `drifters` never requires `protoc`. Regeneration is an explicit,
 reviewable step. See [adr/0002](adr/0002-protobuf.md).
 
-Schemas live in `proto/drifters/v1/`. `eskf.proto` and `sensors.proto` hold the
-ESKF's messages and the sensor samples; `eqf.proto` holds the EqF's options and
-its estimate, including the GNSS lever arm and magnetometer calibration it
-estimates. The two estimators share one package and the value types in
-`types.proto`, so there is one wire version to keep; the EqF's conversions are
-the crate's `eqf` feature, so an ESKF-only firmware does not link the EqF
-engine.
+Schemas live in `proto/drifters/v1/`. `types.proto` holds the value types and the
+`drifters-core` models both engines use (IMU errors, IMU noise, mounting), and
+`sensors.proto` the sensor samples. `eskf.proto` holds the ESKF's options,
+solution, and covariance; `eqf.proto` the EqF's options and solution, including
+the GNSS lever arm and magnetometer calibration it estimates. The two estimators
+share one package, so there is one wire version to keep, and the crate treats
+them alike: each engine's conversions are a feature named for it, `eskf` or
+`eqf`, off by default, and decoding either's solution needs no engine.
 
 `double` is a fixed64 on the wire, so position and velocity round-trip bit-exactly,
 and the tests assert equality. A geodetic latitude carries about 10⁻⁹ rad of
@@ -676,7 +690,11 @@ at the ingest boundary rather than allowed to poison the state.
 
 ## References
 
-- Y. Zhang et al., *KF-GINS*, i2Nav, Wuhan University.
+- X. Niu, L. Wang, Q. Chen, H. Tang, Q. Zhang, and T. Zhang, "KF-GINS: an
+  open-sourced software for GNSS/INS integrated navigation," *GPS Solutions*
+  29(4), art. 202, 2025. doi:10.1007/s10291-025-01967-w. The
+  [code](https://github.com/i2Nav-WHU/KF-GINS) is GPL-3.0; what drifters takes
+  from it is listed in the README's acknowledgements.
 - P. Groves, *Principles of GNSS, Inertial, and Multisensor Integrated
   Navigation Systems*, 2nd ed. — the reference for the error-state dynamics.
 - P. Savage, "Strapdown Inertial Navigation Integration Algorithm Design" —

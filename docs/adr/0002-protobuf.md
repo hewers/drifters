@@ -55,7 +55,7 @@ step, no PATH surprises, no version skew between machines.
 `protox` pulls in `prost`, `miette` and `thiserror`, which is a lot of
 dependency for a project whose thesis is minimal ones. It costs nothing that
 matters: `xtask` is host-only and build-time, so none of it is reachable from
-`drifters-core` or `drifters-filter`, and none of it can appear in a firmware
+`drifters-core` or `drifters-eskf`, and none of it can appear in a firmware
 image. The dependency budget that the rest of this project defends applies to
 what ships, not to what generates code.
 

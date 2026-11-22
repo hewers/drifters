@@ -19,7 +19,7 @@ use drifters_core::time::GpsTime;
 use drifters_core::types::{Attitude, GnssFix, ImuNoise, ImuSample};
 use drifters_eqf::local::gyrocompass_accuracy;
 use drifters_eqf::{EqfEngine, EqfOptions, Ud};
-use drifters_filter::{GinsEngine, GinsOptions};
+use drifters_eskf::{GinsEngine, GinsOptions};
 
 const DT: f64 = 0.05;
 const SECONDS: usize = 900;

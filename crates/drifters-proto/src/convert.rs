@@ -31,40 +31,57 @@ use drifters_core::mounting::VehicleMounting;
 use drifters_core::time::GpsTime;
 use drifters_core::types::{Attitude, GnssFix, ImuError, ImuNoise, ImuSample, NavState, Pva};
 use drifters_core::F;
-// The EqF's conversions need its engine and configuration types; the generated
-// messages and the decode side do not, so this is behind the `eqf` feature.
+// Each engine's conversions need its configuration and state types, so each is
+// behind the feature of the same name. The generated messages and the decode
+// side need neither engine.
 #[cfg(feature = "eqf")]
 use drifters_eqf::config::EqfOptions;
 #[cfg(feature = "eqf")]
 use drifters_eqf::filter::ProcessNoise;
 #[cfg(feature = "eqf")]
 use drifters_eqf::{Covariance, EqfEngine};
-use drifters_filter::config::GinsOptions;
-use drifters_filter::state::{StateMatrix, N_STATE};
+#[cfg(feature = "eskf")]
+use drifters_eskf::config::GinsOptions;
+#[cfg(feature = "eskf")]
+use drifters_eskf::state::{StateMatrix, N_STATE};
 
 use crate::pb;
 
-/// The number of elements this build serializes into a covariance message.
+/// The ESKF's state dimension in its default build: the length of
+/// `EskfSolution.state_std` and the side of `EskfCovariance`.
 ///
-/// `N_STATE²` — 441 for the default 21-state filter, 225 under
-/// `reduced-state`.
-pub const COVARIANCE_LEN: usize = N_STATE * N_STATE;
+/// A build with `drifters-eskf`'s `reduced-state` has
+/// [`ESKF_REDUCED_STATE_DIM`] instead. Spelled out rather than taken from
+/// `drifters_eskf`, as [`EQF_STATE_DIM`] is for the EqF, so that decoding an
+/// ESKF solution needs no engine: a host reading a link can tell which build
+/// sent it from the length.
+pub const ESKF_STATE_DIM: usize = 21;
+
+/// The ESKF's state dimension under `reduced-state`, which drops the six
+/// scale-factor states.
+pub const ESKF_REDUCED_STATE_DIM: usize = 15;
+
+/// The number of elements the EqF writes into `EqfSolution.state_std`.
+///
+/// The EqF has 21 states and no build feature changes that, unlike the ESKF.
+/// Spelled out rather than taken from `drifters_eqf` so that decoding an EqF
+/// solution needs no engine.
+pub const EQF_STATE_DIM: usize = 21;
+
+/// The number of elements this build serializes into an `EskfCovariance`.
+///
+/// `N_STATE²`: 441 for the default 21-state filter, 225 under `reduced-state`.
+#[cfg(feature = "eskf")]
+pub const ESKF_COVARIANCE_LEN: usize = N_STATE * N_STATE;
 
 /// Capacity of the covariance field on the wire, fixed at 21 states.
 ///
 /// The **schema does not change with a build feature**. A 15-state build writes
-/// 225 elements into a container sized for 441; a reader then rejects anything
-/// whose length does not match its own `N_STATE`. Sizing the wire field by the
-/// local build would instead make two peers silently incompatible depending on
-/// how each was compiled.
-const WIRE_COVARIANCE_CAPACITY: usize = 21 * 21;
-
-/// The number of elements the EqF writes into `EqfSolution.state_std`.
-///
-/// The EqF has 21 states and no build feature changes that, unlike the ESKF's
-/// `N_STATE`. Spelled out rather than taken from `drifters_eqf` so that decoding
-/// an EqF solution needs no engine.
-pub const EQF_STATE_DIM: usize = 21;
+/// 225 elements into a container sized for 441, and `eskf_state_matrix`
+/// rejects anything whose length does not match its own build. Sizing the wire
+/// field by the local build would instead make two peers silently incompatible
+/// depending on how each was compiled.
+const WIRE_COVARIANCE_CAPACITY: usize = ESKF_STATE_DIM * ESKF_STATE_DIM;
 
 /// Why a decoded message could not become an in-memory value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -406,10 +423,11 @@ impl TryFrom<&pb::ImuNoise> for ImuNoise {
     }
 }
 
-impl From<&NavState> for pb::NavSolution {
+impl From<&NavState> for pb::EskfSolution {
     /// Fills the Euler angles from the quaternion, for consumers that only plot.
     ///
-    /// `attitude` remains authoritative — see [`nav_solution`].
+    /// `attitude` remains authoritative. Carries no sigmas; `eskf_solution`, with
+    /// the `eskf` feature, builds a message that does.
     fn from(state: &NavState) -> Self {
         let mut msg = Self::default();
         msg.set_time((&state.time).into());
@@ -422,7 +440,7 @@ impl From<&NavState> for pb::NavSolution {
     }
 }
 
-impl TryFrom<&pb::NavSolution> for NavState {
+impl TryFrom<&pb::EskfSolution> for NavState {
     type Error = ConvertError;
 
     /// Reconstructs attitude from the **quaternion**, never from `euler`.
@@ -430,7 +448,7 @@ impl TryFrom<&pb::NavSolution> for NavState {
     /// The Euler angles are a derived convenience: they are singular at
     /// ±90° pitch and carry less precision. Round-tripping through them would
     /// quietly degrade the attitude and fail unpredictably near gimbal lock.
-    fn try_from(msg: &pb::NavSolution) -> Result<Self, Self::Error> {
+    fn try_from(msg: &pb::EskfSolution) -> Result<Self, Self::Error> {
         let quat: Quat = require!(msg.r#attitude(), "attitude").try_into()?;
         Ok(Self {
             time: require!(msg.r#time(), "time").try_into()?,
@@ -444,36 +462,58 @@ impl TryFrom<&pb::NavSolution> for NavState {
     }
 }
 
-/// Build a [`pb::NavSolution`], optionally carrying the per-state uncertainties.
+/// Build a [`pb::EskfSolution`], optionally carrying the per-state
+/// uncertainties.
 ///
 /// `state_std` is separate from [`NavState`] because it belongs to the filter,
 /// not the solution: the same navigation state can be reported with or without
 /// it. Pass `None` at IMU rate and `Some` at whatever rate diagnostics are
 /// actually wanted.
-pub fn nav_solution(state: &NavState, state_std: Option<&[F; N_STATE]>) -> pb::NavSolution {
-    let mut msg = pb::NavSolution::from(state);
+#[cfg(feature = "eskf")]
+pub fn eskf_solution(state: &NavState, state_std: Option<&[F; N_STATE]>) -> pb::EskfSolution {
+    let mut msg = pb::EskfSolution::from(state);
     if let Some(std) = state_std {
-        // Capacity is exactly N_STATE, so this cannot overflow.
+        // Capacity is ESKF_STATE_DIM, at least N_STATE, so this cannot overflow.
         msg.r#state_std = heapless::Vec::from_slice(std).unwrap_or_default();
     }
     msg
 }
 
-/// Read back the per-state uncertainties written by [`nav_solution`].
+/// Read back the per-state uncertainties an ESKF wrote into `state_std`.
 ///
-/// Returns `Ok(None)` when the solution carried none, which is the normal case
-/// and not an error.
-pub fn state_std(msg: &pb::NavSolution) -> Result<Option<[F; N_STATE]>, ConvertError> {
-    read_std(msg.r#state_std.as_slice())
+/// Needs no engine. The slice has [`ESKF_STATE_DIM`] elements, or
+/// [`ESKF_REDUCED_STATE_DIM`] from a `reduced-state` build, in
+/// `drifters_eskf::state`'s order; any other length is an error. A build with
+/// the engine can `try_into` its own `[F; N_STATE]`. Returns `Ok(None)` when the
+/// solution carried none, which is the normal case and not an error.
+pub fn eskf_state_std(msg: &pb::EskfSolution) -> Result<Option<&[F]>, ConvertError> {
+    let slice = msg.r#state_std.as_slice();
+    if slice.is_empty() {
+        return Ok(None);
+    }
+    if slice.len() != ESKF_STATE_DIM && slice.len() != ESKF_REDUCED_STATE_DIM {
+        return Err(ConvertError::WrongLength {
+            field: "state_std",
+            expected: ESKF_STATE_DIM,
+            actual: slice.len(),
+        });
+    }
+    check_std(slice)?;
+    Ok(Some(slice))
+}
+
+fn check_std(slice: &[F]) -> Result<(), ConvertError> {
+    if slice.iter().any(|s| !s.is_finite() || *s < 0.0) {
+        return Err(ConvertError::Invalid("state_std"));
+    }
+    Ok(())
 }
 
 fn read_std<const N: usize>(slice: &[F]) -> Result<Option<[F; N]>, ConvertError> {
     if slice.is_empty() {
         return Ok(None);
     }
-    if slice.iter().any(|s| !s.is_finite() || *s < 0.0) {
-        return Err(ConvertError::Invalid("state_std"));
-    }
+    check_std(slice)?;
     let array = slice.try_into().map_err(|_| ConvertError::WrongLength {
         field: "state_std",
         expected: N,
@@ -482,42 +522,63 @@ fn read_std<const N: usize>(slice: &[F]) -> Result<Option<[F; N]>, ConvertError>
     Ok(Some(array))
 }
 
-/// Serialize the full error-state covariance, row-major.
+/// Serialize the ESKF's full error-state covariance, row-major.
 ///
 /// Large — 441 doubles, about 3.5 KiB encoded — and usually wanted only for
 /// diagnostics. Logging it at IMU rate is rarely what anyone means to do.
-pub fn covariance(time: GpsTime, p: &StateMatrix) -> pb::Covariance {
-    let mut msg = pb::Covariance::default();
+#[cfg(feature = "eskf")]
+pub fn eskf_covariance(time: GpsTime, p: &StateMatrix) -> pb::EskfCovariance {
+    let mut msg = pb::EskfCovariance::default();
     msg.set_time((&time).into());
     let mut flat = heapless::Vec::<f64, WIRE_COVARIANCE_CAPACITY>::new();
     for row in &p.data {
-        // Capacity matches N_STATE * N_STATE exactly.
+        // Capacity is at least N_STATE * N_STATE.
         let _ = flat.extend_from_slice(row);
     }
     msg.r#row_major = flat;
     msg
 }
 
-/// Rebuild a covariance matrix from its row-major form.
+/// Read back an ESKF covariance, row-major, without the engine.
+///
+/// The slice has `ESKF_STATE_DIM²` elements, or `ESKF_REDUCED_STATE_DIM²` from a
+/// `reduced-state` build; any other length, or a non-finite element, is an
+/// error.
+pub fn eskf_covariance_values(msg: &pb::EskfCovariance) -> Result<&[F], ConvertError> {
+    let flat = msg.r#row_major.as_slice();
+    let reduced = ESKF_REDUCED_STATE_DIM * ESKF_REDUCED_STATE_DIM;
+    if flat.len() != WIRE_COVARIANCE_CAPACITY && flat.len() != reduced {
+        return Err(ConvertError::WrongLength {
+            field: "row_major",
+            expected: WIRE_COVARIANCE_CAPACITY,
+            actual: flat.len(),
+        });
+    }
+    if flat.iter().any(|v| !v.is_finite()) {
+        return Err(ConvertError::Invalid("row_major"));
+    }
+    Ok(flat)
+}
+
+/// Rebuild the ESKF's covariance matrix from its row-major form.
 ///
 /// Rejects a message whose element count does not match this build's state
 /// dimension — which is how a 21-state peer talking to a 15-state one is caught
 /// rather than silently misread.
-pub fn state_matrix(msg: &pb::Covariance) -> Result<StateMatrix, ConvertError> {
-    let flat = msg.r#row_major.as_slice();
-    if flat.len() != COVARIANCE_LEN {
+#[cfg(feature = "eskf")]
+pub fn eskf_state_matrix(msg: &pb::EskfCovariance) -> Result<StateMatrix, ConvertError> {
+    let len = msg.r#row_major.len();
+    if len != ESKF_COVARIANCE_LEN {
         return Err(ConvertError::WrongLength {
             field: "row_major",
-            expected: COVARIANCE_LEN,
-            actual: flat.len(),
+            expected: ESKF_COVARIANCE_LEN,
+            actual: len,
         });
     }
+    let flat = eskf_covariance_values(msg)?;
     let mut p = StateMatrix::zeros();
     for (i, row) in p.data.iter_mut().enumerate() {
         row.copy_from_slice(&flat[i * N_STATE..(i + 1) * N_STATE]);
-    }
-    if !p.is_finite() {
-        return Err(ConvertError::Invalid("row_major"));
     }
     Ok(p)
 }
@@ -549,6 +610,7 @@ impl TryFrom<&pb::VehicleMounting> for VehicleMounting {
     }
 }
 
+#[cfg(feature = "eskf")]
 impl From<&GinsOptions> for pb::GinsOptions {
     fn from(o: &GinsOptions) -> Self {
         let mut msg = Self {
@@ -577,6 +639,7 @@ impl From<&GinsOptions> for pb::GinsOptions {
     }
 }
 
+#[cfg(feature = "eskf")]
 impl TryFrom<&pb::GinsOptions> for GinsOptions {
     type Error = ConvertError;
 
@@ -643,15 +706,16 @@ impl TryFrom<&pb::GinsOptions> for GinsOptions {
 
 // --- the equivariant filter ---------------------------------------------
 //
-// The EqF reports the same geodetic navigation solution the ESKF does, so the
-// `NavSolution` types above apply to it too. What it adds is a different set of
-// estimated states: a GNSS lever arm and a magnetometer rotation, and no IMU
+// The EqF reports the same geodetic navigation solution the ESKF does, as a
+// `NavState` with the same fields on the wire. What it adds is a different set
+// of estimated states: a GNSS lever arm and a magnetometer rotation, and no IMU
 // scale factors. `EqfOptions` and `EqfSolution` carry those.
 //
-// The conversions *from* the EqF's own types need `drifters-eqf` and are behind
-// the `eqf` feature. Everything that turns a decoded message back into plain
-// data — `EqfEstimate`, `eqf_state_std` — needs only `drifters-core`, so a
-// consumer that reads EqF logs does not compile the engine.
+// As for the ESKF, the conversions *from* the EqF's own types need its crate and
+// are behind its feature, `eqf`. Everything that turns a decoded message back
+// into plain data — `EqfEstimate`, `eqf_state_std` — needs only
+// `drifters-core`, so a consumer that reads EqF logs does not compile the
+// engine.
 
 #[cfg(feature = "eqf")]
 impl From<&ProcessNoise> for pb::EqfProcessNoise {
@@ -1022,7 +1086,7 @@ mod tests {
     #[test]
     fn nav_state_survives_the_wire() {
         let original = sample_nav_state();
-        let back: NavState = round_trip::<_, pb::NavSolution>(&original);
+        let back: NavState = round_trip::<_, pb::EskfSolution>(&original);
         assert_eq!(back.pva.position.lat, original.pva.position.lat);
         assert_eq!(back.pva.velocity, original.pva.velocity);
         assert_eq!(back.imu_error.gyro_bias, original.imu_error.gyro_bias);
@@ -1040,7 +1104,7 @@ mod tests {
         // fills it inconsistently, the quaternion must still win — round
         // -tripping through Euler would lose precision and break at gimbal lock.
         let original = sample_nav_state();
-        let mut msg = pb::NavSolution::from(&original);
+        let mut msg = pb::EskfSolution::from(&original);
         msg.set_euler(pb::Euler {
             r#roll_rad: 3.0,
             r#pitch_rad: -1.0,
@@ -1054,22 +1118,28 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "eskf")]
     #[test]
     fn state_std_round_trips_and_is_optional() {
         let state = sample_nav_state();
-        let plain = nav_solution(&state, None);
-        assert_eq!(state_std(&plain).unwrap(), None, "absent is not an error");
+        let plain = eskf_solution(&state, None);
+        assert_eq!(
+            eskf_state_std(&plain).unwrap(),
+            None,
+            "absent is not an error"
+        );
 
         let mut sigmas = [0.0; N_STATE];
         for (i, s) in sigmas.iter_mut().enumerate() {
             *s = (i as F + 1.0) * 0.25;
         }
-        let with_std = nav_solution(&state, Some(&sigmas));
+        let with_std = eskf_solution(&state, Some(&sigmas));
         let bytes = to_bytes(&with_std);
-        let decoded: pb::NavSolution = from_bytes(&bytes);
-        assert_eq!(state_std(&decoded).unwrap(), Some(sigmas));
+        let decoded: pb::EskfSolution = from_bytes(&bytes);
+        assert_eq!(eskf_state_std(&decoded).unwrap(), Some(&sigmas[..]));
     }
 
+    #[cfg(feature = "eskf")]
     #[test]
     fn covariance_round_trips_through_the_wire() {
         let mut p = StateMatrix::identity().scaled(2.5);
@@ -1081,10 +1151,10 @@ mod tests {
         p[(last, last - 1)] = -1.5;
         p[(last - 1, last)] = -1.5;
 
-        let msg = covariance(sample_time(), &p);
+        let msg = eskf_covariance(sample_time(), &p);
         let bytes = to_bytes(&msg);
-        let decoded: pb::Covariance = from_bytes(&bytes);
-        let back = state_matrix(&decoded).expect("valid covariance");
+        let decoded: pb::EskfCovariance = from_bytes(&bytes);
+        let back = eskf_state_matrix(&decoded).expect("valid covariance");
 
         assert_eq!(back, p);
         assert_eq!(
@@ -1093,6 +1163,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "eskf")]
     #[test]
     fn gins_options_round_trip_through_the_wire() {
         let original = GinsOptions::default().with_antenna_lever_arm(Vec3::new(0.5, -0.25, -1.0));
@@ -1135,7 +1206,8 @@ mod tests {
         // covariance singular, a zero quaternion is not a rotation.
         assert!(ImuSample::try_from(&pb::ImuSample::default()).is_err());
         assert!(GnssFix::try_from(&pb::GnssFix::default()).is_err());
-        assert!(NavState::try_from(&pb::NavSolution::default()).is_err());
+        assert!(NavState::try_from(&pb::EskfSolution::default()).is_err());
+        #[cfg(feature = "eskf")]
         assert!(GinsOptions::try_from(&pb::GinsOptions::default()).is_err());
     }
 
@@ -1233,7 +1305,7 @@ mod tests {
 
     #[test]
     fn both_solution_decoders_reject_nonfinite_velocity() {
-        let mut a = pb::NavSolution::from(&sample_nav_state());
+        let mut a = pb::EskfSolution::from(&sample_nav_state());
         let mut b = pb::EqfSolution::default();
         b.set_attitude((&Quat::IDENTITY).into());
         b.set_mag_calibration((&Quat::IDENTITY).into());
@@ -1269,20 +1341,22 @@ mod tests {
         assert_relative_eq!(q.norm(), 1.0, epsilon = 1e-15);
     }
 
+    #[cfg(feature = "eskf")]
     #[test]
     fn a_truncated_covariance_is_reported_with_both_lengths() {
-        let mut msg = covariance(sample_time(), &StateMatrix::identity());
+        let mut msg = eskf_covariance(sample_time(), &StateMatrix::identity());
         msg.r#row_major.truncate(100);
         assert_eq!(
-            state_matrix(&msg),
+            eskf_state_matrix(&msg),
             Err(ConvertError::WrongLength {
                 field: "row_major",
-                expected: COVARIANCE_LEN,
+                expected: ESKF_COVARIANCE_LEN,
                 actual: 100,
             })
         );
     }
 
+    #[cfg(feature = "eskf")]
     #[test]
     fn an_invalid_configuration_is_rejected_at_the_wire_not_at_the_engine() {
         let mut options = GinsOptions::default();
@@ -1346,7 +1420,8 @@ mod decode_robustness {
     fn exercise_every_message(bytes: &[u8]) {
         try_decode::<pb::ImuSample, ImuSample>(bytes);
         try_decode::<pb::GnssFix, GnssFix>(bytes);
-        try_decode::<pb::NavSolution, NavState>(bytes);
+        try_decode::<pb::EskfSolution, NavState>(bytes);
+        #[cfg(feature = "eskf")]
         try_decode::<pb::GinsOptions, GinsOptions>(bytes);
         #[cfg(feature = "eqf")]
         try_decode::<pb::EqfProcessNoise, ProcessNoise>(bytes);
@@ -1355,9 +1430,9 @@ mod decode_robustness {
         try_decode::<pb::EqfSolution, EqfEstimate>(bytes);
 
         let mut decoder = PbDecoder::new(bytes);
-        let mut solution = pb::NavSolution::default();
+        let mut solution = pb::EskfSolution::default();
         if solution.decode(&mut decoder, bytes.len()).is_ok() {
-            let _ = state_std(&solution);
+            let _ = eskf_state_std(&solution);
         }
 
         let mut decoder = PbDecoder::new(bytes);
@@ -1367,9 +1442,11 @@ mod decode_robustness {
         }
 
         let mut decoder = PbDecoder::new(bytes);
-        let mut cov = pb::Covariance::default();
+        let mut cov = pb::EskfCovariance::default();
         if cov.decode(&mut decoder, bytes.len()).is_ok() {
-            let _ = state_matrix(&cov);
+            let _ = eskf_covariance_values(&cov);
+            #[cfg(feature = "eskf")]
+            let _ = eskf_state_matrix(&cov);
         }
     }
 
@@ -1406,9 +1483,9 @@ mod decode_robustness {
         // containers exist to make impossible.
         use micropb::{MessageEncode, PbEncoder};
 
-        let mut oversized = pb::Covariance::default();
+        let mut oversized = pb::EskfCovariance::default();
         // Fill to capacity, which is legal.
-        let full = [1.0f64; COVARIANCE_LEN];
+        let full = [1.0f64; ESKF_STATE_DIM * ESKF_STATE_DIM];
         oversized.r#row_major = heapless::Vec::from_slice(&full).unwrap();
         let mut encoder = PbEncoder::new(heapless::Vec::<u8, 8192>::new());
         oversized.encode(&mut encoder).unwrap();
@@ -1420,11 +1497,18 @@ mod decode_robustness {
         bytes.extend_from_slice(&extra);
 
         let mut decoder = PbDecoder::new(&bytes[..]);
-        let mut decoded = pb::Covariance::default();
+        let mut decoded = pb::EskfCovariance::default();
         // Either outcome is acceptable. Panicking is not, and neither is
         // silently accepting a wrong-but-plausible matrix.
         if decoded.decode(&mut decoder, bytes.len()).is_ok() {
-            if let Ok(p) = state_matrix(&decoded) {
+            if let Ok(values) = eskf_covariance_values(&decoded) {
+                assert!(
+                    values.iter().all(|v| v.is_finite()),
+                    "accepted a non-finite covariance"
+                );
+            }
+            #[cfg(feature = "eskf")]
+            if let Ok(p) = eskf_state_matrix(&decoded) {
                 assert!(p.is_finite(), "accepted a non-finite covariance");
             }
         }
@@ -1480,7 +1564,7 @@ mod decode_robustness {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "eskf"))]
 mod option_defaults {
     use super::*;
 
@@ -1628,6 +1712,76 @@ mod option_defaults {
 
 /// The EqF decode side, which needs no `drifters-eqf` and so is tested with the
 /// feature off as well.
+/// The ESKF decoding side, which needs no engine.
+#[cfg(test)]
+mod eskf_decode {
+    use super::*;
+
+    #[test]
+    fn eskf_state_std_takes_either_build_and_nothing_else() {
+        let mut msg = pb::EskfSolution::default();
+        assert_eq!(
+            eskf_state_std(&msg).unwrap(),
+            None,
+            "absent is not an error"
+        );
+        for dim in [ESKF_STATE_DIM, ESKF_REDUCED_STATE_DIM] {
+            msg.r#state_std = heapless::Vec::from_slice(&[0.5; ESKF_STATE_DIM][..dim]).unwrap();
+            assert_eq!(eskf_state_std(&msg).unwrap().map(<[F]>::len), Some(dim));
+        }
+        msg.r#state_std = heapless::Vec::from_slice(&[0.5; 18]).unwrap();
+        assert_eq!(
+            eskf_state_std(&msg),
+            Err(ConvertError::WrongLength {
+                field: "state_std",
+                expected: ESKF_STATE_DIM,
+                actual: 18,
+            })
+        );
+        msg.r#state_std = heapless::Vec::from_slice(&[-0.5; ESKF_REDUCED_STATE_DIM]).unwrap();
+        assert_eq!(
+            eskf_state_std(&msg),
+            Err(ConvertError::Invalid("state_std"))
+        );
+    }
+
+    #[test]
+    fn eskf_covariance_values_take_either_build_and_nothing_else() {
+        let mut msg = pb::EskfCovariance::default();
+        for dim in [ESKF_STATE_DIM, ESKF_REDUCED_STATE_DIM] {
+            let n = dim * dim;
+            msg.r#row_major =
+                heapless::Vec::from_slice(&[1.0; WIRE_COVARIANCE_CAPACITY][..n]).unwrap();
+            assert_eq!(eskf_covariance_values(&msg).map(<[F]>::len), Ok(n));
+        }
+        msg.r#row_major = heapless::Vec::from_slice(&[1.0; 100]).unwrap();
+        assert!(matches!(
+            eskf_covariance_values(&msg),
+            Err(ConvertError::WrongLength { actual: 100, .. })
+        ));
+        let mut values = [1.0; WIRE_COVARIANCE_CAPACITY];
+        values[7] = F::NAN;
+        msg.r#row_major = heapless::Vec::from_slice(&values).unwrap();
+        assert_eq!(
+            eskf_covariance_values(&msg),
+            Err(ConvertError::Invalid("row_major"))
+        );
+    }
+
+    /// The constants spelled out for engine-free decoding must agree with the
+    /// engine, in whichever configuration this build has.
+    #[cfg(feature = "eskf")]
+    #[test]
+    fn the_spelled_out_dimensions_match_the_engine() {
+        let expected = if drifters_eskf::state::ESTIMATES_SCALE_FACTORS {
+            ESKF_STATE_DIM
+        } else {
+            ESKF_REDUCED_STATE_DIM
+        };
+        assert_eq!(N_STATE, expected);
+    }
+}
+
 #[cfg(test)]
 mod eqf_decode {
     use super::*;

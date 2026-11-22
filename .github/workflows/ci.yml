@@ -52,8 +52,8 @@ jobs:
       # states, the other changes the numerics of every filter in the build.
       # `--all-features` above enables them together, which is a real
       # configuration but not the one most users get, so each also runs alone.
-      - run: cargo test -p drifters-filter -p drifters-proto --features reduced-state
-      - run: cargo test -p drifters-filter --features f32-covariance
+      - run: cargo test -p drifters-eskf -p drifters-proto --features reduced-state
+      - run: cargo test -p drifters-eskf --features f32-covariance
       # The whole campaign at single precision, against the same expectations.
       - run: cargo test -p drifters-cli --features f32-covariance
       # The engine properties at 15 states.
@@ -94,32 +94,35 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p drifters-core --target ${{ matrix.target }}
-      - run: cargo build -p drifters-filter --target ${{ matrix.target }}
+      - run: cargo build -p drifters-eskf --target ${{ matrix.target }}
       - run: cargo build -p drifters-proto --target ${{ matrix.target }}
       - run: cargo build -p drifters-eqf --target ${{ matrix.target }}
-      # The EqF's protobuf conversions are a feature of their own, so the
-      # default `drifters-proto` build above does not compile them.
+      # Each engine's protobuf conversions are a feature of their own, so the
+      # default `drifters-proto` build above compiles neither. Each is built
+      # alone, as a firmware running one engine would.
+      - run: cargo build -p drifters-proto --target ${{ matrix.target }} --features eskf
       - run: cargo build -p drifters-proto --target ${{ matrix.target }} --features eqf
       # The smoothing recorder is a feature because of its size, not because it
       # allocates. It has to build for a target too.
-      - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features smoothing
+      - run: cargo build -p drifters-eskf --target ${{ matrix.target }} --features smoothing
       # The reason `f32-covariance` exists: on `thumbv7em` the FPU is
       # single-precision, so this is the difference between `vmla.f32` and a
       # call into `__aeabi_dmul`. It has to build everywhere, including on the
       # targets with no FPU at all, where it is merely smaller.
-      - run: cargo build -p drifters-filter --target ${{ matrix.target }} --features f32-covariance
+      - run: cargo build -p drifters-eskf --target ${{ matrix.target }} --features f32-covariance
       # The optional features, which exist for exactly these targets. `defmt`
       # is how firmware logs; `serde` is for host-side configuration, but it
       # is declared without `std`, and this is the build that would notice if
       # that stopped being true.
       - run: >
-          cargo build -p drifters-filter -p drifters-eqf -p drifters-proto
+          cargo build -p drifters-eskf -p drifters-eqf -p drifters-proto
           --target ${{ matrix.target }}
-          --features drifters-filter/defmt,drifters-eqf/defmt,drifters-proto/defmt
+          --features drifters-eskf/defmt,drifters-eqf/defmt
+          --features drifters-proto/defmt,drifters-proto/eskf,drifters-proto/eqf
       - run: >
-          cargo build -p drifters-filter -p drifters-eqf
+          cargo build -p drifters-eskf -p drifters-eqf
           --target ${{ matrix.target }}
-          --features drifters-filter/serde,drifters-eqf/serde
+          --features drifters-eskf/serde,drifters-eqf/serde
       # No `drifters-gnss` here on purpose: it is the desktop half and uses
       # `std` deliberately. See its crate docs.
 
@@ -132,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           found=0
-          for c in core filter eqf proto; do
+          for c in core eskf eqf proto; do
             if grep -rn "extern crate alloc" "crates/drifters-$c/src"; then
               echo "::error::drifters-$c requires an allocator"
               found=1
@@ -176,13 +179,13 @@ jobs:
           # list means a new crate is a deliberate addition here.
           cargo semver-checks --baseline-rev "$baseline" \
             -p drifters-core \
-            -p drifters-filter \
+            -p drifters-eskf \
             -p drifters-gnss \
             -p drifters-eqf \
             -p drifters-proto \
             -p drifters-interop
 
-  # The MSRV that matters is the embedded one. `drifters-core`, `-filter` and
+  # The MSRV that matters is the embedded one. `drifters-core`, `-eskf` and
   # `-eqf` depend on nothing but `libm`, so they can hold a floor far below what
   # the rest of the workspace needs, and a firmware project on an older pinned
   # toolchain can still use them. `drifters-proto` pulls `micropb` (1.88) and
@@ -195,7 +198,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p drifters-core -p drifters-filter -p drifters-eqf
+      - run: cargo build -p drifters-core -p drifters-eskf -p drifters-eqf
       # The host-side libraries hold the same floor, checked here rather than
       # asserted.
       - run: cargo build -p drifters-gnss
@@ -203,7 +206,7 @@ jobs:
       # Including under the features that change the filter, since a feature
       # can reach for something newer without the default build noticing.
       - run: >
-          cargo build -p drifters-filter
+          cargo build -p drifters-eskf
           --features f32-covariance,reduced-state,smoothing,std,defmt,serde
       - run: cargo build -p drifters-eqf --features std,defmt,serde
       # The crates above the floor, at the floor they declare.
@@ -226,15 +229,16 @@ jobs:
       - run: >
           cargo doc --workspace --exclude drifters-interop --no-deps
           --features drifters-core/defmt,drifters-core/serde,drifters-core/std
-          --features drifters-filter/smoothing,drifters-filter/std,drifters-filter/defmt,drifters-filter/serde
+          --features drifters-eskf/smoothing,drifters-eskf/std,drifters-eskf/defmt,drifters-eskf/serde
           --features drifters-eqf/std,drifters-eqf/defmt,drifters-eqf/serde
-          --features drifters-proto/std,drifters-proto/defmt,drifters-proto/eqf
+          --features drifters-proto/std,drifters-proto/defmt,drifters-proto/eskf,drifters-proto/eqf
 
-  # The checked-in protobuf bindings must match the schemas that produced them.
-  # `cargo xtask proto` needs no `protoc` — the whole toolchain is pure Rust,
+  # The checked-in protobuf bindings must match the schemas that produced them,
+  # and `drifters-proto`'s packaged copy of the schemas must match the root
+  # `proto/`. `cargo xtask proto` needs no `protoc` — the whole toolchain is pure Rust,
   # so this job installs nothing beyond the Rust toolchain itself.
   proto:
-    name: generated bindings are current
+    name: generated bindings and schema copies are current
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -243,7 +247,7 @@ jobs:
       - run: cargo xtask proto --check
 
   # Cargo packages only files under each package's own directory, so the root
-  # `UNLICENSE` would never reach a published tarball on its own. `cargo xtask
+  # `LICENSE` would never reach a published tarball on its own. `cargo xtask
   # licences` deploys it beside every manifest; this fails when a copy has
   # drifted from the root.
   licences:
@@ -467,9 +471,9 @@ jobs:
         env:
           RUSTFLAGS: --cfg drifters_nightly_simd
         run: |
-          cargo test -p drifters-filter
-          cargo test -p drifters-filter --features f32-covariance
-          cargo build -p drifters-filter --target thumbv7em-none-eabihf --features f32-covariance
+          cargo test -p drifters-eskf
+          cargo test -p drifters-eskf --features f32-covariance
+          cargo build -p drifters-eskf --target thumbv7em-none-eabihf --features f32-covariance
 
   # Licence and advisory auditing.
   #

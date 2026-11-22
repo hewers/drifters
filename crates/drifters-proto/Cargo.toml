@@ -9,15 +9,16 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 authors.workspace = true
-categories = ["no-std", "encoding", "embedded"]
+categories = ["no-std::no-alloc", "encoding", "embedded"]
 keywords = ["navigation", "protobuf", "gnss", "ins", "no-std"]
 
 [dependencies]
 drifters-core = { workspace = true }
-# Optional: the EqF's conversions are the only thing here that needs it, and a
-# firmware running the ESKF alone should not link the EqF engine.
+# Each engine is optional and off by default, and the two are treated alike: its
+# feature adds the conversions that need its types, and nothing else does. The
+# messages for both, and decoding them, need neither engine.
+drifters-eskf = { workspace = true, optional = true }
 drifters-eqf = { workspace = true, optional = true }
-drifters-filter = { workspace = true }
 defmt = { workspace = true, optional = true }
 # Allocation-free protobuf runtime. `container-heapless` supplies the
 # fixed-capacity vectors the generated repeated fields use.
@@ -45,22 +46,28 @@ heapless = "0.9.4"
 
 [features]
 default = []
-## Pass through to `drifters-filter`: 15 states, no scale factors.
-reduced-state = ["drifters-filter/reduced-state"]
-## The EqF's `EqfOptions` and `ProcessNoise` conversions, and `eqf_solution`.
-## It is the only thing that needs `drifters-eqf`, so it is off by default: a
-## firmware serializing the ESKF's messages should not compile the EqF engine.
-## The generated `EqfOptions` / `EqfSolution` messages and the decode side
-## (`EqfEstimate`, `eqf_state_std`) need no engine and are always available.
+## The ESKF's conversions: `GinsOptions`, and encoding `eskf_solution` with its
+## sigmas, `eskf_covariance`, and `eskf_state_matrix`. The only thing that needs
+## `drifters-eskf`. The generated `GinsOptions`, `EskfSolution`, and
+## `EskfCovariance` messages and the decode side (`NavState` from a solution,
+## `eskf_state_std`, `eskf_covariance_values`) need no engine and are always
+## available.
+eskf = ["dep:drifters-eskf"]
+## The EqF's conversions: `EqfOptions`, `ProcessNoise`, and `eqf_solution`. The
+## only thing that needs `drifters-eqf`. The generated `EqfOptions` and
+## `EqfSolution` messages and the decode side (`EqfEstimate`, `eqf_state_std`)
+## need no engine and are always available.
 eqf = ["dep:drifters-eqf"]
-std = ["drifters-core/std", "drifters-filter/std", "drifters-eqf?/std"]
-## `defmt::Format` on [`ConvertError`], and through to `drifters-core` and
-## `drifters-filter` — and to `drifters-eqf` when `eqf` is on. The generated
-## message types do not implement it.
+## Pass through to `drifters-eskf`: 15 states, no scale factors. Implies `eskf`.
+reduced-state = ["eskf", "drifters-eskf/reduced-state"]
+std = ["drifters-core/std", "drifters-eskf?/std", "drifters-eqf?/std"]
+## `defmt::Format` on [`ConvertError`], and through to `drifters-core`, and to
+## each engine whose feature is on. The generated message types do not
+## implement it.
 defmt = [
     "dep:defmt",
     "drifters-core/defmt",
-    "drifters-filter/defmt",
+    "drifters-eskf?/defmt",
     "drifters-eqf?/defmt",
 ]
 
@@ -69,7 +76,7 @@ unsafe_code = "forbid"
 
 [package.metadata.docs.rs]
 # Not `all-features`: `reduced-state` is not additive, and with it on docs.rs
-# would document the 15-state build. `eqf` is additive and belongs here, so the
-# EqF's conversions are documented.
-features = ["std", "defmt", "eqf"]
+# would document the 15-state build. `eskf` and `eqf` are additive and belong
+# here, so both engines' conversions are documented.
+features = ["std", "defmt", "eskf", "eqf"]
 rustdoc-args = ["--cfg", "docsrs"]

@@ -19,7 +19,7 @@
 //!
 //! ```
 //! use drifters_core::prelude::*;
-//! use drifters_filter::{FixOutcome, GinsOptions, RewindEngine};
+//! use drifters_eskf::{FixOutcome, GinsOptions, RewindEngine};
 //!
 //! let options = GinsOptions::default().with_initial_state(
 //!     Lla::from_degrees(30.5282, 114.3569, 25.0),
@@ -48,7 +48,7 @@
 //! );
 //! assert!(matches!(engine.add_gnss(fix)?, FixOutcome::Rewound { .. }));
 //! assert!(engine.last_nis().is_some(), "and it was applied");
-//! # Ok::<(), drifters_filter::FilterError>(())
+//! # Ok::<(), drifters_eskf::FilterError>(())
 //! ```
 //!
 //! # Cost
@@ -62,7 +62,7 @@
 //! A rewind is a replay, and a replay is that many `add_imu`. A fix `L`
 //! samples late pushes between `L` and `L + W − 1` samples again, depending on
 //! how far behind it the anchor happens to sit, plus the aiding calls in that
-//! span. Measured by `cargo run --release -p drifters-filter --example
+//! span. Measured by `cargo run --release -p drifters-eskf --example
 //! bench_rewind`, 21 states, `RewindEngine<120, 32>`, a 200 Hz stream with a
 //! 10 Hz height aid and one fix a second:
 //!

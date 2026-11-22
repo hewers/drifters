@@ -29,7 +29,7 @@
 use drifters_core::types::{GnssFix, ImuSample, NavState};
 use drifters_eqf::config::EqfOptions;
 use drifters_eqf::filter::ProcessNoise;
-use drifters_filter::config::GinsOptions;
+use drifters_eskf::config::GinsOptions;
 use drifters_proto::{
     convert::{self, EqfEstimate},
     pb,
@@ -56,7 +56,7 @@ where
 fuzz_target!(|data: &[u8]| {
     try_decode::<pb::ImuSample, ImuSample>(data);
     try_decode::<pb::GnssFix, GnssFix>(data);
-    try_decode::<pb::NavSolution, NavState>(data);
+    try_decode::<pb::EskfSolution, NavState>(data);
     try_decode::<pb::GinsOptions, GinsOptions>(data);
     try_decode::<pb::EqfProcessNoise, ProcessNoise>(data);
     try_decode::<pb::EqfOptions, EqfOptions>(data);
@@ -65,9 +65,9 @@ fuzz_target!(|data: &[u8]| {
     // The repeated fields have fixed capacities, so exercise them through the
     // helpers that enforce the length rather than through `TryFrom`.
     let mut decoder = PbDecoder::new(data);
-    let mut solution = pb::NavSolution::default();
+    let mut solution = pb::EskfSolution::default();
     if solution.decode(&mut decoder, data.len()).is_ok() {
-        let _ = convert::state_std(&solution);
+        let _ = convert::eskf_state_std(&solution);
     }
 
     let mut decoder = PbDecoder::new(data);
@@ -77,8 +77,10 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let mut decoder = PbDecoder::new(data);
-    let mut covariance = pb::Covariance::default();
+    let mut covariance = pb::EskfCovariance::default();
     if covariance.decode(&mut decoder, data.len()).is_ok() {
-        let _ = convert::state_matrix(&covariance);
+        // The engine-free reader, then the engine's matrix built on it.
+        let _ = convert::eskf_covariance_values(&covariance);
+        let _ = convert::eskf_state_matrix(&covariance);
     }
 });

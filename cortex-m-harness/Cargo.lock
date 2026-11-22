@@ -41,7 +41,7 @@ dependencies = [
  "cortex-m-semihosting",
  "drifters-core",
  "drifters-eqf",
- "drifters-filter",
+ "drifters-eskf",
  "panic-semihosting",
 ]
 
@@ -106,7 +106,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drifters-filter"
+name = "drifters-eskf"
 version = "0.1.0"
 dependencies = [
  "drifters-core",
