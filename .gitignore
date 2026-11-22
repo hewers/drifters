@@ -11,6 +11,7 @@
 /fuzz/artifacts
 /cortex-m-harness/target
 /cortex-m-harness/target-m7
+/cortex-m-harness/target-m7-o3
 /cortex-m-hil/target
 /examples/*/target
 

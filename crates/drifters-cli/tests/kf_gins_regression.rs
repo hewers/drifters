@@ -72,6 +72,9 @@ fn the_demo_dataset_replays_within_tolerance() {
         return;
     };
 
+    // Timed from before the files are parsed to the end of the replay: the
+    // figure `cargo xtask measure` puts in the README.
+    let started = std::time::Instant::now();
     let config = kfgins::Config::read(&dir.join("kf-gins.yaml")).expect("config parses");
     let imu = kfgins::read_imu(&dir.join("Leador-A15.txt"), 2119).expect("imu parses");
     let gnss = kfgins::read_gnss(&dir.join("GNSS-RTK.txt"), 2119).expect("gnss parses");
@@ -89,6 +92,7 @@ fn the_demo_dataset_replays_within_tolerance() {
 
     let out = std::env::temp_dir().join("drifters-regression");
     let report = replay(&config, &imu, &gnss, &out, true).expect("replay completes");
+    let replay_s = started.elapsed().as_secs_f64();
 
     report.print();
 
@@ -101,6 +105,7 @@ fn the_demo_dataset_replays_within_tolerance() {
     // No systematic offset. This is the check that catches a lever-arm sign
     // error, a frame mix-up, or a geodetic conversion bug — all of which show
     // up as a bias rather than as extra noise.
+    let mut max_axis_bias = 0.0_f64;
     for (axis, mean) in [
         ("north", report.residual_north.mean()),
         ("east", report.residual_east.mean()),
@@ -110,6 +115,7 @@ fn the_demo_dataset_replays_within_tolerance() {
             mean.abs() < MAX_AXIS_BIAS_M,
             "{axis} residual has a systematic bias of {mean:.4} m"
         );
+        max_axis_bias = max_axis_bias.max(mean.abs());
     }
 
     let horizontal = report
@@ -150,5 +156,23 @@ fn the_demo_dataset_replays_within_tolerance() {
         "the covariance was inflated {} times, meaning the filter became \
          confident and wrong on a clean dataset",
         report.inflations
+    );
+
+    // One machine-readable line, printed only once every check above has
+    // passed, for `cargo xtask measure` to put in the README.
+    let duration_s = imu
+        .last()
+        .map_or(0.0, |last| last.time.seconds_since(imu[0].time));
+    // The dataset's own size, and then what the replay's configured start and
+    // end times took from it.
+    println!(
+        "MEASURED kf_gins imu_samples={} gnss_fixes={} duration_s={duration_s:.1} \
+         imu_processed={} gnss_fixes_applied={} horizontal_rms_m={horizontal:.6} \
+         vertical_rms_m={:.6} max_axis_bias_m={max_axis_bias:.6} replay_s={replay_s:.3}",
+        imu.len(),
+        gnss.len(),
+        report.processed,
+        report.applied_fixes,
+        report.residual_down.rms(),
     );
 }

@@ -109,6 +109,11 @@ Three things about that output matter:
   would report the remainder.
 - **An interval that wrapped is refused**, and printed as `unmeasured`.
 
+`cargo xtask measure`, from the repository root, runs every configuration on both
+cores this way, and at `opt-level = 3` on the Cortex-M7, keeps the logs in
+`target/measure/`, and writes the README's tables and `docs/testing.md`'s from
+them.
+
 A count is not a time. On a Cortex-M4 it is a floor on one, since that core
 retires about an instruction per cycle at best. A Cortex-M7 can issue two, so
 there it is not even that. See `docs/testing.md`, Layer 9.

@@ -40,7 +40,13 @@ cargo test -p drifters-eskf -p drifters-cli --features f32-covariance
 cargo deny check
 cargo package --list -p <crate>          # confirm nothing unexpected ships
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked --dry-run --workspace
+cargo xtask measure                      # refresh the README's measured tables
 ```
+
+CI's `publish` job runs the same dry-run on every push and pull request, so it
+should already be passing. `cargo xtask measure` needs `qemu-system-arm` on `PATH`
+(`scripts/install-qemu.sh`) and the KF-GINS dataset (`scripts/fetch-kf-gins.sh`),
+and takes a few minutes; see [testing.md](testing.md#instructions-retired).
 
 Update [`CHANGELOG.md`](../CHANGELOG.md) and tag the release. The tag is what
 `cargo semver-checks` compares against — CI runs it on every push and pull

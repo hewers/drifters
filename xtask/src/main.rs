@@ -8,6 +8,8 @@
 //! cargo xtask licences        # deploy LICENSE into every crate
 //! cargo xtask licences --check# verify each copy matches the root
 //! cargo xtask agreement DIR   # compare the firmware builds' reports in DIR
+//! cargo xtask measure         # measure, and rewrite the README's measured tables
+//! cargo xtask measure --check # measure, and fail if a table would change
 //! ```
 //!
 //! This crate is host-only and build-time. Nothing here is reachable from
@@ -19,6 +21,7 @@ use std::process::ExitCode;
 
 mod agreement;
 mod licences;
+mod measure;
 mod proto;
 
 fn main() -> ExitCode {
@@ -36,6 +39,7 @@ fn main() -> ExitCode {
         "proto" => proto::run(check),
         "licences" => licences::run(check),
         "agreement" => agreement::run(flags),
+        "measure" => measure::run(flags),
         other => {
             eprintln!("unknown task: {other}\n");
             usage();
@@ -57,7 +61,9 @@ fn usage() {
         "tasks:\n  \
          proto [--check]     regenerate bindings and copy schemas, or verify both are current\n  \
          licences [--check]  deploy LICENSE into every crate, or verify the copies\n  \
-         agreement DIR       compare the reports of cortex-m-harness/check-core.sh"
+         agreement DIR       compare the reports of cortex-m-harness/check-core.sh\n  \
+         measure [--check] [--reuse-logs] [--machine TEXT]\n  \
+                             measure, and rewrite the README's measured tables"
     );
 }
 

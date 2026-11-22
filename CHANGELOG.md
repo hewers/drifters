@@ -83,7 +83,8 @@ what the ESKF computes, so they are not additive.
 - **Minimum Rust** is 1.85, and 1.88 for `drifters-proto`.
 - **Measured, not asserted.** The accuracy, footprint, and consistency figures
   in the documentation come from tests in this repository, and the results that
-  did not work are recorded alongside the ones that did. See
+  did not work are recorded alongside the ones that did. The README's measured
+  tables are generated from them by `cargo xtask measure`. See
   [`docs/testing.md`](docs/testing.md).
 - **Not yet run on silicon or a physical IMU.** Every result is a dataset
   replay, a simulation, or a QEMU emulation.
