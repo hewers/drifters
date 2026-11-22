@@ -1,0 +1,62 @@
+name: advisories
+
+# The `deny` job in ci.yml audits the root workspace's default build when
+# something is pushed. That leaves three gaps:
+#
+# - an advisory published while nothing is being pushed;
+# - one that reaches only a lockfile of its own: the fuzz targets, the two
+#   firmware harnesses and the RTIC example each resolve their own graph, as
+#   heapless 0.9.3 once showed;
+# - one in an optional dependency, such as the interop adapters', which the
+#   default build does not resolve.
+#
+# This audits every lockfile with every feature on, each day, and whenever a
+# lockfile or the policy changes. Scheduled runs happen on the default branch
+# only, and GitHub suspends them after 60 days without activity in the
+# repository.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/advisories.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/advisories.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: advisories / ${{ matrix.lockfile }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Each lockfile is its own question; one failing says nothing about the
+      # others.
+      fail-fast: false
+      matrix:
+        lockfile:
+          - Cargo.lock
+          - fuzz/Cargo.lock
+          - cortex-m-harness/Cargo.lock
+          - cortex-m-hil/Cargo.lock
+          - examples/rtic-imu/Cargo.lock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      # `--locked` audits the lockfile as committed rather than a fresh
+      # resolution. `--all-features` takes in the optional dependencies, which
+      # are in the lockfile too. The policy is the root's deny.toml.
+      - run: >
+          cargo deny --locked
+          --manifest-path "$(dirname "${{ matrix.lockfile }}")/Cargo.toml"
+          --all-features --config deny.toml
+          check advisories

@@ -259,6 +259,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask licences --check
 
+  # What `cargo publish` will do, short of uploading: package the six published
+  # crates and build each from its tarball, in dependency order, against a
+  # temporary registry holding the ones before it. It catches a file a package
+  # leaves out, a path dependency with no version, and a crate that builds only
+  # inside the workspace. The target directory is its own and is not cached:
+  # Cargo can otherwise reuse a staged 0.1.0 from an earlier rehearsal after its
+  # source has changed (docs/releasing.md). Once a version is on crates.io this
+  # warns that it already exists and still checks everything else.
+  publish:
+    name: publish rehearsal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --locked --dry-run --workspace
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/publish
+
   # The dataset tests skip and pass when the data is absent, which is right for
   # a fresh clone but means CI never ran them — the "test-enforced" accuracy
   # figures were not, in fact, enforced by anything. This job fetches the

@@ -38,6 +38,7 @@ What the library does, what checks it, and what is open. The reasoning is in
 | `proto` | the checked-in bindings match the `.proto` sources, and `drifters-proto`'s packaged copy of them matches too |
 | `dataset` | the KF-GINS dataset, pinned to a commit and checksummed: the accuracy regression, the [reference-solution score](testing.md#against-the-reference-solution), the [lever-arm test](testing.md#what-the-recording-says-about-its-lever-arm), and the alignment test, with a missing dataset failing the job |
 | `licences` | every package's copy of `LICENSE` matches the root |
+| `publish` | `cargo publish --dry-run --workspace`: the six published crates package, and build from their tarballs in dependency order |
 | `fuzz` | the decode target, and the engine target in three filter configurations, 60 s each |
 | `interop` | the permissive `nav-types` adapter |
 | `cortex_m` | all four filter configurations on Cortex-M4 and M7 under QEMU: stack ceilings, panic audit, and agreement between builds |
@@ -46,23 +47,15 @@ What the library does, what checks it, and what is open. The reasoning is in
 | `nightly_simd` | the `core::simd` path, allowed to fail |
 | `deny` | licences and advisories, and that the AGPL guard fires |
 
+`advisories.yml` audits every lockfile for RUSTSEC advisories with every feature
+on: the workspace's, the fuzz targets', both firmware harnesses', and the RTIC
+example's. It runs daily, and whenever a lockfile or `deny.toml` changes, because
+the `deny` job sees only the root workspace's default build and only on a push.
+
 A separate workflow, `hil.yml`, runs `cortex-m-hil` on a board. It is started by
 hand on a self-hosted runner, and it has not been run.
 
 ## Open work
-
-### Release and CI
-
-- **`cargo publish --dry-run --workspace` as a CI job.** It verifies that the
-  six crates package and resolve in dependency order before a tag does it for
-  real. It passes today and is run by hand; `releasing.md` no longer claims only
-  the root crate can dry-run.
-- **A scheduled advisory run.** Nothing runs on a schedule, so a new RUSTSEC
-  advisory surfaces only on the next push. And `cargo deny check` audits the
-  root workspace alone: `fuzz/Cargo.lock` and `examples/rtic-imu/Cargo.lock`
-  have their own dependency graphs, so an advisory that reaches only them — as
-  heapless 0.9.3 did — cannot fail the `deny` job. A nightly advisory check over
-  each lockfile would close both gaps.
 
 ### Needs a board
 

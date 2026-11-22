@@ -15,6 +15,12 @@ all-features = false
 
 [advisories]
 yanked = "deny"
+# A crate this project depends on directly being abandoned is ours to act on. One
+# deep in someone else's tree is not, and has no safe upgrade until they move:
+# `bare-metal`, deprecated, comes through `cortex-m` 0.7 in all the firmware, and
+# `paste` and `proc-macro-error2` through the opt-in interop adapters.
+# Vulnerabilities and unsoundness still fail at any depth.
+unmaintained = "workspace"
 ignore = []
 
 [licenses]
